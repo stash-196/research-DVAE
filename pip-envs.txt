@@ -1,0 +1,10 @@
+numpy
+torch
+matplotlib
+soundfile
+pypesq
+pystoi
+librosa
+# commands:
+# pip freeze -> requirements.txt
+# pip install -r requirements.txt

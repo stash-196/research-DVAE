@@ -1,6 +1,7 @@
 .ipynb_checkpoints/*
 **/*.ipynb_checkpoints/*
 *.ipynb
+notes/*
 *.pyc
 .DS_Store
 .vscode/*
