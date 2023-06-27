@@ -38,6 +38,7 @@ if __name__ == '__main__':
 
     params = Options().get_params()
     if not params['ss']:
+        print(params['cfg'])
         learning_algo = LearningAlgorithm(params=params)
         learning_algo.train()
     else:

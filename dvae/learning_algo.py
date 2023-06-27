@@ -18,7 +18,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from .utils import myconf, get_logger, loss_ISD, loss_KLD, loss_MPJPE
-from .dataset import h36m_dataset, speech_dataset
+from .dataset import h36m_dataset, speech_dataset, lorenz63_dataset
 from .model import build_VAE, build_DKF, build_STORN, build_VRNN, build_SRNN, build_RVAE, build_DSAE
 
 
@@ -144,6 +144,8 @@ class LearningAlgorithm():
             train_dataloader, val_dataloader, train_num, val_num = speech_dataset.build_dataloader(self.cfg)
         elif self.dataset_name == 'H36M':
             train_dataloader, val_dataloader, train_num, val_num = h36m_dataset.build_dataloader(self.cfg)
+        elif self.dataset_name == "Lorenz63":
+            train_dataloader, val_dataloader, train_num, val_num = lorenz63_dataset.build_dataloader(self.cfg)
         else:
             logger.error('Unknown datset')
         logger.info('Training samples: {}'.format(train_num))
