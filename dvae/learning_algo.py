@@ -145,7 +145,7 @@ class LearningAlgorithm():
         elif self.dataset_name == 'H36M':
             train_dataloader, val_dataloader, train_num, val_num = h36m_dataset.build_dataloader(self.cfg)
         elif self.dataset_name == "Lorenz63":
-            train_dataloader, val_dataloader, train_num, val_num = lorenz63_dataset.build_dataloader(self.cfg)
+            train_dataloader, val_dataloader, train_num, val_num = lorenz63_dataset.build_dataloader(self.cfg, device=self.device)
         else:
             logger.error('Unknown datset')
         logger.info('Training samples: {}'.format(train_num))
