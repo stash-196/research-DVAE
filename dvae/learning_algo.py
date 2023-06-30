@@ -222,6 +222,12 @@ class LearningAlgorithm():
                     batch_data = batch_data.permute(1, 0, 2) / 1000 # normalize to meters
                     recon_batch_data = self.model(batch_data)
                     loss_recon = loss_MPJPE(batch_data*1000, recon_batch_data*1000)
+                elif self.dataset_name == 'Lorenz63':
+                    batch_data = batch_data
+                    recon_batch_data = self.model(batch_data)
+                    loss_recon = loss_ISD(batch_data, recon_batch_data)
+                else:
+                    logger.error('Unknown datset')
                 seq_len, bs, _ = self.model.z_mean.shape
                 loss_recon = loss_recon / (seq_len * bs)
 
