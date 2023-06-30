@@ -44,6 +44,27 @@ In this version, DVAE models support two differnt data structure:
 
 > If you want to use our models in other datasets, you can simply modify/re-write the dataloader and make minor changes in the training steps. Please remind that DVAE models accept data in the format of `(seq_len, batch_size, x_dim)`
 
+To add new datasets:
+1. 
+1. 
+1. In `dvae/learning_algo.py` within `def train` of `class LearningAlgorithm()`, inside the `for` loop,
+```
+ # Batch training
+            for _, batch_data in enumerate(train_dataloader):
+                batch_data = batch_data.to(self.device)
+                if self.dataset_name == 'WSJ0':
+                ...
+```
+add:
+```
+                elif self.dataset_name == 'your_dataset':
+                    # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
+                    batch_data = ...
+                    recon_batch_data = ...
+                    loss_recon = ...
+```
+
+
 ## Train
 
 We provide all configuration examples of the above models in `./confg`
