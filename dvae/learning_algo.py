@@ -223,7 +223,8 @@ class LearningAlgorithm():
                     recon_batch_data = self.model(batch_data)
                     loss_recon = loss_MPJPE(batch_data*1000, recon_batch_data*1000)
                 elif self.dataset_name == 'Lorenz63':
-                    batch_data = batch_data
+                    # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
+                    batch_data = batch_data.permute(1, 0, 2)
                     recon_batch_data = self.model(batch_data)
                     loss_recon = loss_ISD(batch_data, recon_batch_data)
                 else:
