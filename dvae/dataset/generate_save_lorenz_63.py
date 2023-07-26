@@ -83,3 +83,39 @@ save_pickle(l.hist, 'lorenz63_2.pkl')
 
 
 
+#%%
+import numpy as np
+
+def power_spectrum(time_series):
+    # Compute the Fast Fourier Transform (FFT)
+    fft_result = np.fft.fft(time_series)
+    
+    # Compute the power spectrum: the square of the absolute value of the FFT
+    power_spectrum = np.abs(fft_result)**2
+    
+    # Since the power spectrum is symmetric, we only need to return the first half
+    power_spectrum = power_spectrum[:len(power_spectrum) // 2]
+    
+    # Compute the frequencies corresponding to the values in the power spectrum
+    frequencies = np.fft.fftfreq(len(time_series))[:len(power_spectrum)]
+    
+    return frequencies, power_spectrum
+# Compute and plot the power spectrum for each component of the Lorenz 63 system
+fig, axes = plt.subplots(3, 1, figsize=(10, 10))
+
+for i, component in enumerate(["x", "y", "z"]):
+    time_series = np.array(l.hist)[:, i]
+    frequencies, spectrum = power_spectrum(time_series)
+    
+    # Skip the zero frequency
+    frequencies, spectrum = frequencies[1:], spectrum[1:]
+    
+    axes[i].semilogx(frequencies, spectrum)
+    axes[i].set_title(f"Power Spectrum of {component}-component")
+    axes[i].set_xlabel("Frequency (log scale)")
+    axes[i].set_ylabel("Power")
+
+plt.tight_layout()
+plt.show()
+
+# %%

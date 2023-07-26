@@ -186,4 +186,7 @@ if __name__ == '__main__':
     model_info = vae.get_info()
     for i in model_info:
         print(i)
+
+    x = torch.randn(10, 2, x_dim)
+    vae.forward(x)
     

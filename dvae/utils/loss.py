@@ -11,6 +11,7 @@ import torch
 
 def loss_ISD(x, y):
     #  loss can be used when you want to encourage similarity or dissimilarity between two probability distributions.
+    # Itakura-Saito divergence
     y = y + 1e-10
     ret = torch.sum( x/y - torch.log(x/y) - 1)
     return ret
