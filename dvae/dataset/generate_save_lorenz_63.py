@@ -53,18 +53,50 @@ l2 = L63(sigma, rho, beta, init=[1.1, 10, 20], dt=1e-2)
 l2.integrate(N)
 
 # %%
-def plot_attractor(hists):
-    if np.array(hists).ndim == 2: hists = [hists]
+import plotly.graph_objects as go
+
+def plot_attractor_plotly(hists):
+    if np.array(hists).ndim == 2:
+        hists = [hists]
     hists = [np.array(h) for h in hists]
-    fig = plt.figure(figsize=(10, 10))
-    ax = fig.add_subplot(projection='3d')
-    [ax.plot(h[:,0], h[:,1], h[:,2]) for h in hists]
+    fig = go.Figure()
+    for h in hists:
+        fig.add_trace(go.Scatter3d(x=h[:, 0], y=h[:, 1], z=h[:, 2], mode='lines', line=dict(color='blue')))
+    fig.update_layout(scene=dict(
+        xaxis_title='x',
+        yaxis_title='y',
+        zaxis_title='z'
+    ))
+    fig.show()
 
 # %%
-plot_attractor([l.hist, l2.hist])
+plot_attractor_plotly([l.hist, l2.hist])
 
 # %%
 print(len(l.hist))
+
+#%%
+import plotly.graph_objects as go
+
+def plot_components_vs_time_plotly(time_series, time_step):
+    t = np.arange(0, len(time_series) * time_step, time_step)
+    x, y, z = time_series[:, 0], time_series[:, 1], time_series[:, 2]
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(x=t, y=x, mode='lines', name='x', line=dict(color='blue')))
+    fig.add_trace(go.Scatter(x=t, y=y, mode='lines', name='y', line=dict(color='green')))
+    fig.add_trace(go.Scatter(x=t, y=z, mode='lines', name='z', line=dict(color='red')))
+    
+    fig.update_layout(title='Components of Lorenz63 System vs. Time',
+                      xaxis_title='Time',
+                      yaxis_title='Values',
+                      showlegend=True,
+                      template='plotly_white')
+    
+    fig.show()
+plot_components_vs_time_plotly(np.array(l.hist), time_step=1e-2)
+
 
 # %%
 # store l.hist as pickle data for later use in pytorch dataloader
@@ -72,7 +104,6 @@ def save_pickle(data, path):
     import pickle
     with open(path, 'wb') as f:
         pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
-
 
 
 # %%

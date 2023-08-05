@@ -17,7 +17,7 @@ import pickle
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-from .utils import myconf, get_logger, loss_ISD, loss_KLD, loss_MPJPE
+from .utils import myconf, get_logger, loss_ISD, loss_KLD, loss_MPJPE, loss_MSE
 from .dataset import h36m_dataset, speech_dataset, lorenz63_dataset
 from .model import build_VAE, build_DKF, build_STORN, build_VRNN, build_SRNN, build_RVAE, build_DSAE
 
@@ -150,7 +150,7 @@ class LearningAlgorithm():
             logger.error('Unknown datset')
         logger.info('Training samples: {}'.format(train_num))
         logger.info('Validation samples: {}'.format(val_num))
-        
+
         ######################
         ### Batch Training ###
         ######################
@@ -226,11 +226,11 @@ class LearningAlgorithm():
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
                     batch_data = batch_data.permute(1, 0, 2)
                     recon_batch_data = self.model(batch_data)
-                    loss_recon = loss_ISD(batch_data, recon_batch_data)
+                    loss_recon = loss_MSE(batch_data, recon_batch_data)
                 else:
                     logger.error('Unknown datset')
-                seq_len, bs, _ = self.model.z_mean.shape
-                loss_recon = loss_recon / (seq_len * bs)
+                seq_len, bs, _ = self.model.z_mean.shape # Sequence Length and Batch Size
+                loss_recon = loss_recon / (seq_len * bs) # Average Reconstruction Loss
 
                 if self.model_name == 'DSAE':
                     loss_kl_z = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
@@ -238,7 +238,7 @@ class LearningAlgorithm():
                     loss_kl = loss_kl_z + loss_kl_v
                 else:
                     loss_kl = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
-                loss_kl = kl_warm * beta * loss_kl / (seq_len * bs)
+                loss_kl = kl_warm * beta * loss_kl / (seq_len * bs) # Average KL Divergence
 
                 loss_tot = loss_recon + loss_kl
                 optimizer.zero_grad()
@@ -264,6 +264,11 @@ class LearningAlgorithm():
                     batch_data = batch_data.permute(1, 0, 2) / 1000 # normalize to meters
                     recon_batch_data = self.model(batch_data)
                     loss_recon = loss_MPJPE(batch_data*1000, recon_batch_data*1000)
+                elif self.dataset_name == 'Lorenz63':
+                    # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
+                    batch_data = batch_data.permute(1, 0, 2)
+                    recon_batch_data = self.model(batch_data)
+                    loss_recon = loss_MSE(batch_data, recon_batch_data)
                 seq_len, bs, _ = self.model.z_mean.shape
                 loss_recon = loss_recon / (seq_len * bs)
                 
