@@ -259,7 +259,7 @@ class VRNN(nn.Module):
             y[t,:,:] = torch.squeeze(y_t)
             h[t,:,:] = torch.squeeze(h_t_last)
             h_t, c_t = self.recurrence(feature_xt, feature_zt, h_t, c_t) # recurrence for t+1 
-        self.z_mean_p, self.z_logvar_p  = self.generation_z(h) # prior distribution. I think this should be in the generation process above
+        self.z_mean_p, self.z_logvar_p  = self.generation_z(h)
         
         return y
 
@@ -301,7 +301,7 @@ if __name__ == '__main__':
     # for i in model_info:
     #     print(i)
 
-    x = torch.ones((2,3,x_dim))
+    x = torch.ones((2,513,3))
     y, mean, logvar, mean_prior, logvar_prior, z = vrnn.forward(x)
     def loss_function(recon_x, x, mu, logvar, mu_prior=None, logvar_prior=None):
         if mu_prior is None:

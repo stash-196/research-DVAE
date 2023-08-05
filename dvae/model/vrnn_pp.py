@@ -9,6 +9,7 @@ License agreement in LICENSE.txt
 
 The code in this file is based on:
 - “A Recurrent Latent Variable Model for Sequential Data” ICLR, 2015, Junyoung Chung et al.
+WITH PROPER PRIORS (VRNN_pp)
 """
 
 from torch import nn
@@ -16,7 +17,7 @@ import torch
 from collections import OrderedDict
 
 
-def build_VRNN(cfg, device='cpu'):
+def build_VRNN_pp(cfg, device='cpu'):
 
     ### Load parameters for VRNN
     # General
@@ -39,7 +40,7 @@ def build_VRNN(cfg, device='cpu'):
     beta = cfg.getfloat('Training', 'beta')
 
     # Build model
-    model = VRNN(x_dim=x_dim, z_dim=z_dim, activation=activation,
+    model = VRNN_pp(x_dim=x_dim, z_dim=z_dim, activation=activation,
                  dense_x=dense_x, dense_z=dense_z,
                  dense_hx_z=dense_hx_z, dense_hz_x=dense_hz_x, 
                  dense_h_z=dense_h_z,
@@ -50,7 +51,7 @@ def build_VRNN(cfg, device='cpu'):
 
 
     
-class VRNN(nn.Module):
+class VRNN_pp(nn.Module):
 
     def __init__(self, x_dim, z_dim=16, activation = 'tanh',
                  dense_x=[128], dense_z=[128],
@@ -296,7 +297,7 @@ if __name__ == '__main__':
     x_dim = 513
     z_dim = 16
     device = 'cpu'
-    vrnn = VRNN(x_dim=x_dim, z_dim=z_dim).to(device)
+    vrnn = VRNN_pp(x_dim=x_dim, z_dim=z_dim).to(device)
     model_info = vrnn.get_info()
     # for i in model_info:
     #     print(i)
