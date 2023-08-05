@@ -8,7 +8,7 @@ License agreement in LICENSE.txt
 
 import numpy as np
 import soundfile as sf
-from pypesq import pesq
+# from pypesq import pesq
 from pystoi import stoi
 
 

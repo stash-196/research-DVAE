@@ -44,5 +44,4 @@ if __name__ == '__main__':
     else:
         learning_algo = LearningAlgorithm_ss(params=params)
         learning_algo.train()
-
-
+ 
