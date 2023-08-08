@@ -19,7 +19,7 @@ import torch
 import matplotlib.pyplot as plt
 from .utils import myconf, get_logger, loss_ISD, loss_KLD, loss_MPJPE, loss_MSE
 from .dataset import h36m_dataset, speech_dataset, lorenz63_dataset
-from .model import build_VAE, build_DKF, build_STORN, build_VRNN, build_SRNN, build_RVAE, build_DSAE, build_VRNN_pp
+from .model import build_VAE, build_DKF, build_STORN, build_VRNN, build_SRNN, build_RVAE, build_DSAE, build_VRNN_pp, build_RNN
 
 
 class LearningAlgorithm():
@@ -68,6 +68,8 @@ class LearningAlgorithm():
             self.model = build_DSAE(cfg=self.cfg, device=self.device)
         elif self.model_name == 'VRNN_pp':
             self.model = build_VRNN_pp(cfg=self.cfg, device=self.device)
+        elif self.model_name == 'RNN':
+            self.model = build_RNN(cfg=self.cfg, device=self.device)
         
 
     def init_optimizer(self):
@@ -108,9 +110,13 @@ class LearningAlgorithm():
         # Create directory for results
         if not self.params['reload']:
             saved_root = self.cfg.get('User', 'saved_root')
-            z_dim = self.cfg.getint('Network','z_dim')
             tag = self.cfg.get('Network', 'tag')
-            filename = "{}_{}_{}_z_dim={}".format(self.dataset_name, self.date, tag, z_dim)
+            h_dim = self.cfg.getint('Network','dim_RNN')
+            if self.model_name != 'RNN':
+                z_dim = self.cfg.getint('Network','z_dim')
+                filename = "{}_{}_{}_z_dim={}_h_dim={}".format(self.dataset_name, self.date, tag, z_dim, h_dim)
+            else:
+                filename = "{}_{}_{}_h_dim={}".format(self.dataset_name, self.date, tag, h_dim)
             save_dir = os.path.join(saved_root, filename)
             if not(os.path.isdir(save_dir)):
                 os.makedirs(save_dir)
@@ -231,13 +237,15 @@ class LearningAlgorithm():
                     loss_recon = loss_MSE(batch_data, recon_batch_data)
                 else:
                     logger.error('Unknown datset')
-                seq_len, bs, _ = self.model.z_mean.shape # Sequence Length and Batch Size
+                seq_len, bs, _ = self.model.y.shape # Sequence Length and Batch Size
                 loss_recon = loss_recon / (seq_len * bs) # Average Reconstruction Loss
 
                 if self.model_name == 'DSAE':
                     loss_kl_z = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
                     loss_kl_v = loss_KLD(self.model.v_mean, self.model.v_logvar, self.model.v_mean_p, self.model.v_logvar_p)
                     loss_kl = loss_kl_z + loss_kl_v
+                elif self.model_name == 'RNN':
+                    loss_kl = torch.zeros(1)
                 else:
                     loss_kl = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
                 loss_kl = kl_warm * beta * loss_kl / (seq_len * bs) # Average KL Divergence
@@ -271,13 +279,15 @@ class LearningAlgorithm():
                     batch_data = batch_data.permute(1, 0, 2)
                     recon_batch_data = self.model(batch_data)
                     loss_recon = loss_MSE(batch_data, recon_batch_data)
-                seq_len, bs, _ = self.model.z_mean.shape
+                seq_len, bs, _ = self.model.y.shape
                 loss_recon = loss_recon / (seq_len * bs)
                 
                 if self.model_name == 'DSAE':
                     loss_kl_z = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
                     loss_kl_v = loss_KLD(self.model.v_mean, self.model.v_logvar, self.model.v_mean_p, self.model.v_logvar_p)
                     loss_kl = loss_kl_z + loss_kl_v
+                elif self.model_name == 'RNN':
+                    loss_kl = torch.zeros(1)
                 else:
                     loss_kl = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
                 loss_kl = kl_warm * beta * loss_kl / (seq_len * bs)
@@ -295,7 +305,7 @@ class LearningAlgorithm():
             train_kl[epoch] = train_kl[epoch]/ train_num
             val_recon[epoch] = val_recon[epoch] / val_num 
             val_kl[epoch] = val_kl[epoch] / val_num
-            
+
             # Early stop patiance
             if val_loss[epoch] < best_val_loss or kl_warm <1:
                 best_val_loss = val_loss[epoch]
@@ -363,6 +373,7 @@ class LearningAlgorithm():
         plt.ylabel('loss', fontdict={'size':16})
         fig_file = os.path.join(save_dir, 'loss_{}.png'.format(tag))
         plt.savefig(fig_file)
+        plt.close(fig)
 
         plt.clf()
         fig = plt.figure(figsize=(8,6))
@@ -374,6 +385,7 @@ class LearningAlgorithm():
         plt.ylabel('loss', fontdict={'size':16})
         fig_file = os.path.join(save_dir, 'loss_recon_{}.png'.format(tag))
         plt.savefig(fig_file) 
+        plt.close(fig)
 
         plt.clf()
         fig = plt.figure(figsize=(8,6))
@@ -385,6 +397,7 @@ class LearningAlgorithm():
         plt.ylabel('loss', fontdict={'size':16})
         fig_file = os.path.join(save_dir, 'loss_KLD_{}.png'.format(tag))
         plt.savefig(fig_file)
+        plt.close(fig)
 
 
     

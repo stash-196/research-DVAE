@@ -237,9 +237,9 @@ class VRNN_pp(nn.Module):
         # create variable holder and send to GPU if needed
         self.z_mean = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
         self.z_logvar = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
-        y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
+        self.y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
         self.z = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
-        h = torch.zeros((seq_len, batch_size, self.dim_RNN)).to(self.device)
+        self.h = torch.zeros((seq_len, batch_size, self.dim_RNN)).to(self.device)
         z_t = torch.zeros(batch_size, self.z_dim).to(self.device)
         h_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
         c_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
@@ -257,12 +257,12 @@ class VRNN_pp(nn.Module):
             self.z_mean[t,:,:] = mean_zt
             self.z_logvar[t,:,:] = logvar_zt
             self.z[t,:,:] = torch.squeeze(z_t)
-            y[t,:,:] = torch.squeeze(y_t)
-            h[t,:,:] = torch.squeeze(h_t_last)
+            self.y[t,:,:] = torch.squeeze(y_t)
+            self.h[t,:,:] = torch.squeeze(h_t_last)
             h_t, c_t = self.recurrence(feature_xt, feature_zt, h_t, c_t) # recurrence for t+1 
         self.z_mean_p, self.z_logvar_p  = self.generation_z(h) # prior distribution. I think this should be in the generation process above
         
-        return y
+        return self.y
 
         
     def get_info(self):
