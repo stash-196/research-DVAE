@@ -44,7 +44,7 @@ class LearningAlgorithm():
 
         # Get host name and date
         self.hostname = socket.gethostname()
-        self.date = datetime.datetime.now().strftime("%Y-%m-%d-%Hh%M")
+        self.date = datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
         
         # Load model parameters
         self.use_cuda = self.cfg.getboolean('Training', 'use_cuda')
