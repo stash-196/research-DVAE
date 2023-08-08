@@ -260,7 +260,7 @@ class VRNN_pp(nn.Module):
             self.y[t,:,:] = torch.squeeze(y_t)
             self.h[t,:,:] = torch.squeeze(h_t_last)
             h_t, c_t = self.recurrence(feature_xt, feature_zt, h_t, c_t) # recurrence for t+1 
-        self.z_mean_p, self.z_logvar_p  = self.generation_z(h) # prior distribution. I think this should be in the generation process above
+        self.z_mean_p, self.z_logvar_p  = self.generation_z(self.h) # prior distribution. I think this should be in the generation process above
         
         return self.y
 

@@ -238,7 +238,7 @@ class LearningAlgorithm():
                 else:
                     logger.error('Unknown datset')
                 seq_len, bs, _ = self.model.y.shape # Sequence Length and Batch Size
-                loss_recon = loss_recon / (seq_len * bs) # Average Reconstruction Loss
+                loss_recon_avg = loss_recon / (seq_len * bs) # Average Reconstruction Loss
 
                 if self.model_name == 'DSAE':
                     loss_kl_z = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
@@ -248,16 +248,16 @@ class LearningAlgorithm():
                     loss_kl = torch.zeros(1)
                 else:
                     loss_kl = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
-                loss_kl = kl_warm * beta * loss_kl / (seq_len * bs) # Average KL Divergence
+                loss_kl_avg = kl_warm * beta * loss_kl / (seq_len * bs) # Average KL Divergence
 
-                loss_tot = loss_recon + loss_kl
+                loss_tot_avg = loss_recon_avg + loss_kl_avg
                 optimizer.zero_grad()
-                loss_tot.backward()
+                loss_tot_avg.backward()
                 optimizer.step()
 
-                train_loss[epoch] += loss_tot.item() * bs
-                train_recon[epoch] += loss_recon.item() * bs
-                train_kl[epoch] += loss_kl.item() * bs
+                train_loss[epoch] += loss_tot_avg.item() * bs
+                train_recon[epoch] += loss_recon_avg.item() * bs
+                train_kl[epoch] += loss_kl_avg.item() * bs
                 
             # Validation
             for _, batch_data in enumerate(val_dataloader):
@@ -280,7 +280,7 @@ class LearningAlgorithm():
                     recon_batch_data = self.model(batch_data)
                     loss_recon = loss_MSE(batch_data, recon_batch_data)
                 seq_len, bs, _ = self.model.y.shape
-                loss_recon = loss_recon / (seq_len * bs)
+                loss_recon_avg = loss_recon / (seq_len * bs)
                 
                 if self.model_name == 'DSAE':
                     loss_kl_z = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
@@ -290,13 +290,13 @@ class LearningAlgorithm():
                     loss_kl = torch.zeros(1)
                 else:
                     loss_kl = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
-                loss_kl = kl_warm * beta * loss_kl / (seq_len * bs)
+                loss_kl_avg = kl_warm * beta * loss_kl / (seq_len * bs)
 
-                loss_tot = loss_recon + loss_kl
+                loss_tot_avg = loss_recon_avg + loss_kl_avg
 
-                val_loss[epoch] += loss_tot.item() * bs
-                val_recon[epoch] += loss_recon.item() * bs
-                val_kl[epoch] += loss_kl.item() * bs
+                val_loss[epoch] += loss_tot_avg.item() * bs
+                val_recon[epoch] += loss_recon_avg.item() * bs
+                val_kl[epoch] += loss_kl_avg.item() * bs
 
             # Loss normalization
             train_loss[epoch] = train_loss[epoch]/ train_num
