@@ -19,9 +19,9 @@ def get_logger(file_path = 'log.txt', handle = 1):
     # Create Handler
     # type 1: file handler
     # type 2: stream handler
-    if handle == 1:
+    if handle == 1 or handle == 3:
         log_handler = logging.FileHandler(file_path, mode='a', encoding='UTF-8')
-    elif handle == 2:
+    elif handle == 2 or handle == 3:
         log_handler = logging.StreamHandler()
     else:
         log_handler = logging.FileHandler(file_path, mode='w', encoding='UTF-8')
