@@ -19,7 +19,7 @@ import torch
 import matplotlib.pyplot as plt
 from .utils import myconf, get_logger, loss_ISD, loss_KLD, loss_MPJPE, loss_MSE
 from .dataset import h36m_dataset, speech_dataset, lorenz63_dataset
-from .model import build_VAE, build_DKF, build_STORN, build_VRNN, build_SRNN, build_RVAE, build_DSAE
+from .model import build_VAE, build_DKF, build_STORN, build_VRNN, build_SRNN, build_RVAE, build_DSAE, build_VRNN_pp
 
 
 class LearningAlgorithm():
@@ -66,6 +66,8 @@ class LearningAlgorithm():
             self.model = build_RVAE(cfg=self.cfg, device=self.device)
         elif self.model_name == 'DSAE':
             self.model = build_DSAE(cfg=self.cfg, device=self.device)
+        elif self.model_name == 'VRNN_pp':
+            self.model = build_VRNN_pp(cfg=self.cfg, device=self.device)
         
 
     def init_optimizer(self):
