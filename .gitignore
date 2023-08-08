@@ -9,3 +9,4 @@ notes/*
 data/*
 saved_model/*
 pretrained_models/*
+slurm/logs/*
