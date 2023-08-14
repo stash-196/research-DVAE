@@ -9,6 +9,7 @@ License agreement in LICENSE.txt
 
 The code in this file is based on:
 - “A Recurrent Latent Variable Model for Sequential Data” ICLR, 2015, Junyoung Chung et al.
+WITH PROPER PRIORS (VRNN_pp)
 """
 
 from torch import nn
@@ -16,10 +17,11 @@ import torch
 from collections import OrderedDict
 
 
-def build_VRNN(cfg, device='cpu'):
+def build_MT_VRNN_pp(cfg, device='cpu'):
 
     ### Load parameters for VRNN
     # General
+    time_consts = cfg.get('Network', 'time_consts')
     x_dim = cfg.getint('Network', 'x_dim')
     z_dim = cfg.getint('Network','z_dim')
     activation = cfg.get('Network', 'activation')
@@ -39,7 +41,7 @@ def build_VRNN(cfg, device='cpu'):
     beta = cfg.getfloat('Training', 'beta')
 
     # Build model
-    model = VRNN(x_dim=x_dim, z_dim=z_dim, activation=activation,
+    model = MT_VRNN_pp(time_consts=time_consts, x_dim=x_dim, z_dim=z_dim, activation=activation,
                  dense_x=dense_x, dense_z=dense_z,
                  dense_hx_z=dense_hx_z, dense_hz_x=dense_hz_x, 
                  dense_h_z=dense_h_z,
@@ -50,9 +52,9 @@ def build_VRNN(cfg, device='cpu'):
 
 
     
-class VRNN(nn.Module):
+class MT_VRNN_pp(nn.Module):
 
-    def __init__(self, x_dim, z_dim=16, activation = 'tanh',
+    def __init__(self, time_consts, x_dim, z_dim=16, activation = 'tanh',
                  dense_x=[128], dense_z=[128],
                  dense_hx_z=[128], dense_hz_x=[128], dense_h_z=[128],
                  dim_RNN=128, num_RNN=1,
@@ -71,6 +73,8 @@ class VRNN(nn.Module):
         else:
             raise SystemExit('Wrong activation type!')
         self.device = device
+
+        self.time_consts = time_consts
         ### Feature extractors
         self.dense_x = dense_x
         self.dense_z = dense_z
@@ -236,9 +240,9 @@ class VRNN(nn.Module):
         # create variable holder and send to GPU if needed
         self.z_mean = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
         self.z_logvar = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
-        y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
+        self.y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
         self.z = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
-        h = torch.zeros((seq_len, batch_size, self.dim_RNN)).to(self.device)
+        self.h = torch.zeros((seq_len, batch_size, self.dim_RNN)).to(self.device)
         z_t = torch.zeros(batch_size, self.z_dim).to(self.device)
         h_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
         c_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
@@ -256,12 +260,12 @@ class VRNN(nn.Module):
             self.z_mean[t,:,:] = mean_zt
             self.z_logvar[t,:,:] = logvar_zt
             self.z[t,:,:] = torch.squeeze(z_t)
-            y[t,:,:] = torch.squeeze(y_t)
-            h[t,:,:] = torch.squeeze(h_t_last)
+            self.y[t,:,:] = torch.squeeze(y_t)
+            self.h[t,:,:] = torch.squeeze(h_t_last)
             h_t, c_t = self.recurrence(feature_xt, feature_zt, h_t, c_t) # recurrence for t+1 
-        self.z_mean_p, self.z_logvar_p  = self.generation_z(h)
+        self.z_mean_p, self.z_logvar_p  = self.generation_z(self.h) # prior distribution. I think this should be in the generation process above
         
-        return y
+        return self.y
 
         
     def get_info(self):
@@ -296,12 +300,12 @@ if __name__ == '__main__':
     x_dim = 513
     z_dim = 16
     device = 'cpu'
-    vrnn = VRNN(x_dim=x_dim, z_dim=z_dim).to(device)
+    vrnn = VRNN_pp(x_dim=x_dim, z_dim=z_dim).to(device)
     model_info = vrnn.get_info()
     # for i in model_info:
     #     print(i)
 
-    x = torch.ones((2,513,3))
+    x = torch.ones((2,3,x_dim))
     y, mean, logvar, mean_prior, logvar_prior, z = vrnn.forward(x)
     def loss_function(recon_x, x, mu, logvar, mu_prior=None, logvar_prior=None):
         if mu_prior is None:
