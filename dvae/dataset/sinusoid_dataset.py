@@ -76,7 +76,7 @@ class Sinusoid(Dataset):
             pass
         elif self.observation_process == '3dto1d':
             # v = np.random.normal(0, 1, the_sequence.shape[-1])
-            v = np.ones_like(the_sequence.shape[-1])
+            v = np.ones(the_sequence.shape[-1])
             the_sequence = the_sequence @ v  # Perform vector product to convert 3D to 1D
             the_sequence = np.array([the_sequence[i:i+x_dim] for i in range(0, len(the_sequence), x_dim) if i+x_dim <= len(the_sequence)])
   # Divide 1D time series into frames of x_dim
