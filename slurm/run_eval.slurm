@@ -27,14 +27,16 @@ cd ~/workspace/research-DVAE
 for model_dir in /flash/DoyaU/stash/research-DVAE/saved_model/*; do
     # If it is a directory
     if [[ -d "$model_dir" ]]; then
-        # Check for files containing "final" in their names
-        for final_model in "$model_dir"/*final*.pt; do
-            # If such a file exists
-            if [[ -f "$final_model" ]]; then
-                # Run the command
-                ~/miniconda3/envs/research-DVAE/bin/python eval_sinusoid.py --saved_dict "$final_model"
-            fi
-        done
+        if [[ "${model_dir##*/}" == *Sinusoid* ]]; then
+            # Check for files containing "final" in their names
+            for final_model in "$model_dir"/*final*.pt; do
+                # If such a file exists
+                if [[ -f "$final_model" ]]; then
+                    # Run the command
+                    ~/miniconda3/envs/research-DVAE/bin/python eval_sinusoid.py --saved_dict "$final_model"
+                fi
+            done
+        fi
     fi
 done
 
