@@ -21,7 +21,7 @@ def build_MT_VRNN_pp(cfg, device='cpu'):
 
     ### Load parameters for VRNN
     # General
-    time_consts = cfg.get('Network', 'time_consts')
+    alphas = [float(i) for i in cfg.get('Network', 'alphas').split(',')]
     x_dim = cfg.getint('Network', 'x_dim')
     z_dim = cfg.getint('Network','z_dim')
     activation = cfg.get('Network', 'activation')
@@ -41,7 +41,7 @@ def build_MT_VRNN_pp(cfg, device='cpu'):
     beta = cfg.getfloat('Training', 'beta')
 
     # Build model
-    model = MT_VRNN_pp(time_consts=time_consts, x_dim=x_dim, z_dim=z_dim, activation=activation,
+    model = MT_VRNN_pp(alphas=alphas, x_dim=x_dim, z_dim=z_dim, activation=activation,
                  dense_x=dense_x, dense_z=dense_z,
                  dense_hx_z=dense_hx_z, dense_hz_x=dense_hz_x, 
                  dense_h_z=dense_h_z,
@@ -54,7 +54,7 @@ def build_MT_VRNN_pp(cfg, device='cpu'):
     
 class MT_VRNN_pp(nn.Module):
 
-    def __init__(self, time_consts, x_dim, z_dim=16, activation = 'tanh',
+    def __init__(self, alphas, x_dim, z_dim=16, activation = 'tanh',
                  dense_x=[128], dense_z=[128],
                  dense_hx_z=[128], dense_hz_x=[128], dense_h_z=[128],
                  dim_RNN=128, num_RNN=1,
@@ -62,6 +62,7 @@ class MT_VRNN_pp(nn.Module):
 
         super().__init__()
         ### General parameters
+        self.alphas = alphas
         self.x_dim = x_dim
         self.z_dim = z_dim
         self.dropout_p = dropout_p
@@ -74,7 +75,6 @@ class MT_VRNN_pp(nn.Module):
             raise SystemExit('Wrong activation type!')
         self.device = device
 
-        self.time_consts = time_consts
         ### Feature extractors
         self.dense_x = dense_x
         self.dense_z = dense_z
@@ -89,6 +89,17 @@ class MT_VRNN_pp(nn.Module):
         self.beta = beta
 
         self.build()
+
+
+    def assign_alpha_per_unit(self):
+
+        # Sort alphas
+        alphas_sorted, _ = torch.sort(torch.asarray(self.alphas))
+        # Assign alpha per unit
+        assignments = torch.tensor([alphas_sorted[i % len(alphas_sorted)] for i in range(self.dim_RNN)])
+
+        return torch.sort(assignments)[0]
+
 
     def build(self):
 
@@ -228,6 +239,8 @@ class MT_VRNN_pp(nn.Module):
 
         rnn_input = torch.cat((feature_xt, feature_zt), -1)
         _, (h_tp1, c_tp1) = self.rnn(rnn_input, (h_t, c_t))
+
+        h_tp1 = (1 - self.alphas_per_unit) * h_t + self.alphas_per_unit * h_tp1
 
         return h_tp1, c_tp1
 

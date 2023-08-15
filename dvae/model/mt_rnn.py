@@ -25,11 +25,11 @@ import torch
 from collections import OrderedDict
 
 
-def build_RNN(cfg, device='cpu'):
+def build_MT_RNN(cfg, device='cpu'):
 
     ### Load parameters for VRNN
     # General
-    alphas = cfg.get('Network', 'alphas')
+    alphas = [float(i) for i in cfg.get('Network', 'alphas').split(',')]
     x_dim = cfg.getint('Network', 'x_dim')
     activation = cfg.get('Network', 'activation')
     dropout_p = cfg.getfloat('Network', 'dropout_p')
@@ -43,7 +43,7 @@ def build_RNN(cfg, device='cpu'):
     beta = cfg.getfloat('Training', 'beta')
 
     # Build model
-    model = RNN(alphas=alphas, x_dim=x_dim, activation=activation,
+    model = MT_RNN(alphas=alphas, x_dim=x_dim, activation=activation,
                  dense_h_x=dense_h_x, 
                  dim_RNN=dim_RNN, num_RNN=num_RNN,
                  dropout_p= dropout_p, beta=beta, device=device).to(device)
@@ -52,7 +52,7 @@ def build_RNN(cfg, device='cpu'):
 
 
     
-class RNN(nn.Module):
+class MT_RNN(nn.Module):
 
     def __init__(self, alphas, x_dim, activation = 'tanh',
                  dense_x=[128],
@@ -91,7 +91,7 @@ class RNN(nn.Module):
     def assign_alpha_per_unit(self):
 
         # Sort alphas
-        alphas_sorted, _ = torch.sort(self.alphas)       
+        alphas_sorted, _ = torch.sort(torch.asarray(self.alphas))
         # Assign alpha per unit
         assignments = torch.tensor([alphas_sorted[i % len(alphas_sorted)] for i in range(self.dim_RNN)])
 

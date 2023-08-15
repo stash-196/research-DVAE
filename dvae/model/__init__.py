@@ -11,3 +11,4 @@ from .rvae import build_RVAE
 from .dsae import build_DSAE
 from .vrnn_pp import build_VRNN_pp
 from .rnn import build_RNN
+from .mt_rnn import build_MT_RNN

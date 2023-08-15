@@ -18,8 +18,8 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from .utils import myconf, get_logger, loss_ISD, loss_KLD, loss_MPJPE, loss_MSE
-from .dataset import h36m_dataset, speech_dataset, lorenz63_dataset
-from .model import build_VAE, build_DKF, build_STORN, build_VRNN, build_SRNN, build_RVAE, build_DSAE, build_VRNN_pp, build_RNN
+from .dataset import h36m_dataset, speech_dataset, lorenz63_dataset, sinusoid_dataset
+from .model import build_VAE, build_DKF, build_STORN, build_VRNN, build_SRNN, build_RVAE, build_DSAE, build_VRNN_pp, build_RNN, build_MT_RNN
 
 
 class LearningAlgorithm():
@@ -70,6 +70,9 @@ class LearningAlgorithm():
             self.model = build_VRNN_pp(cfg=self.cfg, device=self.device)
         elif self.model_name == 'RNN':
             self.model = build_RNN(cfg=self.cfg, device=self.device)
+        elif self.model_name == 'MT_RNN':
+            self.model = build_MT_RNN(cfg=self.cfg, device=self.device)
+
         
 
     def init_optimizer(self):
@@ -112,11 +115,11 @@ class LearningAlgorithm():
             saved_root = self.cfg.get('User', 'saved_root')
             tag = self.cfg.get('Network', 'tag')
             h_dim = self.cfg.getint('Network','dim_RNN')
-            if self.model_name != 'RNN':
+            if self.model_name == 'RNN' or self.model_name == 'MT_RNN':
+                filename = "{}_{}_{}_h_dim={}".format(self.dataset_name, self.date, tag, h_dim)
+            else:
                 z_dim = self.cfg.getint('Network','z_dim')
                 filename = "{}_{}_{}_z_dim={}_h_dim={}".format(self.dataset_name, self.date, tag, z_dim, h_dim)
-            else:
-                filename = "{}_{}_{}_h_dim={}".format(self.dataset_name, self.date, tag, h_dim)
             save_dir = os.path.join(saved_root, filename)
             if not(os.path.isdir(save_dir)):
                 os.makedirs(save_dir)
@@ -154,6 +157,8 @@ class LearningAlgorithm():
             train_dataloader, val_dataloader, train_num, val_num = h36m_dataset.build_dataloader(self.cfg)
         elif self.dataset_name == "Lorenz63":
             train_dataloader, val_dataloader, train_num, val_num = lorenz63_dataset.build_dataloader(self.cfg, device=self.device)
+        elif self.dataset_name == "Sinusoid":
+            train_dataloader, val_dataloader, train_num, val_num = sinusoid_dataset.build_dataloader(self.cfg, device=self.device)
         else:
             logger.error('Unknown datset')
         logger.info('Training samples: {}'.format(train_num))
@@ -230,7 +235,7 @@ class LearningAlgorithm():
                     batch_data = batch_data.permute(1, 0, 2) / 1000 # normalize to meters
                     recon_batch_data = self.model(batch_data)
                     loss_recon = loss_MPJPE(batch_data*1000, recon_batch_data*1000)
-                elif self.dataset_name == 'Lorenz63':
+                elif self.dataset_name == 'Lorenz63' or self.dataset_name == 'Sinusoid':
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
                     batch_data = batch_data.permute(1, 0, 2)
                     recon_batch_data = self.model(batch_data)
@@ -244,7 +249,7 @@ class LearningAlgorithm():
                     loss_kl_z = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
                     loss_kl_v = loss_KLD(self.model.v_mean, self.model.v_logvar, self.model.v_mean_p, self.model.v_logvar_p)
                     loss_kl = loss_kl_z + loss_kl_v
-                elif self.model_name == 'RNN':
+                elif self.model_name == 'RNN' or self.model_name == 'MT_RNN':
                     loss_kl = torch.zeros(1)
                 else:
                     loss_kl = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
@@ -274,7 +279,7 @@ class LearningAlgorithm():
                     batch_data = batch_data.permute(1, 0, 2) / 1000 # normalize to meters
                     recon_batch_data = self.model(batch_data)
                     loss_recon = loss_MPJPE(batch_data*1000, recon_batch_data*1000)
-                elif self.dataset_name == 'Lorenz63':
+                elif self.dataset_name == 'Lorenz63' or self.dataset_name == 'Sinusoid':
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
                     batch_data = batch_data.permute(1, 0, 2)
                     recon_batch_data = self.model(batch_data)
@@ -286,7 +291,7 @@ class LearningAlgorithm():
                     loss_kl_z = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
                     loss_kl_v = loss_KLD(self.model.v_mean, self.model.v_logvar, self.model.v_mean_p, self.model.v_logvar_p)
                     loss_kl = loss_kl_z + loss_kl_v
-                elif self.model_name == 'RNN':
+                elif self.model_name == 'RNN' or self.model_name == 'MT_RNN':
                     loss_kl = torch.zeros(1)
                 else:
                     loss_kl = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
