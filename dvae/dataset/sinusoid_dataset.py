@@ -72,17 +72,17 @@ class Sinusoid(Dataset):
         
         if self.observation_process == '3dto3d':
             pass
-        elif self.observation_process == '3dto3d_noisy':
+        elif self.observation_process == '3dto3d_w_noise':
             pass
         elif self.observation_process == '3dto1d':
             # v = np.random.normal(0, 1, the_sequence.shape[-1])
             v = np.ones(the_sequence.shape[-1])
             the_sequence = the_sequence @ v  # Perform vector product to convert 3D to 1D
             the_sequence = np.array([the_sequence[i:i+x_dim] for i in range(0, len(the_sequence), x_dim) if i+x_dim <= len(the_sequence)])
-  # Divide 1D time series into frames of x_dim
-            # the_sequence = np.array([the_sequence[i:i+seq_len] for i in range(0, len(the_sequence), seq_len) if i+seq_len <= len(the_sequence)])  # Divide frames into sequences of num_seq
-        elif self.observation_process == '3dto1d_noisy':
-            pass
+        elif self.observation_process == '3dto1d_w_noise':
+            v = np.ones(the_sequence.shape[-1])
+            the_sequence = the_sequence @ v + np.random.normal(0, 0.3, the_sequence.shape[0])  # Add Gaussian noise
+            the_sequence = np.array([the_sequence[i:i+x_dim] for i in range(0, len(the_sequence), x_dim) if i+x_dim <= len(the_sequence)])
             
         
         # Convert to torch tensor and send to device
