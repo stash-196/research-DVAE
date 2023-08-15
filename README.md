@@ -87,12 +87,12 @@ python train_model.py --cfg ./config/speech/cfg_rvae_Causal.ini --reload --model
 
 ```python
 # Evaluation on speech data
-python eval_wsj.py --cfg PATH_TO_CONFIG --saved_dict PATH_TO_PRETRAINED_DICT
-python eval_wsj.py --ss --cfg PATH_TO_CONFIG --saved_dict PATH_TO_PRETRAINED_DICT # schedule sampling
+python eval_wsj.py --cfg PATH_TO_CONFIG --saved_dict PATH_TO_PRETRAINED_DICT --test_dir PATH_TO_TEST_DATA
+python eval_wsj.py --ss --cfg PATH_TO_CONFIG --saved_dict PATH_TO_PRETRAINED_DICT --test_dir PATH_TO_TEST_DATA # schedule sampling
 
 # Evaluation on human motion data
-python eval_h36m.py --cfg PATH_TO_CONFIG --saved_dict PATH_TO_PRETRAINED_DICT
-python eval_h36m.py --ss --cfg PATH_TO_CONFIG --saved_dict PATH_TO_PRETRAINED_DICT # schedule sampling
+python eval_h36m.py --cfg PATH_TO_CONFIG --saved_dict PATH_TO_PRETRAINED_DICT --test_dir PATH_TO_TEST_DATA
+python eval_h36m.py --ss --cfg PATH_TO_CONFIG --saved_dict PATH_TO_PRETRAINED_DICT --test_dir PATH_TO_TEST_DATA # schedule sampling
 ```
 
 ## Bibtex
