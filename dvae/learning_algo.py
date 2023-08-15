@@ -19,7 +19,7 @@ import torch
 import matplotlib.pyplot as plt
 from .utils import myconf, get_logger, loss_ISD, loss_KLD, loss_MPJPE, loss_MSE
 from .dataset import h36m_dataset, speech_dataset, lorenz63_dataset, sinusoid_dataset
-from .model import build_VAE, build_DKF, build_STORN, build_VRNN, build_SRNN, build_RVAE, build_DSAE, build_VRNN_pp, build_RNN, build_MT_RNN
+from .model import build_VAE, build_DKF, build_STORN, build_VRNN, build_SRNN, build_RVAE, build_DSAE, build_VRNN_pp, build_RNN, build_MT_RNN, build_MT_VRNN_pp
 
 
 class LearningAlgorithm():
@@ -72,6 +72,8 @@ class LearningAlgorithm():
             self.model = build_RNN(cfg=self.cfg, device=self.device)
         elif self.model_name == 'MT_RNN':
             self.model = build_MT_RNN(cfg=self.cfg, device=self.device)
+        elif self.model_name == 'MT_VRNN':
+            self.model = build_MT_VRNN_pp(cfg=self.cfg, device=self.device)
 
         
 

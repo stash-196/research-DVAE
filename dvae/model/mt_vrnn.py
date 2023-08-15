@@ -88,6 +88,9 @@ class MT_VRNN_pp(nn.Module):
         ### Beta-loss
         self.beta = beta
 
+        # Create an array of alphas for each hidden unit
+        self.register_buffer('alphas_per_unit', self.assign_alpha_per_unit())
+
         self.build()
 
 
