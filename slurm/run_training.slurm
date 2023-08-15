@@ -3,7 +3,7 @@
 #SBATCH --job-name=vrnn_training     # Job name
 #SBATCH --nodes=1                    # Use one node
 #SBATCH --ntasks=1                   # Run a single task
-#SBATCH --cpus-per-task=4            # Number of CPU cores per task
+#SBATCH --cpus-per-task=8            # Number of CPU cores per task
 #SBATCH --mem=16G                    # Total memory limit
 #SBATCH --time=10:00:00              # Time limit hrs:min:sec
 #SBATCH --output=./logs/training_%j.log     # Standard output and error log
