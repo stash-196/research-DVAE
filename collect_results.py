@@ -3,8 +3,22 @@ import configparser
 import pandas as pd
 import re
 
-base_dir = "saved_model"
+base_dir = "/flash/DoyaU/stash/research-DVAE/saved_model"
 all_data = []
+
+
+def extract_data_from_log_line(line):
+    val_tot = extract_value(r'Val => tot: (\d+\.\d+)', line)
+    recon = extract_value(r'recon (\d+\.\d+)', line)
+    kl = extract_value(r'KL (\d+\.\d+)', line)
+    return {"Val Tot": val_tot, "Recon": recon, "KL": kl}
+
+def extract_epoch_data_from_logs(logs, epoch_num):
+    pattern = f"Epoch: {epoch_num} training time"
+    for idx, line in enumerate(logs):
+        if pattern in line:
+            return extract_data_from_log_line(logs[idx + 1])
+    return {}
 
 # Helper function to extract value using regex pattern and return default value if not found
 def extract_value(pattern, text, group_num=1, default=None):
@@ -26,23 +40,18 @@ for dirname in os.listdir(base_dir):
             config_data = {}
             for section in config.sections():
                 config_data.update(dict(config[section]))
-
+            
             # Extract log data
             with open(log_path, 'r') as f:
                 logs = f.readlines()
-            
-            def extract_data_from_log(epoch_line):
-                epoch_data = {}
-                match = re.search(r'Val => tot: (\d+\.\d+) recon (\d+\.\d+) KL (\d+\.\d+)', epoch_line)
-                if match:
-                    epoch_data['Val Tot'] = float(match.group(1))
-                    epoch_data['Recon'] = float(match.group(2))
-                    epoch_data['KL'] = float(match.group(3))
-                return epoch_data
 
-            zero_epoch_data = extract_data_from_log(logs[0])
-            twenty_epoch_data = extract_data_from_log(logs[20])
-            final_epoch_data = extract_data_from_log(logs[-1])
+            start_index = next((i for i, line in enumerate(logs) if "Epoch: 0 training time" in line), None)
+            if start_index is None:
+                continue
+            
+            zero_epoch_data = extract_epoch_data_from_logs(logs[start_index:], 0)
+            twenty_epoch_data = extract_epoch_data_from_logs(logs[start_index:], 20)
+            final_epoch_data = extract_epoch_data_from_logs(logs[start_index:], int(extract_value(r'Epoch: (\d+)', logs[-1], default=0)))
 
             row_data = {
                 "Directory": dirname,
@@ -61,4 +70,4 @@ for dirname in os.listdir(base_dir):
             all_data.append(row_data)
 
 df = pd.DataFrame(all_data)
-df.to_csv('saved_model/summary.csv', index=False)
+df.to_csv(os.path.join(base_dir, 'summary.csv'), index=False)
