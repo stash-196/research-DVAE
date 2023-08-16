@@ -70,10 +70,32 @@ def plot_attractor_plotly(hists):
     fig.show()
 
 # %%
-plot_attractor_plotly([l.hist, l2.hist])
+plot_attractor_plotly([l.hist])
 
 # %%
-print(len(l.hist))
+from plotly.subplots import make_subplots
+
+def plot_attractor_subplots(hists):
+    if np.array(hists).ndim == 2:
+        hists = [hists]
+    hists = [np.array(h) for h in hists]
+
+    # Create subplots: one row for each of x, y and z
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
+                        subplot_titles=('X Timeseries', 'Y Timeseries', 'Z Timeseries'))
+
+    for h in hists:
+        # X timeseries
+        fig.add_trace(go.Scatter(y=h[:, 0], mode='lines', line=dict(color='blue')), row=1, col=1)
+        # Y timeseries
+        fig.add_trace(go.Scatter(y=h[:, 1], mode='lines', line=dict(color='red')), row=2, col=1)
+        # Z timeseries
+        fig.add_trace(go.Scatter(y=h[:, 2], mode='lines', line=dict(color='green')), row=3, col=1)
+
+    fig.update_layout(title_text="Timeseries Subplots for X, Y, and Z")
+    fig.show()
+
+plot_attractor_subplots([l.hist])
 
 #%%
 import plotly.graph_objects as go
