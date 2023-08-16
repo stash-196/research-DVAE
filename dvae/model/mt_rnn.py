@@ -38,6 +38,7 @@ def build_MT_RNN(cfg, device='cpu'):
     # RNN
     dim_RNN = cfg.getint('Network', 'dim_RNN')
     num_RNN = cfg.getint('Network', 'num_RNN')
+    type_RNN = cfg.get('Network', 'type_RNN')
 
     # Beta-vae
     beta = cfg.getfloat('Training', 'beta')
@@ -45,7 +46,7 @@ def build_MT_RNN(cfg, device='cpu'):
     # Build model
     model = MT_RNN(alphas=alphas, x_dim=x_dim, activation=activation,
                  dense_h_x=dense_h_x, 
-                 dim_RNN=dim_RNN, num_RNN=num_RNN,
+                 dim_RNN=dim_RNN, num_RNN=num_RNN, type_RNN='RNN',
                  dropout_p= dropout_p, beta=beta, device=device).to(device)
 
     return model
@@ -57,7 +58,7 @@ class MT_RNN(nn.Module):
     def __init__(self, alphas, x_dim, activation = 'tanh',
                  dense_x=[128],
                  dense_h_x=[128],
-                 dim_RNN=128, num_RNN=1,
+                 dim_RNN=128, num_RNN=1, type_RNN='RNN',
                  dropout_p = 0, beta=1, device='cpu'):
 
         super().__init__()
@@ -80,6 +81,7 @@ class MT_RNN(nn.Module):
         ### RNN
         self.dim_RNN = dim_RNN
         self.num_RNN = num_RNN
+        self.type_RNN = type_RNN
         ### Beta-loss
         self.beta = beta
         # Create an array of alphas for each hidden unit
@@ -142,17 +144,20 @@ class MT_RNN(nn.Module):
         ####################
         #### Recurrence ####
         ####################
-        self.rnn = nn.LSTM(dim_feature_x, self.dim_RNN, self.num_RNN)
+        if self.type_RNN == 'LSTM':
+            self.rnn = nn.LSTM(dim_feature_x, self.dim_RNN, self.num_RNN)
+        elif self.type_RNN == 'RNN':
+            self.rnn = nn.RNN(dim_feature_x, self.dim_RNN, self.num_RNN)
 
 
-        # Add the weight initialization here
-        for name, param in self.rnn.named_parameters():
-            if 'weight_ih' in name:
-                torch.nn.init.xavier_uniform_(param.data)
-            elif 'weight_hh' in name:
-                torch.nn.init.orthogonal_(param.data)
-            elif 'bias' in name:
-                param.data.fill_(0)
+        # # Add the weight initialization here
+        # for name, param in self.rnn.named_parameters():
+        #     if 'weight_ih' in name:
+        #         torch.nn.init.xavier_uniform_(param.data)
+        #     elif 'weight_hh' in name:
+        #         torch.nn.init.orthogonal_(param.data)
+        #     elif 'bias' in name:
+        #         param.data.fill_(0)
 
 
 
@@ -164,10 +169,15 @@ class MT_RNN(nn.Module):
         
 
 
-    def recurrence(self, feature_xt, h_t, c_t):
+    def recurrence(self, feature_xt, h_t, c_t=None):
 
         rnn_input = feature_xt
-        _, (h_tp1, c_tp1) = self.rnn(rnn_input, (h_t, c_t))
+
+        if self.type_RNN == 'LSTM':
+            _, (h_tp1, c_tp1) = self.rnn(rnn_input, (h_t, c_t))
+        elif self.type_RNN == 'RNN':
+            _, h_tp1 = self.rnn(rnn_input, h_t)
+            c_tp1 = None
 
         h_tp1 = (1 - self.alphas_per_unit) * h_t + self.alphas_per_unit * h_tp1
 
@@ -183,7 +193,8 @@ class MT_RNN(nn.Module):
         self.y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
         self.h = torch.zeros((seq_len, batch_size, self.dim_RNN)).to(self.device)
         h_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
-        c_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
+        if self.type_RNN == 'LSTM':
+            c_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
 
         # main part
         feature_x = self.feature_extractor_x(x)
@@ -193,7 +204,11 @@ class MT_RNN(nn.Module):
             y_t = self.generation_x(h_t_last)
             self.y[t,:,:] = torch.squeeze(y_t)
             self.h[t,:,:] = torch.squeeze(h_t_last)
-            h_t, c_t = self.recurrence(feature_xt, h_t, c_t) # recurrence for t+1 
+
+            if self.type_RNN == 'LSTM':
+                h_t, c_t = self.recurrence(feature_xt, h_t, c_t) # recurrence for t+1 
+            elif self.type_RNN == 'RNN':
+                h_t, _ = self.recurrence(feature_xt, h_t)
         
         return self.y
 

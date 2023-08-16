@@ -43,7 +43,7 @@ def build_VRNN(cfg, device='cpu'):
                  dense_x=dense_x, dense_z=dense_z,
                  dense_hx_z=dense_hx_z, dense_hz_x=dense_hz_x, 
                  dense_h_z=dense_h_z,
-                 dim_RNN=dim_RNN, num_RNN=num_RNN,
+                 dim_RNN=dim_RNN, num_RNN=num_RNN, type_RNN='RNN',
                  dropout_p= dropout_p, beta=beta, device=device).to(device)
 
     return model
@@ -55,7 +55,7 @@ class VRNN(nn.Module):
     def __init__(self, x_dim, z_dim=16, activation = 'tanh',
                  dense_x=[128], dense_z=[128],
                  dense_hx_z=[128], dense_hz_x=[128], dense_h_z=[128],
-                 dim_RNN=128, num_RNN=1,
+                 dim_RNN=128, num_RNN=1, type_RNN='RNN',
                  dropout_p = 0, beta=1, device='cpu'):
 
         super().__init__()
@@ -81,6 +81,7 @@ class VRNN(nn.Module):
         ### RNN
         self.dim_RNN = dim_RNN
         self.num_RNN = num_RNN
+        self.type_RNN = type_RNN
         ### Beta-loss
         self.beta = beta
 
@@ -181,7 +182,10 @@ class VRNN(nn.Module):
         ####################
         #### Recurrence ####
         ####################
-        self.rnn = nn.LSTM(dim_feature_x+dim_feature_z, self.dim_RNN, self.num_RNN)
+        if self.type_RNN == 'LSTM':
+            self.rnn = nn.LSTM(dim_feature_x+dim_feature_z, self.dim_RNN, self.num_RNN)
+        elif self.type_RNN == 'RNN':
+            self.rnn = nn.RNN(dim_feature_x+dim_feature_z, self.dim_RNN, self.num_RNN)
 
 
     def reparameterization(self, mean, logvar):
@@ -220,10 +224,15 @@ class VRNN(nn.Module):
         return mean_zt, logvar_zt
 
 
-    def recurrence(self, feature_xt, feature_zt, h_t, c_t):
+    def recurrence(self, feature_xt, feature_zt, h_t, c_t=None):
 
         rnn_input = torch.cat((feature_xt, feature_zt), -1)
-        _, (h_tp1, c_tp1) = self.rnn(rnn_input, (h_t, c_t))
+
+        if self.type_RNN == 'LSTM':
+            _, (h_tp1, c_tp1) = self.rnn(rnn_input, (h_t, c_t))
+        elif self.type_RNN == 'RNN':
+            _, h_tp1 = self.rnn(rnn_input, h_t)
+            c_tp1 = None
 
         return h_tp1, c_tp1
 
@@ -241,7 +250,8 @@ class VRNN(nn.Module):
         self.h = torch.zeros((seq_len, batch_size, self.dim_RNN)).to(self.device)
         z_t = torch.zeros(batch_size, self.z_dim).to(self.device)
         h_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
-        c_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
+        if self.type_RNN == 'LSTM':
+            c_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
 
         # main part
         feature_x = self.feature_extractor_x(x)
@@ -258,7 +268,12 @@ class VRNN(nn.Module):
             self.z[t,:,:] = torch.squeeze(z_t)
             self.y[t,:,:] = torch.squeeze(y_t)
             self.h[t,:,:] = torch.squeeze(h_t_last)
-            h_t, c_t = self.recurrence(feature_xt, feature_zt, h_t, c_t) # recurrence for t+1 
+
+            if self.type_RNN == 'LSTM':
+                h_t, c_t = self.recurrence(feature_xt, feature_zt, h_t, c_t) # recurrence for t+1 
+            elif self.type_RNN == 'RNN':
+                h_t, _ = self.recurrence(feature_xt, feature_zt, h_t)
+
         self.z_mean_p, self.z_logvar_p  = self.generation_z(self.h) # prior distribution. I think this should be in the generation process above
         
         return self.y

@@ -260,6 +260,12 @@ class LearningAlgorithm():
                 loss_tot_avg = loss_recon_avg + loss_kl_avg
                 optimizer.zero_grad()
                 loss_tot_avg.backward()
+
+                # Gradient clipping
+                # check if model has model.type_RNN, if True, and if type_RNN=='RNN', then clip the gradient
+                if hasattr(self.model, 'type_RNN') and self.model.type_RNN == 'RNN':
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 5.0)
+
                 optimizer.step()
 
                 train_loss[epoch] += loss_tot_avg.item() * bs
