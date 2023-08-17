@@ -129,10 +129,10 @@ def save_pickle(data, path):
 
 
 # %%
-save_pickle(l.hist, 'lorenz63.pkl')
+# save_pickle(l.hist, 'lorenz63.pkl')
 
 # %%
-save_pickle(l.hist, 'lorenz63_2.pkl')
+# save_pickle(l.hist, 'lorenz63_2.pkl')
 
 
 
@@ -145,30 +145,83 @@ def power_spectrum(time_series):
     
     # Compute the power spectrum: the square of the absolute value of the FFT
     power_spectrum = np.abs(fft_result)**2
-    
+    phases = np.angle(fft_result)    
+
+    n_pos_freq = len(fft_result)//2
     # Since the power spectrum is symmetric, we only need to return the first half
-    power_spectrum = power_spectrum[:len(power_spectrum) // 2]
+    power_spectrum = power_spectrum[:n_pos_freq]
+    phases = phases[:n_pos_freq]
     
     # Compute the frequencies corresponding to the values in the power spectrum
-    frequencies = np.fft.fftfreq(len(time_series))[:len(power_spectrum)]
+    frequencies = np.fft.fftfreq(len(time_series))[:n_pos_freq]
+
+    time_periods = np.zeros_like(frequencies)
+    time_periods[1:] = 1 / frequencies[1:]
     
     return frequencies, power_spectrum
-# Compute and plot the power spectrum for each component of the Lorenz 63 system
-fig, axes = plt.subplots(3, 1, figsize=(10, 10))
 
-for i, component in enumerate(["x", "y", "z"]):
-    time_series = np.array(l.hist)[:, i]
-    frequencies, spectrum = power_spectrum(time_series)
-    
-    # Skip the zero frequency
-    frequencies, spectrum = frequencies[1:], spectrum[1:]
-    
-    axes[i].semilogx(frequencies, spectrum)
-    axes[i].set_title(f"Power Spectrum of {component}-component")
-    axes[i].set_xlabel("Frequency (log scale)")
-    axes[i].set_ylabel("Power")
+frequencies, spectrum = power_spectrum(np.array(l.hist)[:, 0])
+# %%
+import plotly.graph_objects as go
 
-plt.tight_layout()
-plt.show()
+def plot_power_spectrum_plotly(time_series):
+    # Create a figure
+    fig = go.Figure()
+
+    # Iterate over each component and plot its power spectrum
+    for i, component in enumerate(["x", "y", "z"]):
+        series = np.array(time_series)[:, i]
+        frequencies, spectrum = power_spectrum(series)
+        
+        # Skip the zero frequency
+        frequencies, spectrum = frequencies[1:], spectrum[1:]
+        
+        fig.add_trace(go.Scatter(x=frequencies, y=spectrum, mode='lines', name=f'{component} power spectrum'))
+
+    # Set the x-axis to be log scale
+    fig.update_layout(
+        title="Power Spectrum of Lorenz63 System",
+        xaxis=dict(type="log", title="Frequency"),
+        # yaxis=dict(type="log", title="Power"),
+        yaxis=dict(title="Power"),
+        template="plotly_white"
+    )
+
+    # Display the figure
+    fig.show()
+
+# Call the function to display the plot
+plot_power_spectrum_plotly(np.array(l.hist))
+
+
+# %%
+from plotly.subplots import make_subplots
+
+def plot_power_spectrum_subplots_loglog(time_series):
+    # Create a subplots figure with 3 rows and 1 column
+    fig = make_subplots(rows=3, cols=1, subplot_titles=('X Power Spectrum', 'Y Power Spectrum', 'Z Power Spectrum'))
+    
+    # Iterate over each component and plot its power spectrum in a separate subplot
+    for i, component in enumerate(["x", "y", "z"]):
+        series = np.array(time_series)[:, i]
+        frequencies, spectrum = power_spectrum(series)
+        
+        # Skip the zero frequency
+        frequencies, spectrum = frequencies[1:], spectrum[1:]
+        
+        fig.add_trace(go.Scatter(x=frequencies, y=spectrum, mode='lines', name=f'{component} power spectrum'), row=i+1, col=1)
+
+    # Update the layout with log-log axes
+    fig.update_layout(title="Power Spectrum of Lorenz63 Components")
+    fig.update_xaxes(type="log", title="Frequency")
+    # fig.update_yaxes(type="log", title="Power")
+    fig.update_yaxes(title="Power")
+    
+    # Display the figure
+    fig.show()
+
+# Call the function to display the plots
+plot_power_spectrum_subplots_loglog(np.array(l.hist))
+
 
 # %%
