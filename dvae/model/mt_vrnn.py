@@ -257,7 +257,7 @@ class MT_VRNN_pp(nn.Module):
         return h_tp1, c_tp1
 
 
-    def forward(self, x):
+    def forward(self, x, autonomous=False):
 
         # need input:  (seq_len, batch_size, x_dim)
         seq_len, batch_size, _ = x.shape
@@ -274,9 +274,18 @@ class MT_VRNN_pp(nn.Module):
             c_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
 
         # main part
-        feature_x = self.feature_extractor_x(x)
+        if autonomous:
+            feature_xt = self.feature_extractor_x(x[0, :, :]).unsqueeze(0)
+        else:
+            feature_x = self.feature_extractor_x(x)
+
         for t in range(seq_len):
-            feature_xt = feature_x[t,:,:].unsqueeze(0)
+            if autonomous:
+                if t != 0:
+                    feature_xt = self.feature_extractor_x(self.y[t-1,:,:]).unsqueeze(0)
+            else:
+                feature_xt = feature_x[t,:,:].unsqueeze(0)
+
             h_t_last = h_t.view(self.num_RNN, 1, batch_size, self.dim_RNN)[-1,:,:,:]
             mean_zt, logvar_zt = self.inference(feature_xt, h_t_last)
             z_t = self.reparameterization(mean_zt, logvar_zt)
@@ -326,25 +335,3 @@ class MT_VRNN_pp(nn.Module):
 
         return info
 
-
-if __name__ == '__main__':
-    x_dim = 513
-    z_dim = 16
-    device = 'cpu'
-    vrnn = VRNN_pp(x_dim=x_dim, z_dim=z_dim).to(device)
-    model_info = vrnn.get_info()
-    # for i in model_info:
-    #     print(i)
-
-    x = torch.ones((2,3,x_dim))
-    y, mean, logvar, mean_prior, logvar_prior, z = vrnn.forward(x)
-    def loss_function(recon_x, x, mu, logvar, mu_prior=None, logvar_prior=None):
-        if mu_prior is None:
-            mu_prior = torch.zeros_like(mu)
-        if logvar_prior is None:
-            logvar_prior = torch.zeros_like(logvar)
-        recon = torch.sum(  x/recon_x - torch.log(x/recon_x) - 1 ) 
-        KLD = -0.5 * torch.sum(logvar - logvar_prior - torch.div((logvar.exp() + (mu - mu_prior).pow(2)), logvar_prior.exp()))
-        return recon + KLD
-
-    print(loss_function(y,x,mean,logvar,mean_prior,logvar)/6)

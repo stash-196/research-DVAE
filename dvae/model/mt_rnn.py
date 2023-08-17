@@ -184,7 +184,7 @@ class MT_RNN(nn.Module):
         return h_tp1, c_tp1
 
 
-    def forward(self, x):
+    def forward(self, x, autonomous=False):
 
         # need input:  (seq_len, batch_size, x_dim)
         seq_len, batch_size, _ = x.shape
@@ -197,9 +197,18 @@ class MT_RNN(nn.Module):
             c_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
 
         # main part
-        feature_x = self.feature_extractor_x(x)
+        if autonomous:
+            feature_xt = self.feature_extractor_x(x[0, :, :]).unsqueeze(0)
+        else:
+            feature_x = self.feature_extractor_x(x)
+
         for t in range(seq_len):
-            feature_xt = feature_x[t,:,:].unsqueeze(0)
+            if autonomous:
+                if t != 0:
+                    feature_xt = self.feature_extractor_x(self.y[t-1,:,:]).unsqueeze(0)
+            else:
+                feature_xt = feature_x[t,:,:].unsqueeze(0)
+                
             h_t_last = h_t.view(self.num_RNN, 1, batch_size, self.dim_RNN)[-1,:,:,:]
             y_t = self.generation_x(h_t_last)
             self.y[t,:,:] = torch.squeeze(y_t)
