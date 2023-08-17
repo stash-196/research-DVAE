@@ -50,10 +50,18 @@ class Options:
         
         return params
 
-def visualize_sequences(true_data, recon_data, save_dir, name=''):
+def visualize_sequences(true_data, recon_data, save_dir, n_gen_portion, name=''):
     plt.figure(figsize=(10, 6))
     plt.plot(true_data, label='True Sequence', color='blue')
-    plt.plot(recon_data, label='Predicted Sequence', color='red')
+
+    recon_length = len(recon_data) - int(len(recon_data) * n_gen_portion)
+
+    # Plotting the reconstructed part in red
+    plt.plot(recon_data[:recon_length], label='Reconstructed Sequence', color='red')
+    
+    # Plotting the self-generated part in green
+    plt.plot(range(recon_length, len(recon_data)), recon_data[recon_length:], label='Self-Generated Sequence', color='green')
+    
     plt.legend()
     plt.title('Comparison of True and Predicted Sequences')
     plt.xlabel('Time steps')
@@ -79,10 +87,10 @@ def spectral_analysis(true_data, recon_data, save_dir):
     plt.savefig(fig_file)
     plt.close()
 
-def visualize_hidden_states(h_states, save_dir, name='', alphas=None):
+def visualize_variable_evolution(states, save_dir, variable_name='h', alphas=None):
     plt.figure(figsize=(12, 8))
     
-    num_dims = h_states.shape[2]
+    num_dims = states.shape[2]
     
     # If alphas are provided, determine unique colors based on unique alphas.
     if alphas is not None:
@@ -90,21 +98,21 @@ def visualize_hidden_states(h_states, save_dir, name='', alphas=None):
     else:
         colors = plt.cm.viridis(np.linspace(0, 1, num_dims))
   
-    # Given h_states is of shape (seq_len, batch_size, hidden_size)
-    # For this example, we are plotting for batch 0 and all hidden dimensions
+    # Given h_states is of shape (seq_len, batch_size, dim)
+    # For this example, we are plotting for batch 0 and all dimensions
     for dim in range(num_dims):
-        plt.plot(h_states[:, 0, dim].cpu().numpy(), label=f'Dim {dim}', color=colors[dim])
+        plt.plot(states[:, 0, dim].cpu().numpy(), label=f'Dim {dim}', color=colors[dim])
     
     str_alphas = ' α:' + str(set(alphas.numpy())) if alphas is not None else ''
 
-    plt.title('Evolution of Hidden States over Time' + str_alphas)
+    plt.title(f'Evolution of {variable_name} States over Time' + str_alphas)
     plt.xlabel('Time steps')
-    plt.ylabel('Hidden state value')
+    plt.ylabel(f'{variable_name} state value')
     if num_dims <= 10:
         plt.legend(loc='upper right', bbox_to_anchor=(1.25, 1))
     plt.grid(True)
 
-    fig_file = os.path.join(save_dir, f'vis_hidden_state_evolution{name}.png')
+    fig_file = os.path.join(save_dir, f'vis_{variable_name}_state_evolution.png')
     plt.savefig(fig_file, bbox_inches='tight')
     plt.close()
 
@@ -165,19 +173,31 @@ if __name__ == '__main__':
             MY_MSE += MY_MSE.item() / (seq_len * batch_size)
 
             if i == 0:
-                true_series = batch_data[0:10, 0, :].reshape(-1).cpu().numpy()
-                recon_series = recon_batch_data[0:10, 0, :].reshape(-1).cpu().numpy()
+                n_seq = 20
+                n_gen_portion = 0.5
+                recon_len = n_seq - int(n_seq * n_gen_portion)
+                # reconstruct the first n_seq sequences
+                recon_batch_data = dvae(batch_data[0:recon_len, :, :], autonomous=False)
+                # generate next n_seq sequences
+                generate_batch_data = dvae(batch_data[recon_len:n_seq, :, :], autonomous=True)
+
+                true_series = batch_data[0:n_seq, 0, :].reshape(-1).cpu().numpy()
+                # concatinate reconstructions and generations
+                recon_series = torch.cat((recon_batch_data[:, 0, :], generate_batch_data[:, 0, :]), dim=0).reshape(-1).cpu().numpy()
+
                 # Plot the reconstruction vs true sequence
-                visualize_sequences(true_series, recon_series, os.path.dirname(params['saved_dict']))
+                visualize_sequences(true_series, recon_series, os.path.dirname(params['saved_dict']), n_gen_portion)
                 # Plot the spectral analysis
                 spectral_analysis(true_series, recon_series, os.path.dirname(params['saved_dict']))
 
-                true_series_avg = batch_data[:, 0, :].mean(dim=1).reshape(-1).cpu().numpy()
-                recon_series_avg = recon_batch_data[:, 0, :].mean(dim=1).reshape(-1).cpu().numpy()
-                visualize_sequences(true_series_avg, recon_series_avg, os.path.dirname(params['saved_dict']), '_avg')
-
                 # visualize the hidden states
-                visualize_hidden_states(dvae.h, os.path.dirname(params['saved_dict']), alphas=alphas_per_unit)
+                visualize_variable_evolution(dvae.h, os.path.dirname(params['saved_dict']), variable_name='hidden', alphas=alphas_per_unit)
+
+                # Check if the model has a z variable
+                if hasattr(dvae, 'z_mean'):
+                    # visualize the latent states
+                    visualize_variable_evolution(dvae.z_mean, os.path.dirname(params['saved_dict']), variable_name='z_mean', alphas=alphas_per_unit)
+                    visualize_variable_evolution(dvae.z_logvar, os.path.dirname(params['saved_dict']), variable_name='z_logvar', alphas=alphas_per_unit)
 
 
 
