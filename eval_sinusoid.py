@@ -71,21 +71,52 @@ def visualize_sequences(true_data, recon_data, save_dir, n_gen_portion, name='')
     plt.savefig(fig_file)
     plt.close()
 
-def spectral_analysis(true_data, recon_data, save_dir):
+def spectral_analysis(true_data, recon_data, save_dir, sampling_rate=0.25):  # 1 sample every 4 seconds = 0.25 Hz
     true_fft = np.fft.fft(true_data)
     recon_fft = np.fft.fft(recon_data)
 
+    freqs = np.fft.fftfreq(len(true_data), 1/sampling_rate)  # Get proper frequency axis based on sampling rate
+    periods = np.zeros_like(freqs)
+    periods[1:] = 1 / freqs[1:]  # Get periods corresponding to frequencies
+    
+    # Filter out zero frequencies (to avoid log(0) issues)
+    nonzero_indices = np.where(freqs > 0)
+
+    # Power spectrum (magnitude squared)
+    true_power = np.abs(true_fft[nonzero_indices]) ** 2
+    recon_power = np.abs(recon_fft[nonzero_indices]) ** 2
+    
+    # Phase spectrum
+    true_phase = np.angle(true_fft[nonzero_indices])
+    recon_phase = np.angle(recon_fft[nonzero_indices])
+
+    # Power spectral plots
     plt.figure(figsize=(10, 6))
-    plt.plot(np.abs(true_fft), label='True Spectrum', color='blue')
-    plt.plot(np.abs(recon_fft), label='Predicted Spectrum', color='red')
+    plt.loglog(periods[nonzero_indices], true_power, label='True Sequence Power Spectrum', color='blue')
+    plt.loglog(periods[nonzero_indices], recon_power, label='Predicted Sequence Power Spectrum', color='red')
     plt.legend()
-    plt.title('Spectral Analysis')
-    plt.xlabel('Frequency components')
-    plt.ylabel('Magnitude')
+    plt.title('Power Spectral Analysis')
+    plt.xlabel('Period (seconds)')
+    plt.ylabel('Power')
     plt.grid(True)
-    fig_file = os.path.join(save_dir, 'vis_pred_true_spectrums.png')
+    fig_file = os.path.join(save_dir, 'vis_pred_true_power_spectrums_loglog.png')
     plt.savefig(fig_file)
     plt.close()
+
+    # Phase spectral plots
+    plt.figure(figsize=(10, 6))
+    plt.semilogx(periods[nonzero_indices], recon_phase, label='Predicted Sequence Phase Spectrum', color='red')
+    plt.semilogx(periods[nonzero_indices], true_phase, label='True Sequence Phase Spectrum', color='blue')
+    plt.legend()
+    plt.title('Phase Spectral Analysis')
+    plt.xlabel('Frequency (Hz)')
+    plt.ylabel('Phase (radians)')
+    plt.grid(True)
+    fig_file = os.path.join(save_dir, 'vis_pred_true_phase_spectrums_semilogx.png')
+    plt.savefig(fig_file)
+    plt.close()
+
+
 
 def visualize_variable_evolution(states, save_dir, variable_name='h', alphas=None):
     plt.figure(figsize=(12, 8))
@@ -173,6 +204,20 @@ if __name__ == '__main__':
             MY_MSE += MY_MSE.item() / (seq_len * batch_size)
 
             if i == 0:
+                true_series = batch_data[:, 0, :].reshape(-1).cpu().numpy()
+                recon_series = recon_batch_data[:, 0, :].reshape(-1).cpu().numpy()
+                # Plot the spectral analysis
+                spectral_analysis(true_series, recon_series, os.path.dirname(params['saved_dict']))
+
+                # visualize the hidden states
+                visualize_variable_evolution(dvae.h, os.path.dirname(params['saved_dict']), variable_name='hidden', alphas=alphas_per_unit)
+
+                # Check if the model has a z variable
+                if hasattr(dvae, 'z_mean'):
+                    # visualize the latent states
+                    visualize_variable_evolution(dvae.z_mean, os.path.dirname(params['saved_dict']), variable_name='z_mean', alphas=alphas_per_unit)
+                    visualize_variable_evolution(dvae.z_logvar, os.path.dirname(params['saved_dict']), variable_name='z_logvar', alphas=alphas_per_unit)
+
                 n_seq = 20
                 n_gen_portion = 0.5
                 recon_len = n_seq - int(n_seq * n_gen_portion)
@@ -187,17 +232,6 @@ if __name__ == '__main__':
 
                 # Plot the reconstruction vs true sequence
                 visualize_sequences(true_series, recon_series, os.path.dirname(params['saved_dict']), n_gen_portion)
-                # Plot the spectral analysis
-                spectral_analysis(true_series, recon_series, os.path.dirname(params['saved_dict']))
-
-                # visualize the hidden states
-                visualize_variable_evolution(dvae.h, os.path.dirname(params['saved_dict']), variable_name='hidden', alphas=alphas_per_unit)
-
-                # Check if the model has a z variable
-                if hasattr(dvae, 'z_mean'):
-                    # visualize the latent states
-                    visualize_variable_evolution(dvae.z_mean, os.path.dirname(params['saved_dict']), variable_name='z_mean', alphas=alphas_per_unit)
-                    visualize_variable_evolution(dvae.z_logvar, os.path.dirname(params['saved_dict']), variable_name='z_logvar', alphas=alphas_per_unit)
 
 
 
