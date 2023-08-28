@@ -33,6 +33,8 @@ def build_MT_RNN(cfg, device='cpu'):
     x_dim = cfg.getint('Network', 'x_dim')
     activation = cfg.get('Network', 'activation')
     dropout_p = cfg.getfloat('Network', 'dropout_p')
+    # Feature extractor
+    dense_x = [] if cfg.get('Network', 'dense_x') == '' else [int(i) for i in cfg.get('Network', 'dense_x').split(',')]
     # Dense layers
     dense_h_x = [] if cfg.get('Network', 'dense_h_x') == '' else [int(i) for i in cfg.get('Network', 'dense_h_x').split(',')]
     # RNN
@@ -45,9 +47,10 @@ def build_MT_RNN(cfg, device='cpu'):
 
     # Build model
     model = MT_RNN(alphas=alphas, x_dim=x_dim, activation=activation,
-                 dense_h_x=dense_h_x, 
-                 dim_RNN=dim_RNN, num_RNN=num_RNN, type_RNN='RNN',
-                 dropout_p= dropout_p, beta=beta, device=device).to(device)
+                   dense_x=dense_x, 
+                   dense_h_x=dense_h_x, 
+                   dim_RNN=dim_RNN, num_RNN=num_RNN, type_RNN=type_RNN,
+                   dropout_p=dropout_p, beta=beta, device=device).to(device)
 
     return model
 
@@ -55,11 +58,11 @@ def build_MT_RNN(cfg, device='cpu'):
     
 class MT_RNN(nn.Module):
 
-    def __init__(self, alphas, x_dim, activation = 'tanh',
-                 dense_x=[128],
-                 dense_h_x=[128],
-                 dim_RNN=128, num_RNN=1, type_RNN='RNN',
-                 dropout_p = 0, beta=1, device='cpu'):
+    def __init__(self, alphas, x_dim, activation,
+                 dense_x,
+                 dense_h_x,
+                 dim_RNN, num_RNN=1, type_RNN='RNN',
+                 dropout_p=0, beta=1, device='cpu'):
 
         super().__init__()
         ### General parameters

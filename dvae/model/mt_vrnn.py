@@ -36,6 +36,7 @@ def build_MT_VRNN_pp(cfg, device='cpu'):
     # RNN
     dim_RNN = cfg.getint('Network', 'dim_RNN')
     num_RNN = cfg.getint('Network', 'num_RNN')
+    type_RNN = cfg.get('Network', 'type_RNN')
 
     # Beta-vae
     beta = cfg.getfloat('Training', 'beta')
@@ -45,7 +46,7 @@ def build_MT_VRNN_pp(cfg, device='cpu'):
                  dense_x=dense_x, dense_z=dense_z,
                  dense_hx_z=dense_hx_z, dense_hz_x=dense_hz_x, 
                  dense_h_z=dense_h_z,
-                 dim_RNN=dim_RNN, num_RNN=num_RNN, type_RNN='RNN',
+                 dim_RNN=dim_RNN, num_RNN=num_RNN, type_RNN=type_RNN,
                  dropout_p= dropout_p, beta=beta, device=device).to(device)
 
     return model
@@ -54,11 +55,11 @@ def build_MT_VRNN_pp(cfg, device='cpu'):
     
 class MT_VRNN_pp(nn.Module):
 
-    def __init__(self, alphas, x_dim, z_dim=16, activation = 'tanh',
-                 dense_x=[128], dense_z=[128],
-                 dense_hx_z=[128], dense_hz_x=[128], dense_h_z=[128],
-                 dim_RNN=128, num_RNN=1, type_RNN='RNN',
-                 dropout_p = 0, beta=1, device='cpu'):
+    def __init__(self, alphas, x_dim, z_dim, activation,
+                 dense_x, dense_z,
+                 dense_hx_z, dense_hz_x, dense_h_z,
+                 dim_RNN, num_RNN=1, type_RNN='RNN',
+                 dropout_p=0, beta=1, device='cpu'):
 
         super().__init__()
         ### General parameters
