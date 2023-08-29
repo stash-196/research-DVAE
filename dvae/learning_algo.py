@@ -170,7 +170,7 @@ class LearningAlgorithm():
         ### Batch Training ###
         ######################
 
-        # Load training parameters
+        # Load training parameters  
         epochs = self.cfg.getint('Training', 'epochs')
         early_stop_patience = self.cfg.getint('Training', 'early_stop_patience')
         save_frequency = self.cfg.getint('Training', 'save_frequency')
@@ -263,8 +263,10 @@ class LearningAlgorithm():
 
                 # Gradient clipping
                 # check if model has model.type_RNN, if True, and if type_RNN=='RNN', then clip the gradient
-                if hasattr(self.model, 'type_RNN') and self.model.type_RNN == 'RNN':
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 5.0)
+                if hasattr(self.model, 'type_RNN'):
+                    if self.model.type_RNN == 'RNN':
+                        self.gradient_clip = self.cfg.getfloat('Training', 'gradient_clip')
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.gradient_clip)
 
                 optimizer.step()
 

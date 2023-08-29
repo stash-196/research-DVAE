@@ -24,7 +24,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from dvae.learning_algo import LearningAlgorithm
 from dvae.learning_algo_ss import LearningAlgorithm_ss
-from dvae.dataset import sinusoid_dataset
+from dvae.dataset import sinusoid_dataset, lorenz63_dataset
 from dvae.utils import EvalMetrics, loss_MSE
 from torch.nn.functional import mse_loss
 
@@ -173,8 +173,13 @@ if __name__ == '__main__':
     cfg = learning_algo.cfg
     print('Total params: %.2fM' % (sum(p.numel() for p in dvae.parameters()) / 1000000.0))
 
-    # Use the sinusoid dataset
-    train_dataloader, val_dataloader, train_num, val_num = sinusoid_dataset.build_dataloader(cfg, device)
+    if cfg['DataFrame']["dataset_name"] == "Sinusoid":
+        train_dataloader, val_dataloader, train_num, val_num = sinusoid_dataset.build_dataloader(cfg, device)
+    elif cfg['DataFrame']["dataset_name"] == "Lorenz63":
+        train_dataloader, val_dataloader, train_num, val_num = lorenz63_dataset.build_dataloader(cfg, device)
+    else:
+        raise ValueError("Unsupported dataset_name in configuration file.")
+
     test_num = len(val_dataloader.dataset)
     print('Test samples: {}'.format(test_num))
 
@@ -211,6 +216,9 @@ if __name__ == '__main__':
 
                 # visualize the hidden states
                 visualize_variable_evolution(dvae.h, os.path.dirname(params['saved_dict']), variable_name='hidden', alphas=alphas_per_unit)
+
+                # visualize the x_features
+                visualize_variable_evolution(dvae.x_features, os.path.dirname(params['saved_dict']), variable_name='x_features', alphas=alphas_per_unit)
 
                 # Check if the model has a z variable
                 if hasattr(dvae, 'z_mean'):

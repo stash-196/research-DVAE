@@ -159,6 +159,7 @@ class RNN(nn.Module):
 
         # create variable holder and send to GPU if needed
         self.y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
+        self.x_features = torch.zeros((seq_len, batch_size, self.dense_x[-1])).to(self.device)
         self.h = torch.zeros((seq_len, batch_size, self.dim_RNN)).to(self.device)
         h_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
         if self.type_RNN == 'LSTM':
@@ -180,6 +181,8 @@ class RNN(nn.Module):
             h_t_last = h_t.view(self.num_RNN, 1, batch_size, self.dim_RNN)[-1,:,:,:]
             y_t = self.generation_x(h_t_last)
             self.y[t,:,:] = torch.squeeze(y_t)
+            self.x_features[t,:,:] = torch.squeeze(feature_xt)
+
             self.h[t,:,:] = torch.squeeze(h_t_last)
 
             if self.type_RNN == 'LSTM':

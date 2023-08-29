@@ -196,6 +196,8 @@ class MT_RNN(nn.Module):
         self.y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
         self.h = torch.zeros((seq_len, batch_size, self.dim_RNN)).to(self.device)
         h_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
+        self.x_features = torch.zeros((seq_len, batch_size, self.dense_x[-1])).to(self.device)
+
         if self.type_RNN == 'LSTM':
             c_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
 
@@ -216,6 +218,7 @@ class MT_RNN(nn.Module):
             y_t = self.generation_x(h_t_last)
             self.y[t,:,:] = torch.squeeze(y_t)
             self.h[t,:,:] = torch.squeeze(h_t_last)
+            self.x_features[t,:,:] = torch.squeeze(feature_xt)
 
             if self.type_RNN == 'LSTM':
                 h_t, c_t = self.recurrence(feature_xt, h_t, c_t) # recurrence for t+1 
