@@ -10,3 +10,4 @@ data/*
 saved_model/*
 pretrained_models/*
 slurm/logs/*
+config/**/generated/*
