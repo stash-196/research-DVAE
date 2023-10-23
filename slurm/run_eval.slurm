@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=8            # Number of CPU cores per task
 #SBATCH --mem=16G                    # Total memory limit
 #SBATCH --time=10:00:00              # Time limit hrs:min:sec
-#SBATCH --output=./logs/training_%j.log     # Standard output and error log
-#SBATCH --error=./logs/training_%j.err      # Standard output and error log
+#SBATCH --output=./logs/eval_%j.log     # Standard output and error log
+#SBATCH --error=./logs/eval_%j.err      # Standard output and error log
 #SBATCH --partition=compute              # Specify the GPU partition
 
 
@@ -27,7 +27,7 @@ cd ~/workspace/research-DVAE
 for model_dir in /flash/DoyaU/stash/research-DVAE/saved_model/*; do
     # If it is a directory
     if [[ -d "$model_dir" ]]; then
-        if [[ "${model_dir##*/}" == *Sinusoid* ]]; then
+        # if [[ "${model_dir##*/}" == *Sinusoid* ]]; then
             # Check for files containing "final" in their names
             for final_model in "$model_dir"/*final*.pt; do
                 # If such a file exists
@@ -36,7 +36,7 @@ for model_dir in /flash/DoyaU/stash/research-DVAE/saved_model/*; do
                     ~/miniconda3/envs/research-DVAE/bin/python eval_sinusoid.py --saved_dict "$final_model"
                 fi
             done
-        fi
+        # fi
     fi
 done
 

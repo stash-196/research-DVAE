@@ -129,10 +129,10 @@ def visualize_variable_evolution(states, save_dir, variable_name='h', alphas=Non
     else:
         colors = plt.cm.viridis(np.linspace(0, 1, num_dims))
   
-    # Given h_states is of shape (seq_len, batch_size, dim)
+      # Given h_states is of shape (seq_len, batch_size, dim)
     # For this example, we are plotting for batch 0 and all dimensions
     for dim in range(num_dims):
-        plt.plot(states[:, 0, dim].cpu().numpy(), label=f'Dim {dim}', color=colors[dim])
+          plt.plot(states[:, 0, dim].cpu().numpy(), label=f'Dim {dim}', color=colors[dim])
     
     str_alphas = ' α:' + str(set(alphas.numpy())) if alphas is not None else ''
 
@@ -218,13 +218,13 @@ if __name__ == '__main__':
                 visualize_variable_evolution(dvae.h, os.path.dirname(params['saved_dict']), variable_name='hidden', alphas=alphas_per_unit)
 
                 # visualize the x_features
-                visualize_variable_evolution(dvae.x_features, os.path.dirname(params['saved_dict']), variable_name='x_features', alphas=alphas_per_unit)
+                visualize_variable_evolution(dvae.x_features, os.path.dirname(params['saved_dict']), variable_name='x_features')
 
                 # Check if the model has a z variable
                 if hasattr(dvae, 'z_mean'):
                     # visualize the latent states
-                    visualize_variable_evolution(dvae.z_mean, os.path.dirname(params['saved_dict']), variable_name='z_mean', alphas=alphas_per_unit)
-                    visualize_variable_evolution(dvae.z_logvar, os.path.dirname(params['saved_dict']), variable_name='z_logvar', alphas=alphas_per_unit)
+                    visualize_variable_evolution(dvae.z_mean, os.path.dirname(params['saved_dict']), variable_name='z_mean')
+                    visualize_variable_evolution(dvae.z_logvar, os.path.dirname(params['saved_dict']), variable_name='z_logvar')
 
                 n_seq = 20
                 n_gen_portion = 0.5
