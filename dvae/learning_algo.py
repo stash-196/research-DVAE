@@ -78,13 +78,24 @@ class LearningAlgorithm():
         
 
     def init_optimizer(self):
-        optimization  = self.cfg.get('Training', 'optimization')
-        lr = self.cfg.getfloat('Training', 'lr')
-        if optimization == 'adam': # could be extend to other optimizers
-            optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        optimization = self.cfg.get('Training', 'optimization')
+        self.lr = self.cfg.getfloat('Training', 'lr')
+        self.alpha_lr = self.cfg.getfloat('Training', 'alpha_lr', fallback=self.lr)  # defaults to the same as lr if not present
+        if self.optimize_alphas:
+            params = [
+                {'params': self.model.base_parameters(), 'lr': self.lr},
+                {'params': [self.model.sigmas], 'lr': self.alpha_lr}  # include sigma values
+            ]
         else:
-            optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+            params = self.model.parameters()
+
+        if optimization == 'adam':
+            optimizer = torch.optim.Adam(params, lr=self.lr)
+        else:
+            optimizer = torch.optim.Adam(params, lr=self.lr)  # fallback to Adam if optimization method is not recognized
+
         return optimizer
+
 
 
     def get_basic_info(self):
@@ -149,6 +160,8 @@ class LearningAlgorithm():
             for log in self.model.get_info():
                 logger.info(log)
 
+        self.optimize_alphas = self.cfg.getboolean('Training', 'optimize_alphas', fallback=False)  # defaults to False if not present
+
         # Init optimizer
         optimizer = self.init_optimizer()
 
@@ -191,6 +204,9 @@ class LearningAlgorithm():
             best_state_dict = self.model.state_dict()
             best_optim_dict = optimizer.state_dict()
             start_epoch = -1
+            if self.optimize_alphas:
+                alphas_init = [float(i) for i in self.cfg.get('Network', 'alphas').split(',')]
+                sigmas_hitory = np.zeros((len(alphas_init), epochs))
         else:
             cp_file = os.path.join(save_dir, '{}_checkpoint.pt'.format(self.model_name))
             checkpoint = torch.load(cp_file)
@@ -210,7 +226,9 @@ class LearningAlgorithm():
             cur_best_epoch = start_epoch
             best_state_dict = self.model.state_dict()
             best_optim_dict = optimizer.state_dict()
-            
+            if self.optimize_alphas:
+                alphas_init = [float(i) for i in self.cfg.get('Network', 'alphas').split(',')]
+                sigmas_hitory = np.zeros((len(alphas_init), epochs))
 
         # Train with mini-batch SGD
         for epoch in range(start_epoch+1, epochs):
@@ -273,6 +291,10 @@ class LearningAlgorithm():
                 train_loss[epoch] += loss_tot_avg.item() * bs
                 train_recon[epoch] += loss_recon_avg.item() * bs
                 train_kl[epoch] += loss_kl_avg.item() * bs
+                if self.optimize_alphas:
+                    sigmas_hitory[:, epoch] = self.model.sigmas.detach().cpu().numpy()
+
+
                 
             # Validation
             for _, batch_data in enumerate(val_dataloader):
@@ -372,9 +394,14 @@ class LearningAlgorithm():
         train_kl = train_kl[:epoch+1]
         val_recon = val_recon[:epoch+1]
         val_kl = val_kl[:epoch+1]
+        if self.optimize_alphas:
+            sigmas_hitory = sigmas_hitory[:, :epoch+1]            
         loss_file = os.path.join(save_dir, 'loss_model.pckl')
         with open(loss_file, 'wb') as f:
-            pickle.dump([train_loss, val_loss, train_recon, train_kl, val_recon, val_kl], f)
+            if self.optimize_alphas:
+                pickle.dump([train_loss, val_loss, train_recon, train_kl, val_recon, val_kl, sigmas_hitory], f)
+            else:
+                pickle.dump([train_loss, val_loss, train_recon, train_kl, val_recon, val_kl], f)
 
 
         # Save the loss figure
@@ -414,7 +441,34 @@ class LearningAlgorithm():
         plt.savefig(fig_file)
         plt.close(fig)
 
+        plt.clf()
+        fig = plt.figure(figsize=(8,6))
+        plt.rcParams['font.size'] = 12
+        for i in range(sigmas_hitory.shape[0]):
+            plt.plot(sigmas_hitory[i, :], label='Sigma {}'.format(i+1))
+        plt.legend(fontsize=16, title='Sigma values', title_fontsize=20)
+        plt.xlabel('epochs', fontdict={'size':16})
+        plt.ylabel('sigma', fontdict={'size':16})
+        fig_file = os.path.join(save_dir, 'history_sigma_{}.png'.format(tag))
+        plt.savefig(fig_file)
+        plt.close(fig)
 
-    
+        plt.clf()
+        fig = plt.figure(figsize=(8,6))
+        plt.rcParams['font.size'] = 12
+        for i in range(sigmas_hitory.shape[0]):
+            alphas = 1 / (1 + np.exp(-sigmas_hitory[i, :]))
+            plt.plot(alphas, label='Alpha {}'.format(i+1))
+        plt.legend(fontsize=16, title='Alpha values', title_fontsize=20)
+        plt.xlabel('epochs', fontdict={'size':16})
+        plt.ylabel('alpha', fontdict={'size':16})
+        plt.yscale('log')  # Set y-axis to logarithmic scale
+        fig_file = os.path.join(save_dir, 'history_alpha_{}.png'.format(tag))
+        plt.savefig(fig_file)
+        plt.close(fig)
+
 
         
+# sigmoid function for arrays
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))

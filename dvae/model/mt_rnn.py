@@ -23,13 +23,14 @@ The code in this file is based on:
 from torch import nn
 import torch
 from collections import OrderedDict
-
+import math
 
 def build_MT_RNN(cfg, device='cpu'):
 
     ### Load parameters for VRNN
     # General
     alphas = [float(i) for i in cfg.get('Network', 'alphas').split(',')]
+
     x_dim = cfg.getint('Network', 'x_dim')
     activation = cfg.get('Network', 'activation')
     dropout_p = cfg.getfloat('Network', 'dropout_p')
@@ -55,7 +56,14 @@ def build_MT_RNN(cfg, device='cpu'):
     return model
 
 
-    
+
+def sigmoid(x):
+    return 1 / (1 + math.exp(-x))
+
+def inverse_sigmoid(y):
+    return -math.log((1 / y) - 1)
+
+
 class MT_RNN(nn.Module):
 
     def __init__(self, alphas, x_dim, activation,
@@ -87,20 +95,34 @@ class MT_RNN(nn.Module):
         self.type_RNN = type_RNN
         ### Beta-loss
         self.beta = beta
-        # Create an array of alphas for each hidden unit
-        self.register_buffer('alphas_per_unit', self.assign_alpha_per_unit())
+        # # Create an array of alphas for each hidden unit
+        # Convert alphas to sigma using inverse sigmoid
+        self.sigmas = nn.Parameter(torch.tensor([inverse_sigmoid(alpha) for alpha in alphas], dtype=torch.float32), requires_grad=True)
 
+        # self.register_buffer('alphas_per_unit', self.assign_alpha_per_unit())
+        # self.alphas_per_unit = nn.Parameter(self.assign_alpha_per_unit())
+
+        # Build the model
         self.build()
 
+
+    def base_parameters(self):
+        return (p for name, p in self.named_parameters() if 'sigmas' not in name)
+
     
-    def assign_alpha_per_unit(self):
+    def alphas_per_unit(self):
+        # Convert sigma to alpha using sigmoid
+        alphas = torch.sigmoid(self.sigmas)
+        
+        # If the number of hidden units is greater than the number of alphas,
+        # distribute the alphas evenly among the hidden units.
+        if self.dim_RNN > len(alphas):
+            num_repeats = self.dim_RNN // len(alphas)
+            remainder = self.dim_RNN % len(alphas)
+            return torch.cat([alphas] * num_repeats + [alphas[:remainder]])
+        else:
+            return alphas[:self.dim_RNN]
 
-        # Sort alphas
-        alphas_sorted, _ = torch.sort(torch.asarray(self.alphas))
-        # Assign alpha per unit
-        assignments = torch.tensor([alphas_sorted[i % len(alphas_sorted)] for i in range(self.dim_RNN)])
-
-        return torch.sort(assignments)[0]
 
 
     def build(self):
@@ -182,7 +204,7 @@ class MT_RNN(nn.Module):
             _, h_tp1 = self.rnn(rnn_input, h_t)
             c_tp1 = None
 
-        h_tp1 = (1 - self.alphas_per_unit) * h_t + self.alphas_per_unit * h_tp1
+        h_tp1 = (1 - self.alphas_per_unit()) * h_t + self.alphas_per_unit() * h_tp1
 
         return h_tp1, c_tp1
 
