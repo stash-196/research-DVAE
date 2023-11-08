@@ -9,10 +9,10 @@ from .utils import data_utils
 import pickle
 
 
-# Define a build_dataloader function for lorenz63 dataset following the style of the above data_builder
+# Define a build_dataloader function for Sinusoid dataset following the style of the above data_builder
 def build_dataloader(cfg, device):
 
-    # Load dataset params for Lorenz63
+    # Load dataset params for Sinusoid
     data_dir = cfg.get('User', 'data_dir')
     x_dim = cfg.getint('Network', 'x_dim')
     shuffle = cfg.getboolean('DataFrame', 'shuffle')
@@ -39,9 +39,9 @@ def build_dataloader(cfg, device):
     return train_dataloader, val_dataloader, train_num, val_num
 
 
-# define a class for Lorenz63 dataset in the same style as the above HumanPoseXYZ, dataset
+# define a class for Sinusoid dataset
 class Sinusoid(Dataset):
-    def __init__(self, path_to_data, split, seq_len, x_dim, sample_rate, skip_rate, val_indices, observation_process, device):
+    def __init__(self, path_to_data, split, seq_len, x_dim, sample_rate, skip_rate, val_indices, observation_process, device, overlap):
         """
         :param path_to_data: path to the data folder
         :param split: train, test or val
@@ -59,6 +59,7 @@ class Sinusoid(Dataset):
         self.skip_rate = skip_rate
         self.val_indices = val_indices
         self.observation_process = observation_process
+        self.overlap = overlap
         
         self.seq = {}
         self.data_idx = []
@@ -78,26 +79,66 @@ class Sinusoid(Dataset):
             # v = np.random.normal(0, 1, the_sequence.shape[-1])
             v = np.ones(the_sequence.shape[-1])
             the_sequence = the_sequence @ v  # Perform vector product to convert 3D to 1D
-            the_sequence = np.array([the_sequence[i:i+x_dim] for i in range(0, len(the_sequence), x_dim) if i+x_dim <= len(the_sequence)])
         elif self.observation_process == '3dto1d_w_noise':
             v = np.ones(the_sequence.shape[-1])
             the_sequence = the_sequence @ v + np.random.normal(0, 0.3, the_sequence.shape[0])  # Add Gaussian noise
+
+        if self.overlap:
+            the_sequence = self.create_moving_window_sequences(the_sequence, x_dim)
+        else:
             the_sequence = np.array([the_sequence[i:i+x_dim] for i in range(0, len(the_sequence), x_dim) if i+x_dim <= len(the_sequence)])
             
-        
         # Convert to torch tensor and send to device
         self.seq = torch.from_numpy(the_sequence).float().to(self.device)
         
         # save valid start frames, based on skip_rate
         num_frames = self.seq.shape[0] # Number of complete sequences in the data
-        
+
+
+        all_indices = data_utils.find_indices(num_frames, self.seq_len, num_frames // self.seq_len)
+        train_indices, validation_indices = self.split_dataset(all_indices, self.val_indices)
+
+
         if self.split <= 1: # for train and test
-            valid_frames = np.arange(0, num_frames - self.seq_len + 1, self.skip_rate)
+            valid_frames = train_indices
         else: # for validation
-            valid_frames = data_utils.find_indices(num_frames, self.seq_len, self.val_indices)
+            valid_frames = validation_indices
         
         self.data_idx = list(valid_frames)
+    
+    def create_moving_window_sequences(self, sequence, window_size):
+        """
+        Converts a 1D time series into a sequence of vectors representing a moving window,
+        overlapping by one time step at each step.
+
+        :param sequence: The original 1D time series.
+        :param window_size: The size of the moving window (equivalent to x_dim).
+        :return: A 2D numpy array where each row is a windowed sequence.
+        """
+        sequence_length = len(sequence)
+        num_sequences = sequence_length - window_size + 1
+        windowed_sequences = np.zeros((num_sequences, window_size))
+
+        for i in range(num_sequences):
+            windowed_sequences[i] = sequence[i:i + window_size]
+
+        return windowed_sequences
+
+    def split_dataset(self, indices, val_indices):
+
+        np.random.seed(42)  # Set a random seed for reproducibility
+        # Shuffle indices
+        np.random.shuffle(indices)
         
+        # Compute the split point
+        split_point = len(indices) - val_indices
+        
+        # Split indices into training and validation sets
+        train_indices = indices[:split_point]
+        validation_indices = indices[split_point:]
+        
+        return train_indices, validation_indices
+
     def __len__(self):
         return len(self.data_idx)
     
