@@ -213,7 +213,7 @@ if __name__ == '__main__':
             if i == 0:
                 if overlap:
                     true_series_overlapping = batch_data[:, 0, :].reshape(-1).cpu().numpy()
-                    
+
                     recon_series = recon_batch_data[:, 0, :].reshape(-1).cpu().numpy()
                 else:        
                     true_series = batch_data[:, 0, :].reshape(-1).cpu().numpy()
@@ -225,13 +225,16 @@ if __name__ == '__main__':
                 visualize_variable_evolution(dvae.h, os.path.dirname(params['saved_dict']), variable_name='hidden', alphas=alphas_per_unit)
 
                 # visualize the x_features
-                visualize_variable_evolution(dvae.x_features, os.path.dirname(params['saved_dict']), variable_name='x_features')
+                visualize_variable_evolution(dvae.feature_x, os.path.dirname(params['saved_dict']), variable_name='x_features')
 
                 # Check if the model has a z variable
                 if hasattr(dvae, 'z_mean'):
                     # visualize the latent states
-                    visualize_variable_evolution(dvae.z_mean, os.path.dirname(params['saved_dict']), variable_name='z_mean')
-                    visualize_variable_evolution(dvae.z_logvar, os.path.dirname(params['saved_dict']), variable_name='z_logvar')
+                    visualize_variable_evolution(dvae.z_mean, os.path.dirname(params['saved_dict']), variable_name='z_mean_posterior')
+                    visualize_variable_evolution(dvae.z_logvar, os.path.dirname(params['saved_dict']), variable_name='z_logvar_posterior')
+                    visualize_variable_evolution(dvae.z_mean_p, os.path.dirname(params['saved_dict']), variable_name='z_mean_prior')
+                    visualize_variable_evolution(dvae.z_logvar_p, os.path.dirname(params['saved_dict']), variable_name='z_logvar_prior')
+
 
                 n_seq = 20
                 n_gen_portion = 0.5
@@ -247,6 +250,8 @@ if __name__ == '__main__':
 
                 # Plot the reconstruction vs true sequence
                 visualize_sequences(true_series, recon_series, os.path.dirname(params['saved_dict']), n_gen_portion)
+
+
 
 
 
