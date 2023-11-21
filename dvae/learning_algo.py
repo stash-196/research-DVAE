@@ -441,31 +441,32 @@ class LearningAlgorithm():
         plt.savefig(fig_file)
         plt.close(fig)
 
-        plt.clf()
-        fig = plt.figure(figsize=(8,6))
-        plt.rcParams['font.size'] = 12
-        for i in range(sigmas_hitory.shape[0]):
-            plt.plot(sigmas_hitory[i, :], label='Sigma {}'.format(i+1))
-        plt.legend(fontsize=16, title='Sigma values', title_fontsize=20)
-        plt.xlabel('epochs', fontdict={'size':16})
-        plt.ylabel('sigma', fontdict={'size':16})
-        fig_file = os.path.join(save_dir, 'history_sigma_{}.png'.format(tag))
-        plt.savefig(fig_file)
-        plt.close(fig)
+        if self.optimize_alphas:
+            plt.clf()
+            fig = plt.figure(figsize=(8,6))
+            plt.rcParams['font.size'] = 12
+            for i in range(sigmas_hitory.shape[0]):
+                plt.plot(sigmas_hitory[i, :], label='Sigma {}'.format(i+1))
+            plt.legend(fontsize=16, title='Sigma values', title_fontsize=20)
+            plt.xlabel('epochs', fontdict={'size':16})
+            plt.ylabel('sigma', fontdict={'size':16})
+            fig_file = os.path.join(save_dir, 'history_sigma_{}.png'.format(tag))
+            plt.savefig(fig_file)
+            plt.close(fig)
 
-        plt.clf()
-        fig = plt.figure(figsize=(8,6))
-        plt.rcParams['font.size'] = 12
-        for i in range(sigmas_hitory.shape[0]):
-            alphas = 1 / (1 + np.exp(-sigmas_hitory[i, :]))
-            plt.plot(alphas, label='Alpha {}'.format(i+1))
-        plt.legend(fontsize=16, title='Alpha values', title_fontsize=20)
-        plt.xlabel('epochs', fontdict={'size':16})
-        plt.ylabel('alpha', fontdict={'size':16})
-        plt.yscale('log')  # Set y-axis to logarithmic scale
-        fig_file = os.path.join(save_dir, 'history_alpha_{}.png'.format(tag))
-        plt.savefig(fig_file)
-        plt.close(fig)
+            plt.clf()
+            fig = plt.figure(figsize=(8,6))
+            plt.rcParams['font.size'] = 12
+            for i in range(sigmas_hitory.shape[0]):
+                alphas = 1 / (1 + np.exp(-sigmas_hitory[i, :]))
+                plt.plot(alphas, label='Alpha {}'.format(i+1))
+            plt.legend(fontsize=16, title='Alpha values', title_fontsize=20)
+            plt.xlabel('epochs', fontdict={'size':16})
+            plt.ylabel('alpha', fontdict={'size':16})
+            plt.yscale('log')  # Set y-axis to logarithmic scale
+            fig_file = os.path.join(save_dir, 'history_alpha_{}.png'.format(tag))
+            plt.savefig(fig_file)
+            plt.close(fig)
 
 
         
