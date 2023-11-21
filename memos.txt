@@ -1,0 +1,2 @@
+saved_root = /flash/DoyaU/stash/research-DVAE/saved_model
+data_dir = /bucket/DoyaU/stash/research-DVAE/data/sinusoid

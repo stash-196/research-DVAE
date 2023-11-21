@@ -5,9 +5,13 @@ notes/*
 *.pyc
 .DS_Store
 .vscode/*
-*.sh
-data/*
+*.sh data/*
 saved_model/*
 pretrained_models/*
 slurm/logs/*
 config/**/generated/*
+config/**/generated2/*
+config/**/generated3/*
+config/**/generated22/*
+config/**/generated4/*
+slurm/logs/*
