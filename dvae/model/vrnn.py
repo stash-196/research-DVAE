@@ -34,6 +34,7 @@ def build_VRNN(cfg, device='cpu'):
     # RNN
     dim_RNN = cfg.getint('Network', 'dim_RNN')
     num_RNN = cfg.getint('Network', 'num_RNN')
+    type_RNN = cfg.get('Network', 'type_RNN')
 
     # Beta-vae
     beta = cfg.getfloat('Training', 'beta')
@@ -43,7 +44,7 @@ def build_VRNN(cfg, device='cpu'):
                  dense_x=dense_x, dense_z=dense_z,
                  dense_hx_z=dense_hx_z, dense_hz_x=dense_hz_x, 
                  dense_h_z=dense_h_z,
-                 dim_RNN=dim_RNN, num_RNN=num_RNN, type_RNN='RNN',
+                 dim_RNN=dim_RNN, num_RNN=num_RNN, type_RNN=type_RNN,
                  dropout_p= dropout_p, beta=beta, device=device).to(device)
 
     return model
@@ -52,10 +53,10 @@ def build_VRNN(cfg, device='cpu'):
     
 class VRNN(nn.Module):
 
-    def __init__(self, x_dim, z_dim=16, activation = 'tanh',
-                 dense_x=[128], dense_z=[128],
-                 dense_hx_z=[128], dense_hz_x=[128], dense_h_z=[128],
-                 dim_RNN=128, num_RNN=1, type_RNN='RNN',
+    def __init__(self, x_dim, z_dim, activation,
+                 dense_x, dense_z,
+                 dense_hx_z, dense_hz_x, dense_h_z,
+                 dim_RNN, num_RNN=1, type_RNN='RNN',
                  dropout_p = 0, beta=1, device='cpu'):
 
         super().__init__()
@@ -237,7 +238,7 @@ class VRNN(nn.Module):
         return h_tp1, c_tp1
 
 
-    def forward(self, x):
+    def forward(self, x, autonomous=False):
 
         # need input:  (seq_len, batch_size, x_dim)
         seq_len, batch_size, _ = x.shape
@@ -246,6 +247,7 @@ class VRNN(nn.Module):
         self.z_mean = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
         self.z_logvar = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
         self.y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
+        self.x_features = torch.zeros((seq_len, batch_size, self.dense_x[-1])).to(self.device)
         self.z = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
         self.h = torch.zeros((seq_len, batch_size, self.dim_RNN)).to(self.device)
         z_t = torch.zeros(batch_size, self.z_dim).to(self.device)
@@ -254,9 +256,18 @@ class VRNN(nn.Module):
             c_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
 
         # main part
-        feature_x = self.feature_extractor_x(x)
+        self.feature_x = self.feature_extractor_x(x)
+
         for t in range(seq_len):
-            feature_xt = feature_x[t,:,:].unsqueeze(0)
+            if autonomous:
+                if t == 0:
+                    feature_xt = self.feature_x[0,:,:].unsqueeze(0)
+                else:
+                    feature_xt = self.feature_extractor_x(y_t)
+            else:
+                feature_xt = self.feature_x[t,:,:].unsqueeze(0)
+
+
             h_t_last = h_t.view(self.num_RNN, 1, batch_size, self.dim_RNN)[-1,:,:,:]
             mean_zt, logvar_zt = self.inference(feature_xt, h_t_last)
             z_t = self.reparameterization(mean_zt, logvar_zt)
@@ -274,7 +285,7 @@ class VRNN(nn.Module):
             elif self.type_RNN == 'RNN':
                 h_t, _ = self.recurrence(feature_xt, feature_zt, h_t)
 
-        self.z_mean_p, self.z_logvar_p  = self.generation_z(self.h) # prior distribution. I think this should be in the generation process above
+        self.z_mean_p, self.z_logvar_p  = self.generation_z(self.h)
         
         return self.y
 
