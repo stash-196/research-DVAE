@@ -180,13 +180,15 @@ if __name__ == '__main__':
     else:
         raise ValueError("Unsupported dataset_name in configuration file.")
 
+    overlap = cfg['DataFrame'].getboolean('overlap')
+
     test_num = len(val_dataloader.dataset)
     print('Test samples: {}'.format(test_num))
 
     # Check if "alpha" exists in the config.ini under the [Network] section
     alphas_per_unit = None
     if 'Network' in cfg and 'alphas' in cfg['Network']:
-        alphas_per_unit = dvae.alphas_per_unit
+        alphas_per_unit = dvae.alphas_per_unit()
 
     RMSE = 0
     MSE = 0
@@ -209,8 +211,13 @@ if __name__ == '__main__':
             MY_MSE += MY_MSE.item() / (seq_len * batch_size)
 
             if i == 0:
-                true_series = batch_data[:, 0, :].reshape(-1).cpu().numpy()
-                recon_series = recon_batch_data[:, 0, :].reshape(-1).cpu().numpy()
+                if overlap:
+                    true_series_overlapping = batch_data[:, 0, :].reshape(-1).cpu().numpy()
+                    
+                    recon_series = recon_batch_data[:, 0, :].reshape(-1).cpu().numpy()
+                else:        
+                    true_series = batch_data[:, 0, :].reshape(-1).cpu().numpy()
+                    recon_series = recon_batch_data[:, 0, :].reshape(-1).cpu().numpy()
                 # Plot the spectral analysis
                 spectral_analysis(true_series, recon_series, os.path.dirname(params['saved_dict']))
 
