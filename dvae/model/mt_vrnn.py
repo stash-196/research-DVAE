@@ -293,17 +293,16 @@ class MT_VRNN_pp(nn.Module):
             c_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
 
         # main part
-        if autonomous:
-            feature_xt = self.feature_extractor_x(x[0, :, :]).unsqueeze(0)
-        else:
-            feature_x = self.feature_extractor_x(x)
+        self.feature_x = self.feature_extractor_x(x)
 
         for t in range(seq_len):
             if autonomous:
-                if t != 0:
-                    feature_xt = self.feature_extractor_x(self.y[t-1,:,:]).unsqueeze(0)
+                if t == 0:
+                    feature_xt = self.feature_x[0,:,:].unsqueeze(0)
+                else:
+                    feature_xt = self.feature_extractor_x(y_t)
             else:
-                feature_xt = feature_x[t,:,:].unsqueeze(0)
+                feature_xt = self.feature_x[t,:,:].unsqueeze(0)
 
             h_t_last = h_t.view(self.num_RNN, 1, batch_size, self.dim_RNN)[-1,:,:,:]
             mean_zt, logvar_zt = self.inference(feature_xt, h_t_last)
@@ -313,17 +312,17 @@ class MT_VRNN_pp(nn.Module):
             y_t = self.generation_x(feature_zt, h_t_last)
             self.z_mean[t,:,:] = mean_zt
             self.z_logvar[t,:,:] = logvar_zt
-            self.z[t,:,:] = torch.squeeze(z_t)
-            self.y[t,:,:] = torch.squeeze(y_t)
-            self.x_features[t,:,:] = torch.squeeze(feature_xt)
-            self.h[t,:,:] = torch.squeeze(h_t_last)
+            self.z[t,:,:] = torch.squeeze(z_t, 0)
+            self.y[t,:,:] = torch.squeeze(y_t, 0)
+            self.h[t,:,:] = torch.squeeze(h_t_last, 0)
+
 
             if self.type_RNN == 'LSTM':
                 h_t, c_t = self.recurrence(feature_xt, feature_zt, h_t, c_t) # recurrence for t+1 
             elif self.type_RNN == 'RNN':
                 h_t, _ = self.recurrence(feature_xt, feature_zt, h_t, None)
 
-        self.z_mean_p, self.z_logvar_p  = self.generation_z(self.h) # prior distribution. I think this should be in the generation process above
+        self.z_mean_p, self.z_logvar_p  = self.generation_z(self.h)
         
         return self.y
 

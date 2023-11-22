@@ -270,27 +270,27 @@ class VRNN_pp(nn.Module):
                 if t != 0:
                     feature_xt = self.feature_extractor_x(self.y[t-1,:,:]).unsqueeze(0)
             else:
-                feature_xt = feature_x[t,:,:].unsqueeze(0)
+                feature_xt = feature_x[t-1,:,:].unsqueeze(0)
 
             h_t_last = h_t.view(self.num_RNN, 1, batch_size, self.dim_RNN)[-1,:,:,:]
-            mean_zt, logvar_zt = self.inference(feature_xt, h_t_last)
+            mean_zt, logvar_zt = self.generation_z(h_t_last)
             z_t = self.reparameterization(mean_zt, logvar_zt)
             # z_t = mean_zt
             feature_zt = self.feature_extractor_z(z_t)
             y_t = self.generation_x(feature_zt, h_t_last)
             self.z_mean[t,:,:] = mean_zt
             self.z_logvar[t,:,:] = logvar_zt
-            self.z[t,:,:] = torch.squeeze(z_t)
-            self.y[t,:,:] = torch.squeeze(y_t)
+            self.z[t,:,:] = torch.squeeze(z_t, 0)
+            self.y[t,:,:] = torch.squeeze(y_t, 0)
             self.x_features[t,:,:] = torch.squeeze(feature_xt)
-            self.h[t,:,:] = torch.squeeze(h_t_last)
+            self.h[t,:,:] = torch.squeeze(h_t_last, 0)
 
             if self.type_RNN == 'LSTM':
                 h_t, c_t = self.recurrence(feature_xt, feature_zt, h_t, c_t) # recurrence for t+1 
             elif self.type_RNN == 'RNN':
                 h_t, _ = self.recurrence(feature_xt, feature_zt, h_t)
         
-        self.z_mean_p, self.z_logvar_p  = self.generation_z(self.h) # prior distribution. I think this should be in the generation process above
+        self.z_mean_p, self.z_logvar_p  = self.inference(feature_xt, self.h) 
         
         return self.y
 

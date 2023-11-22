@@ -247,7 +247,6 @@ class VRNN(nn.Module):
         self.z_mean = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
         self.z_logvar = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
         self.y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
-        self.x_features = torch.zeros((seq_len, batch_size, self.dense_x[-1])).to(self.device)
         self.z = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
         self.h = torch.zeros((seq_len, batch_size, self.dim_RNN)).to(self.device)
         z_t = torch.zeros(batch_size, self.z_dim).to(self.device)
@@ -276,9 +275,9 @@ class VRNN(nn.Module):
             y_t = self.generation_x(feature_zt, h_t_last)
             self.z_mean[t,:,:] = mean_zt
             self.z_logvar[t,:,:] = logvar_zt
-            self.z[t,:,:] = torch.squeeze(z_t)
-            self.y[t,:,:] = torch.squeeze(y_t)
-            self.h[t,:,:] = torch.squeeze(h_t_last)
+            self.z[t,:,:] = torch.squeeze(z_t, 0)
+            self.y[t,:,:] = torch.squeeze(y_t, 0)
+            self.h[t,:,:] = torch.squeeze(h_t_last, 0)
 
             if self.type_RNN == 'LSTM':
                 h_t, c_t = self.recurrence(feature_xt, feature_zt, h_t, c_t) # recurrence for t+1 

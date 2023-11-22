@@ -206,7 +206,7 @@ class LearningAlgorithm():
             start_epoch = -1
             if self.optimize_alphas:
                 alphas_init = [float(i) for i in self.cfg.get('Network', 'alphas').split(',')]
-                sigmas_hitory = np.zeros((len(alphas_init), epochs))
+                sigmas_history = np.zeros((len(alphas_init), epochs))
         else:
             cp_file = os.path.join(save_dir, '{}_checkpoint.pt'.format(self.model_name))
             checkpoint = torch.load(cp_file)
@@ -228,7 +228,7 @@ class LearningAlgorithm():
             best_optim_dict = optimizer.state_dict()
             if self.optimize_alphas:
                 alphas_init = [float(i) for i in self.cfg.get('Network', 'alphas').split(',')]
-                sigmas_hitory = np.zeros((len(alphas_init), epochs))
+                sigmas_history = np.zeros((len(alphas_init), epochs))
 
         # Train with mini-batch SGD
         for epoch in range(start_epoch+1, epochs):
@@ -292,7 +292,7 @@ class LearningAlgorithm():
                 train_recon[epoch] += loss_recon_avg.item() * bs
                 train_kl[epoch] += loss_kl_avg.item() * bs
                 if self.optimize_alphas:
-                    sigmas_hitory[:, epoch] = self.model.sigmas.detach().cpu().numpy()
+                    sigmas_history[:, epoch] = self.model.sigmas.detach().cpu().numpy()
 
 
                 
@@ -381,8 +381,11 @@ class LearningAlgorithm():
                             'loss_log': loss_log
                         }, save_file)
                 logger.info('Epoch: {} ===> checkpoint stored with current best epoch: {}'.format(epoch, cur_best_epoch))
+                if self.optimize_alphas:
+                    alphas = 1 / (1 + np.exp(-sigmas_history[:, epoch]))
+                    logger.info('alphas: {}'.format([f'{alpha:.5f}' for alpha in alphas]))
 
-        
+
         # Save the final weights of network with the best validation loss
         save_file = os.path.join(save_dir, self.model_name + '_final_epoch' + str(cur_best_epoch) + '.pt')
         torch.save(best_state_dict, save_file)
@@ -395,11 +398,11 @@ class LearningAlgorithm():
         val_recon = val_recon[:epoch+1]
         val_kl = val_kl[:epoch+1]
         if self.optimize_alphas:
-            sigmas_hitory = sigmas_hitory[:, :epoch+1]            
+            sigmas_history = sigmas_history[:, :epoch+1]            
         loss_file = os.path.join(save_dir, 'loss_model.pckl')
         with open(loss_file, 'wb') as f:
             if self.optimize_alphas:
-                pickle.dump([train_loss, val_loss, train_recon, train_kl, val_recon, val_kl, sigmas_hitory], f)
+                pickle.dump([train_loss, val_loss, train_recon, train_kl, val_recon, val_kl, sigmas_history], f)
             else:
                 pickle.dump([train_loss, val_loss, train_recon, train_kl, val_recon, val_kl], f)
 
@@ -445,8 +448,8 @@ class LearningAlgorithm():
             plt.clf()
             fig = plt.figure(figsize=(8,6))
             plt.rcParams['font.size'] = 12
-            for i in range(sigmas_hitory.shape[0]):
-                plt.plot(sigmas_hitory[i, :], label='Sigma {}'.format(i+1))
+            for i in range(sigmas_history.shape[0]):
+                plt.plot(sigmas_history[i, :], label='Sigma {}'.format(i+1))
             plt.legend(fontsize=16, title='Sigma values', title_fontsize=20)
             plt.xlabel('epochs', fontdict={'size':16})
             plt.ylabel('sigma', fontdict={'size':16})
@@ -457,8 +460,8 @@ class LearningAlgorithm():
             plt.clf()
             fig = plt.figure(figsize=(8,6))
             plt.rcParams['font.size'] = 12
-            for i in range(sigmas_hitory.shape[0]):
-                alphas = 1 / (1 + np.exp(-sigmas_hitory[i, :]))
+            for i in range(sigmas_history.shape[0]):
+                alphas = 1 / (1 + np.exp(-sigmas_history[i, :]))
                 plt.plot(alphas, label='Alpha {}'.format(i+1))
             plt.legend(fontsize=16, title='Alpha values', title_fontsize=20)
             plt.xlabel('epochs', fontdict={'size':16})

@@ -35,7 +35,7 @@ def plot_sinusoids_plotly(time_series, time_step):
 #%%
 # Parameters for two sinusoids
 amplitudes = [1, 1, 1]
-frequencies = [1/60/5, 1/60/60, 1/60/60/24]  # Frequency in Hz
+frequencies = [1/60/60, 1/60/60/5, 1/60/60/24]  # Frequency in Hz
 phases = [0, np.pi/4, np.pi/2]   # Starting phases
 time_step = 4        # Time step for the generation
 n_steps = 15*60*24*5          # Number of time steps to generate
@@ -50,6 +50,6 @@ def save_pickle(data, path):
     with open(path, 'wb') as f:
         pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-save_pickle(s.values, 'sinusoids_3d.pkl')
+save_pickle(s.values, 'dataset_long.pkl')
 
 # %%
