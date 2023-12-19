@@ -24,15 +24,22 @@ def build_dataloader(cfg, device):
     val_indices = cfg.getfloat('DataFrame', 'val_indices')
     observation_process = cfg.get('DataFrame', 'observation_process')
     overlap = cfg.getboolean('DataFrame', 'overlap')
+    
+    data_cfgs = {}
     # define long as a boolean if field exists
     if cfg.has_option('DataFrame', 'long'):
         long = cfg.getboolean('DataFrame', 'long')
     else:
         long = False
+
+    if cfg.has_option('DataFrame', 's_dim'):
+        data_cfgs['s_dim'] = cfg.getint('DataFrame', 's_dim')
+    else:
+        data_cfgs['s_dim'] = False
   
     # Load dataset
-    train_dataset = Sinusoid(path_to_data=data_dir, split=0, seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate, skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap, long=long)
-    val_dataset = Sinusoid(path_to_data=data_dir, split=2, seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate, skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap, long=long)
+    train_dataset = Sinusoid(path_to_data=data_dir, split=0, seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate, skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap, long=long, data_cfgs=data_cfgs)
+    val_dataset = Sinusoid(path_to_data=data_dir, split=2, seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate, skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap, long=long, data_cfgs=data_cfgs)
 
 
     train_num = train_dataset.__len__()    
@@ -47,7 +54,7 @@ def build_dataloader(cfg, device):
 
 # define a class for Sinusoid dataset
 class Sinusoid(Dataset):
-    def __init__(self, path_to_data, split, seq_len, x_dim, sample_rate, skip_rate, val_indices, observation_process, device, overlap, long):
+    def __init__(self, path_to_data, split, seq_len, x_dim, sample_rate, skip_rate, val_indices, observation_process, device, overlap, long, data_cfgs):
         """
         Initializes the Sinusoid dataset object.
         :param path_to_data: path to the data folder
@@ -72,10 +79,13 @@ class Sinusoid(Dataset):
         self.observation_process = observation_process
         self.overlap = overlap
         self.long = long
+        self.data_cfgs = data_cfgs
         
         # Load and process data
         if self.long:
             filename = f'{self.path_to_data}/dataset_long.pkl'
+        elif self.data_cfgs['s_dim'] == 1:
+            filename = f'{self.path_to_data}/dataset_1d.pkl'
         else:
             filename = f'{self.path_to_data}/dataset.pkl'
         with open(filename, 'rb') as f:
@@ -119,6 +129,8 @@ class Sinusoid(Dataset):
         elif self.observation_process == '3dto1d_w_noise':
             v = np.ones(sequence.shape[-1])
             sequence = sequence @ v + np.random.normal(0, 0.3, sequence.shape[0])  # Add Gaussian noise
+        elif self.observation_process == '1dto1d':
+            sequence = np.squeeze(sequence)
         return sequence
 
     @staticmethod

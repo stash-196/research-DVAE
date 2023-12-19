@@ -27,6 +27,8 @@ from dvae.learning_algo_ss import LearningAlgorithm_ss
 from dvae.dataset import sinusoid_dataset, lorenz63_dataset
 from dvae.utils import EvalMetrics, loss_MSE
 from torch.nn.functional import mse_loss
+import plotly.graph_objects as go
+import plotly.express as px
 
 
 class Options:
@@ -70,6 +72,26 @@ def visualize_sequences(true_data, recon_data, save_dir, n_gen_portion, name='')
     fig_file = os.path.join(save_dir, f'vis_pred_true_series{name}.png')
     plt.savefig(fig_file)
     plt.close()
+
+# def visualize_sequences(true_data, recon_data, save_dir, n_gen_portion, name=''):
+#     recon_length = len(recon_data) - int(len(recon_data) * n_gen_portion)
+#     time_steps = list(range(len(true_data)))
+
+#     fig = go.Figure()
+
+#     # True Sequence
+#     fig.add_trace(go.Scatter(x=time_steps, y=true_data, mode='lines', name='True Sequence'))
+
+#     # Reconstructed Sequence
+#     fig.add_trace(go.Scatter(x=time_steps[:recon_length], y=recon_data[:recon_length], mode='lines', name='Reconstructed Sequence'))
+
+#     # Self-Generated Sequence
+#     fig.add_trace(go.Scatter(x=time_steps[recon_length:], y=recon_data[recon_length:], mode='lines', name='Self-Generated Sequence'))
+
+#     fig.update_layout(title='Comparison of True and Predicted Sequences', xaxis_title='Time steps', yaxis_title='Value')
+
+#     fig.write_image(os.path.join(save_dir, f'vis_pred_true_series{name}.svg'), format='svg')
+
 
 def spectral_analysis(true_data, recon_data, save_dir, sampling_rate=0.25):  # 1 sample every 4 seconds = 0.25 Hz
     true_fft = np.fft.fft(true_data)
@@ -236,7 +258,7 @@ if __name__ == '__main__':
                     visualize_variable_evolution(dvae.z_logvar_p, os.path.dirname(params['saved_dict']), variable_name='z_logvar_prior')
 
 
-                n_seq = 20
+                n_seq = 1000
                 n_gen_portion = 0.5
                 recon_len = n_seq - int(n_seq * n_gen_portion)
                 # reconstruct the first n_seq sequences
