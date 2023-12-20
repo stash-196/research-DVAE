@@ -360,9 +360,17 @@ class LearningAlgorithm():
             logger.info('Train => tot: {:.2f} recon {:.2f} KL {:.2f} Val => tot: {:.2f} recon {:.2f} KL {:.2f}'.format(train_loss[epoch], train_recon[epoch], train_kl[epoch], val_loss[epoch], val_recon[epoch], val_kl[epoch]))
 
             # Stop traning if early-stop triggers
-            if cpt_patience == early_stop_patience and kl_warm >= 1.0:
-                logger.info('Early stop patience achieved')
-                break
+            if cpt_patience == early_stop_patience:
+                if kl_warm >= 1.0:
+                    logger.info('Early stop patience achieved')
+                    break
+                else:
+                    # increase kl_warm
+                    kl_warm += (epoch // 10) * 0.2 
+                    logger.info('KL warm-up, anneal coeff: {}'.format(kl_warm))
+            
+            
+            # and kl_warm >= 1.0:
 
             # Save model parameters regularly
             if epoch % save_frequency == 0:

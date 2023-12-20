@@ -258,8 +258,10 @@ if __name__ == '__main__':
                     visualize_variable_evolution(dvae.z_logvar_p, os.path.dirname(params['saved_dict']), variable_name='z_logvar_prior')
 
 
-                n_seq = 1000
+                n_seq = int(1000/x_dim)
+                # portion of sequences to reconstruct
                 n_gen_portion = 0.5
+                # length of the reconstruction
                 recon_len = n_seq - int(n_seq * n_gen_portion)
                 # reconstruct the first n_seq sequences
                 recon_batch_data = dvae(batch_data[0:recon_len, :, :], autonomous=False)
