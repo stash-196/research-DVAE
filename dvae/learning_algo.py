@@ -389,6 +389,44 @@ class LearningAlgorithm():
                             'loss_log': loss_log
                         }, save_file)
                 logger.info('Epoch: {} ===> checkpoint stored with current best epoch: {}'.format(epoch, cur_best_epoch))
+
+                        # Save the loss figure
+                plt.clf()
+                fig = plt.figure(figsize=(8,6))
+                plt.rcParams['font.size'] = 12
+                plt.plot(train_loss, label='training loss')
+                plt.plot(val_loss, label='validation loss')
+                plt.legend(fontsize=16, title=self.model_name, title_fontsize=20)
+                plt.xlabel('epochs', fontdict={'size':16})
+                plt.ylabel('loss', fontdict={'size':16})
+                fig_file = os.path.join(save_dir, 'loss_{}.png'.format(tag))
+                plt.savefig(fig_file)
+                plt.close(fig)
+
+                plt.clf()
+                fig = plt.figure(figsize=(8,6))
+                plt.rcParams['font.size'] = 12
+                plt.plot(train_recon, label='Training')
+                plt.plot(val_recon, label='Validation')
+                plt.legend(fontsize=16, title='{}: Recon. Loss'.format(self.model_name), title_fontsize=20)
+                plt.xlabel('epochs', fontdict={'size':16})
+                plt.ylabel('loss', fontdict={'size':16})
+                fig_file = os.path.join(save_dir, 'loss_recon_{}.png'.format(tag))
+                plt.savefig(fig_file) 
+                plt.close(fig)
+
+                plt.clf()
+                fig = plt.figure(figsize=(8,6))
+                plt.rcParams['font.size'] = 12
+                plt.plot(train_kl, label='Training')
+                plt.plot(val_kl, label='Validation')
+                plt.legend(fontsize=16, title='{}: KL Divergence'.format(self.model_name), title_fontsize=20)
+                plt.xlabel('epochs', fontdict={'size':16})
+                plt.ylabel('loss', fontdict={'size':16})
+                fig_file = os.path.join(save_dir, 'loss_KLD_{}.png'.format(tag))
+                plt.savefig(fig_file)
+                plt.close(fig)
+
                 if self.optimize_alphas:
                     alphas = 1 / (1 + np.exp(-sigmas_history[:, epoch]))
                     logger.info('alphas: {}'.format([f'{alpha:.5f}' for alpha in alphas]))
@@ -415,42 +453,7 @@ class LearningAlgorithm():
                 pickle.dump([train_loss, val_loss, train_recon, train_kl, val_recon, val_kl], f)
 
 
-        # Save the loss figure
-        plt.clf()
-        fig = plt.figure(figsize=(8,6))
-        plt.rcParams['font.size'] = 12
-        plt.plot(train_loss, label='training loss')
-        plt.plot(val_loss, label='validation loss')
-        plt.legend(fontsize=16, title=self.model_name, title_fontsize=20)
-        plt.xlabel('epochs', fontdict={'size':16})
-        plt.ylabel('loss', fontdict={'size':16})
-        fig_file = os.path.join(save_dir, 'loss_{}.png'.format(tag))
-        plt.savefig(fig_file)
-        plt.close(fig)
 
-        plt.clf()
-        fig = plt.figure(figsize=(8,6))
-        plt.rcParams['font.size'] = 12
-        plt.plot(train_recon, label='Training')
-        plt.plot(val_recon, label='Validation')
-        plt.legend(fontsize=16, title='{}: Recon. Loss'.format(self.model_name), title_fontsize=20)
-        plt.xlabel('epochs', fontdict={'size':16})
-        plt.ylabel('loss', fontdict={'size':16})
-        fig_file = os.path.join(save_dir, 'loss_recon_{}.png'.format(tag))
-        plt.savefig(fig_file) 
-        plt.close(fig)
-
-        plt.clf()
-        fig = plt.figure(figsize=(8,6))
-        plt.rcParams['font.size'] = 12
-        plt.plot(train_kl, label='Training')
-        plt.plot(val_kl, label='Validation')
-        plt.legend(fontsize=16, title='{}: KL Divergence'.format(self.model_name), title_fontsize=20)
-        plt.xlabel('epochs', fontdict={'size':16})
-        plt.ylabel('loss', fontdict={'size':16})
-        fig_file = os.path.join(save_dir, 'loss_KLD_{}.png'.format(tag))
-        plt.savefig(fig_file)
-        plt.close(fig)
 
         if self.optimize_alphas:
             plt.clf()
