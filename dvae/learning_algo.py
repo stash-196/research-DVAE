@@ -394,8 +394,8 @@ class LearningAlgorithm():
                 plt.clf()
                 fig = plt.figure(figsize=(8,6))
                 plt.rcParams['font.size'] = 12
-                plt.plot(train_loss, label='training loss')
-                plt.plot(val_loss, label='validation loss')
+                plt.plot(train_loss[:epoch+1], label='training loss')
+                plt.plot(val_loss[:epoch+1], label='validation loss')
                 plt.legend(fontsize=16, title=self.model_name, title_fontsize=20)
                 plt.xlabel('epochs', fontdict={'size':16})
                 plt.ylabel('loss', fontdict={'size':16})
@@ -406,8 +406,8 @@ class LearningAlgorithm():
                 plt.clf()
                 fig = plt.figure(figsize=(8,6))
                 plt.rcParams['font.size'] = 12
-                plt.plot(train_recon, label='Training')
-                plt.plot(val_recon, label='Validation')
+                plt.plot(train_recon[:epoch+1], label='Training')
+                plt.plot(val_recon[:epoch+1], label='Validation')
                 plt.legend(fontsize=16, title='{}: Recon. Loss'.format(self.model_name), title_fontsize=20)
                 plt.xlabel('epochs', fontdict={'size':16})
                 plt.ylabel('loss', fontdict={'size':16})
@@ -418,8 +418,8 @@ class LearningAlgorithm():
                 plt.clf()
                 fig = plt.figure(figsize=(8,6))
                 plt.rcParams['font.size'] = 12
-                plt.plot(train_kl, label='Training')
-                plt.plot(val_kl, label='Validation')
+                plt.plot(train_kl[:epoch+1], label='Training')
+                plt.plot(val_kl[:epoch+1], label='Validation')
                 plt.legend(fontsize=16, title='{}: KL Divergence'.format(self.model_name), title_fontsize=20)
                 plt.xlabel('epochs', fontdict={'size':16})
                 plt.ylabel('loss', fontdict={'size':16})
