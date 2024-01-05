@@ -17,9 +17,10 @@ import pickle
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-from .utils import myconf, get_logger, loss_ISD, loss_KLD, loss_MPJPE, loss_MSE
+from .utils import myconf, get_logger, loss_ISD, loss_KLD, loss_MPJPE, loss_MSE, create_mode_selector, visualize_model_parameters, visualize_combined_parameters
 from .dataset import h36m_dataset, speech_dataset, lorenz63_dataset, sinusoid_dataset
 from .model import build_VAE, build_DKF, build_STORN, build_VRNN, build_SRNN, build_RVAE, build_DSAE, build_VRNN_pp, build_RNN, build_MT_RNN, build_MT_VRNN_pp
+import subprocess
 
 
 class LearningAlgorithm():
@@ -41,6 +42,7 @@ class LearningAlgorithm():
         self.cfg.read(self.config_file)
         self.model_name = self.cfg.get('Network', 'name')
         self.dataset_name = self.cfg.get('DataFrame', 'dataset_name')
+        self.sequence_len = self.cfg.getint('DataFrame', 'sequence_len')
 
         # Get host name and date
         self.hostname = socket.gethostname()
@@ -236,29 +238,33 @@ class LearningAlgorithm():
             start_time = datetime.datetime.now()
 
             # KL warm-up
-            if epoch % 10 == 0 and kl_warm < 1:
-                kl_warm = (epoch // 10) * 0.2 
+            kl_warm_epochs = []
+            if epoch % 3 == 0 and kl_warm < 1:
+                kl_warm += 0.2 
+                kl_warm_epochs += [epoch]
                 logger.info('KL warm-up, anneal coeff: {}'.format(kl_warm))
 
 
             # Batch training
             for _, batch_data in enumerate(train_dataloader):
                 batch_data = batch_data.to(self.device)
+
+                model_mode_selector = create_mode_selector(self.sequence_len, mode='scheduled_sampling', autonomous_ratio=kl_warm*0.8)
                 
                 if self.dataset_name == 'WSJ0':
                     # (batch_size, x_dim, seq_len) -> (seq_len, batch_size, x_dim)
                     batch_data = batch_data.permute(2, 0, 1)
-                    recon_batch_data = torch.exp(self.model(batch_data)) # output log-variance
+                    recon_batch_data = torch.exp(self.model(batch_data, mode_selector=model_mode_selector)) # output log-variance
                     loss_recon = loss_ISD(batch_data, recon_batch_data)
                 elif self.dataset_name == 'H36M':
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
                     batch_data = batch_data.permute(1, 0, 2) / 1000 # normalize to meters
-                    recon_batch_data = self.model(batch_data)
+                    recon_batch_data = self.model(batch_data, mode_selector=model_mode_selector)
                     loss_recon = loss_MPJPE(batch_data*1000, recon_batch_data*1000)
                 elif self.dataset_name == 'Lorenz63' or self.dataset_name == 'Sinusoid':
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
                     batch_data = batch_data.permute(1, 0, 2)
-                    recon_batch_data = self.model(batch_data)
+                    recon_batch_data = self.model(batch_data, mode_selector=model_mode_selector)
                     loss_recon = loss_MSE(batch_data, recon_batch_data)
                 else:
                     logger.error('Unknown datset')
@@ -301,20 +307,22 @@ class LearningAlgorithm():
 
                 batch_data = batch_data.to(self.device)
 
+                model_mode_selector = create_mode_selector(self.sequence_len, mode='gradual', autonomous_ratio=kl_warm*0.8)                
+
                 if self.dataset_name == 'WSJ0':
                     # (batch_size, x_dim, seq_len) -> (seq_len, batch_size, x_dim)
                     batch_data = batch_data.permute(2, 0, 1)
-                    recon_batch_data = torch.exp(self.model(batch_data)) # output log-variance
+                    recon_batch_data = torch.exp(self.model(batch_data, mode_selector=model_mode_selector)) # output log-variance
                     loss_recon = loss_ISD(batch_data, recon_batch_data)
                 elif self.dataset_name == 'H36M':
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
                     batch_data = batch_data.permute(1, 0, 2) / 1000 # normalize to meters
-                    recon_batch_data = self.model(batch_data)
+                    recon_batch_data = self.model(batch_data, mode_selector=model_mode_selector)
                     loss_recon = loss_MPJPE(batch_data*1000, recon_batch_data*1000)
                 elif self.dataset_name == 'Lorenz63' or self.dataset_name == 'Sinusoid':
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
                     batch_data = batch_data.permute(1, 0, 2)
-                    recon_batch_data = self.model(batch_data)
+                    recon_batch_data = self.model(batch_data, mode_selector=model_mode_selector)
                     loss_recon = loss_MSE(batch_data, recon_batch_data)
                 seq_len, bs, _ = self.model.y.shape
                 loss_recon_avg = loss_recon / (seq_len * bs)
@@ -366,7 +374,8 @@ class LearningAlgorithm():
                     break
                 else:
                     # increase kl_warm
-                    kl_warm += (epoch // 10) * 0.2 
+                    kl_warm += 0.2 
+                    kl_warm_epochs += [epoch]
                     logger.info('KL warm-up, anneal coeff: {}'.format(kl_warm))
             
             
@@ -396,6 +405,9 @@ class LearningAlgorithm():
                 plt.rcParams['font.size'] = 12
                 plt.plot(train_loss[:epoch+1], label='training loss')
                 plt.plot(val_loss[:epoch+1], label='validation loss')
+                # add vertical line for each epoch where KL warm-up is increased
+                for kl_warm_epoch in kl_warm_epochs:
+                    plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
                 plt.legend(fontsize=16, title=self.model_name, title_fontsize=20)
                 plt.xlabel('epochs', fontdict={'size':16})
                 plt.ylabel('loss', fontdict={'size':16})
@@ -408,6 +420,8 @@ class LearningAlgorithm():
                 plt.rcParams['font.size'] = 12
                 plt.plot(train_recon[:epoch+1], label='Training')
                 plt.plot(val_recon[:epoch+1], label='Validation')
+                for kl_warm_epoch in kl_warm_epochs:
+                    plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
                 plt.legend(fontsize=16, title='{}: Recon. Loss'.format(self.model_name), title_fontsize=20)
                 plt.xlabel('epochs', fontdict={'size':16})
                 plt.ylabel('loss', fontdict={'size':16})
@@ -420,12 +434,16 @@ class LearningAlgorithm():
                 plt.rcParams['font.size'] = 12
                 plt.plot(train_kl[:epoch+1], label='Training')
                 plt.plot(val_kl[:epoch+1], label='Validation')
+                for kl_warm_epoch in kl_warm_epochs:
+                    plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
                 plt.legend(fontsize=16, title='{}: KL Divergence'.format(self.model_name), title_fontsize=20)
                 plt.xlabel('epochs', fontdict={'size':16})
                 plt.ylabel('loss', fontdict={'size':16})
                 fig_file = os.path.join(save_dir, 'loss_KLD_{}.png'.format(tag))
                 plt.savefig(fig_file)
                 plt.close(fig)
+
+                visualize_combined_parameters(self.model, explain='epoch_{}'.format(epoch), save_path=save_dir)
 
                 if self.optimize_alphas:
                     alphas = 1 / (1 + np.exp(-sigmas_history[:, epoch]))
@@ -482,6 +500,9 @@ class LearningAlgorithm():
             plt.savefig(fig_file)
             plt.close(fig)
 
+        # run evaluation script
+        subprocess.run(["python", "eval_sinusoid.py", "--saved_dict", save_file])
+        
 
         
 # sigmoid function for arrays

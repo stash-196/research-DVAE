@@ -131,6 +131,10 @@ class Sinusoid(Dataset):
             sequence = sequence @ v + np.random.normal(0, 0.3, sequence.shape[0])  # Add Gaussian noise
         elif self.observation_process == '1dto1d':
             sequence = np.squeeze(sequence)
+        elif self.observation_process == '1dto1d_w_noise':
+            sequence = np.squeeze(sequence) + np.random.normal(0, 0.3, sequence.shape[0])
+        else:
+            raise ValueError('Observation process not recognized.')
         return sequence
 
     @staticmethod

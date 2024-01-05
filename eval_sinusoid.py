@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 from dvae.learning_algo import LearningAlgorithm
 from dvae.learning_algo_ss import LearningAlgorithm_ss
 from dvae.dataset import sinusoid_dataset, lorenz63_dataset
-from dvae.utils import EvalMetrics, loss_MSE
+from dvae.utils import EvalMetrics, loss_MSE, create_mode_selector
 from torch.nn.functional import mse_loss
 import plotly.graph_objects as go
 import plotly.express as px
@@ -52,17 +52,16 @@ class Options:
         
         return params
 
-def visualize_sequences(true_data, recon_data, save_dir, n_gen_portion, name=''):
+def visualize_sequences(true_data, recon_data, generate_data, save_dir, name=''):
     plt.figure(figsize=(10, 6))
+    # Plotting the true sequence in blue
     plt.plot(true_data, label='True Sequence', color='blue')
 
-    recon_length = len(recon_data) - int(len(recon_data) * n_gen_portion)
-
     # Plotting the reconstructed part in red
-    plt.plot(recon_data[:recon_length], label='Reconstructed Sequence', color='red')
+    plt.plot(recon_data, label='Reconstructed Sequence', color='red')
     
     # Plotting the self-generated part in green
-    plt.plot(range(recon_length, len(recon_data)), recon_data[recon_length:], label='Self-Generated Sequence', color='green')
+    plt.plot(range(len(recon_data), len(recon_data)+len(generate_data)), generate_data, label='Self-Generated Sequence', color='green')
     
     plt.legend()
     plt.title('Comparison of True and Predicted Sequences')
@@ -261,19 +260,20 @@ if __name__ == '__main__':
                 n_seq = int(1000/x_dim)
                 # portion of sequences to reconstruct
                 n_gen_portion = 0.5
-                # length of the reconstruction
                 recon_len = n_seq - int(n_seq * n_gen_portion)
+
+                mode_selector = create_mode_selector(n_seq, 'half_half')
+
                 # reconstruct the first n_seq sequences
-                recon_batch_data = dvae(batch_data[0:recon_len, :, :], autonomous=False)
+                recon_batch_data = dvae(batch_data[0:n_seq, 0:1, :], mode_selector=mode_selector).detach().clone()
+
                 # generate next n_seq sequences
-                generate_batch_data = dvae(batch_data[recon_len:n_seq, :, :], autonomous=True)
+                # generate_batch_data = dvae(batch_data[recon_len:n_seq, 0:1, :], autonomous=True, initialize_states=False)
 
                 true_series = batch_data[0:n_seq, 0, :].reshape(-1).cpu().numpy()
-                # concatinate reconstructions and generations
-                recon_series = torch.cat((recon_batch_data[:, 0, :], generate_batch_data[:, 0, :]), dim=0).reshape(-1).cpu().numpy()
 
                 # Plot the reconstruction vs true sequence
-                visualize_sequences(true_series, recon_series, os.path.dirname(params['saved_dict']), n_gen_portion)
+                visualize_sequences(true_series, recon_batch_data[0:recon_len,0,:], batch_data[recon_len:n_seq,0,:], os.path.dirname(params['saved_dict']))
 
 
 
