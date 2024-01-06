@@ -17,7 +17,7 @@ import pickle
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-from .utils import myconf, get_logger, loss_ISD, loss_KLD, loss_MPJPE, loss_MSE, create_mode_selector, visualize_model_parameters, visualize_combined_parameters
+from .utils import myconf, get_logger, loss_ISD, loss_KLD, loss_MPJPE, loss_MSE, create_mode_selector, visualize_model_parameters, visualize_combined_parameters, visualize_teacherforcing_2_autonomous
 from .dataset import h36m_dataset, speech_dataset, lorenz63_dataset, sinusoid_dataset
 from .model import build_VAE, build_DKF, build_STORN, build_VRNN, build_SRNN, build_RVAE, build_DSAE, build_VRNN_pp, build_RNN, build_MT_RNN, build_MT_VRNN_pp
 import subprocess
@@ -232,14 +232,14 @@ class LearningAlgorithm():
                 alphas_init = [float(i) for i in self.cfg.get('Network', 'alphas').split(',')]
                 sigmas_history = np.zeros((len(alphas_init), epochs))
 
+        kl_warm_epochs = []
         # Train with mini-batch SGD
         for epoch in range(start_epoch+1, epochs):
             
             start_time = datetime.datetime.now()
 
             # KL warm-up
-            kl_warm_epochs = []
-            if epoch % 3 == 0 and kl_warm < 1:
+            if epoch % early_stop_patience == 0 and kl_warm < 1 and epoch > 0:
                 kl_warm += 0.2 
                 kl_warm_epochs += [epoch]
                 logger.info('KL warm-up, anneal coeff: {}'.format(kl_warm))
@@ -399,7 +399,7 @@ class LearningAlgorithm():
                         }, save_file)
                 logger.info('Epoch: {} ===> checkpoint stored with current best epoch: {}'.format(epoch, cur_best_epoch))
 
-                        # Save the loss figure
+                # Save the loss figure
                 plt.clf()
                 fig = plt.figure(figsize=(8,6))
                 plt.rcParams['font.size'] = 12
@@ -444,6 +444,8 @@ class LearningAlgorithm():
                 plt.close(fig)
 
                 visualize_combined_parameters(self.model, explain='epoch_{}'.format(epoch), save_path=save_dir)
+
+                visualize_teacherforcing_2_autonomous(batch_data, self.model, save_path=save_dir, explain='epoch_{}'.format(epoch))
 
                 if self.optimize_alphas:
                     alphas = 1 / (1 + np.exp(-sigmas_history[:, epoch]))

@@ -199,12 +199,12 @@ class RNN(nn.Module):
             elif self.type_RNN == 'RNN':
                 h_t, _ = self.recurrence(feature_xt, h_t) # recurrence for t+1
 
-        self.y = y.detach().clone()
-        self.h = h.detach().clone()
-        self.feature_x = feature_x.detach().clone()
-        self.h_t = h_t.detach().clone()
+        self.y = y
+        self.h = h
+        self.feature_x = feature_x
+        self.h_t = h_t
         if self.type_RNN == 'LSTM':
-            self.c_t = c_t.detach().clone()
+            self.c_t = c_t
 
         return y
     

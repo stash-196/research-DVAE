@@ -238,33 +238,49 @@ class VRNN(nn.Module):
         return h_tp1, c_tp1
 
 
-    def forward(self, x, autonomous=False):
+    def forward(self, x, initialize_states=True, update_states=True, mode_selector=None):
 
         # need input:  (seq_len, batch_size, x_dim)
         seq_len, batch_size, _ = x.shape
 
-        # create variable holder and send to GPU if needed
-        self.z_mean = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
-        self.z_logvar = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
-        self.y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
-        self.z = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
-        self.h = torch.zeros((seq_len, batch_size, self.dim_RNN)).to(self.device)
-        z_t = torch.zeros(batch_size, self.z_dim).to(self.device)
-        h_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
-        if self.type_RNN == 'LSTM':
-            c_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
+        if initialize_states:
+            # create variable holder and send to GPU if needed
+            z_mean = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
+            z_logvar = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
+            y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
+            z = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
+            h = torch.zeros((seq_len, batch_size, self.dim_RNN)).to(self.device)
+            z_t = torch.zeros(batch_size, self.z_dim).to(self.device)
+            h_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
+            if self.type_RNN == 'LSTM':
+                c_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
+        else:
+            z_mean = self.z_mean
+            z_logvar = self.z_logvar
+            y = self.y
+            z = self.z
+            h = self.h
+            z_t = self.z_t
+            h_t = self.h_t
+            if self.type_RNN == 'LSTM':
+                c_t = self.c_t
 
         # main part
-        self.feature_x = self.feature_extractor_x(x)
+        feature_x = self.feature_extractor_x(x)
 
         for t in range(seq_len):
-            if autonomous:
+            if mode_selector is not None and mode_selector[t]:
+                autonomous_mode = True
+            else:
+                autonomous_mode = False
+
+            if autonomous_mode:
                 if t == 0:
-                    feature_xt = self.feature_x[0,:,:].unsqueeze(0)
+                    feature_xt = feature_x[0,:,:].unsqueeze(0)
                 else:
                     feature_xt = self.feature_extractor_x(y_t)
             else:
-                feature_xt = self.feature_x[t,:,:].unsqueeze(0)
+                feature_xt = feature_x[t,:,:].unsqueeze(0)
 
 
             h_t_last = h_t.view(self.num_RNN, 1, batch_size, self.dim_RNN)[-1,:,:,:]
@@ -273,20 +289,34 @@ class VRNN(nn.Module):
             # z_t = mean_zt
             feature_zt = self.feature_extractor_z(z_t)
             y_t = self.generation_x(feature_zt, h_t_last)
-            self.z_mean[t,:,:] = mean_zt
-            self.z_logvar[t,:,:] = logvar_zt
-            self.z[t,:,:] = torch.squeeze(z_t, 0)
-            self.y[t,:,:] = torch.squeeze(y_t, 0)
-            self.h[t,:,:] = torch.squeeze(h_t_last, 0)
+            z_mean[t,:,:] = mean_zt
+            z_logvar[t,:,:] = logvar_zt
+            z[t,:,:] = torch.squeeze(z_t, 0)
+            y[t,:,:] = torch.squeeze(y_t, 0)
+            h[t,:,:] = torch.squeeze(h_t_last, 0)
 
             if self.type_RNN == 'LSTM':
                 h_t, c_t = self.recurrence(feature_xt, feature_zt, h_t, c_t) # recurrence for t+1 
             elif self.type_RNN == 'RNN':
                 h_t, _ = self.recurrence(feature_xt, feature_zt, h_t)
 
-        self.z_mean_p, self.z_logvar_p  = self.generation_z(self.h)
+        z_mean_p, z_logvar_p  = self.generation_z(h)
+
+        # save all attributes
+        self.z_mean = z_mean
+        self.z_logvar = z_logvar
+        self.y = y
+        self.z = z
+        self.h = h
+        self.feature_x = feature_x
+        self.z_t = z_t
+        self.h_t = h_t
+        if self.type_RNN == 'LSTM':
+            self.c_t = c_t
+        self.z_mean_p = z_mean_p
+        self.z_logvar_p = z_logvar_p
         
-        return self.y
+        return y
 
         
     def get_info(self):
@@ -316,25 +346,3 @@ class VRNN(nn.Module):
 
         return info
 
-
-if __name__ == '__main__':
-    x_dim = 513
-    z_dim = 16
-    device = 'cpu'
-    vrnn = VRNN(x_dim=x_dim, z_dim=z_dim).to(device)
-    model_info = vrnn.get_info()
-    # for i in model_info:
-    #     print(i)
-
-    x = torch.ones((2,3,x_dim))
-    y, mean, logvar, mean_prior, logvar_prior, z = vrnn.forward(x)
-    def loss_function(recon_x, x, mu, logvar, mu_prior=None, logvar_prior=None):
-        if mu_prior is None:
-            mu_prior = torch.zeros_like(mu)
-        if logvar_prior is None:
-            logvar_prior = torch.zeros_like(logvar)
-        recon = torch.sum(  x/recon_x - torch.log(x/recon_x) - 1 ) 
-        KLD = -0.5 * torch.sum(logvar - logvar_prior - torch.div((logvar.exp() + (mu - mu_prior).pow(2)), logvar_prior.exp()))
-        return recon + KLD
-
-    print(loss_function(y,x,mean,logvar,mean_prior,logvar)/6)
