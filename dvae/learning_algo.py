@@ -248,8 +248,8 @@ class LearningAlgorithm():
             # Batch training
             for _, batch_data in enumerate(train_dataloader):
                 batch_data = batch_data.to(self.device)
-
-                model_mode_selector = create_mode_selector(self.sequence_len, mode='scheduled_sampling', autonomous_ratio=kl_warm*0.8)
+                autonomous_ratio = kl_warm * 0.8
+                model_mode_selector = create_mode_selector(self.sequence_len, mode='scheduled_sampling', autonomous_ratio=autonomous_ratio)
                 
                 if self.dataset_name == 'WSJ0':
                     # (batch_size, x_dim, seq_len) -> (seq_len, batch_size, x_dim)
@@ -445,7 +445,7 @@ class LearningAlgorithm():
 
                 visualize_combined_parameters(self.model, explain='epoch_{}'.format(epoch), save_path=save_dir)
 
-                visualize_teacherforcing_2_autonomous(batch_data, self.model, save_path=save_dir, explain='epoch_{}'.format(epoch))
+                visualize_teacherforcing_2_autonomous(batch_data, self.model, autonomous_ratio=autonomous_ratio, save_path=save_dir, explain='epoch_{}'.format(epoch))
 
                 if self.optimize_alphas:
                     alphas = 1 / (1 + np.exp(-sigmas_history[:, epoch]))

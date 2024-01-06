@@ -183,14 +183,14 @@ def visualize_variable_evolution(states, save_dir, variable_name='h', alphas=Non
     plt.close()
 
 
-def visualize_teacherforcing_2_autonomous(batch_data, dvae, save_path, explain=''):
+def visualize_teacherforcing_2_autonomous(batch_data, dvae, autonomous_ratio, save_path, explain=''):
     seq_len, batch_size, x_dim = batch_data.shape
-    n_seq = int(1000/x_dim)
+    n_seq = int(min(seq_len, 1000)/x_dim)
     # portion of sequences to reconstruct
-    n_gen_portion = 0.5
+    n_gen_portion = 1 - autonomous_ratio
     recon_len = n_seq - int(n_seq * n_gen_portion)
 
-    mode_selector = create_mode_selector(n_seq, 'half_half')
+    mode_selector = create_mode_selector(n_seq, 'scheduled_sampling', autonomous_ratio=autonomous_ratio)
 
     # reconstruct the first n_seq sequences
     recon_batch_data = dvae(batch_data[0:n_seq, 0:1, :], mode_selector=mode_selector).detach().clone()
