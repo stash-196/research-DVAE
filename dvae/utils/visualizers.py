@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 import numpy as np
-from dvae.utils import create_mode_selector
+from dvae.utils import create_autonomous_mode_selector
 
 def visualize_model_parameters(model, explain, save_path=None, fixed_scale=None):
     if save_path:
@@ -66,25 +66,48 @@ def visualize_combined_parameters(model, explain, save_path=None, fixed_scale=No
 
 
 
-def visualize_sequences(true_data, recon_data, generate_data, save_dir, name=''):
+import matplotlib.pyplot as plt
+import os
+
+def visualize_sequences(true_data, recon_data, mode_selector, save_dir, name=''):
     plt.figure(figsize=(10, 6))
+    
     # Plotting the true sequence in blue
     plt.plot(true_data, label='True Sequence', color='blue')
 
-    # Plotting the reconstructed part in red
-    plt.plot(recon_data, label='Reconstructed Sequence', color='red')
-    
-    # Plotting the self-generated part in green
-    plt.plot(range(len(recon_data), len(recon_data)+len(generate_data)), generate_data, label='Self-Generated Sequence', color='green')
-    
-    plt.legend()
+    # Initialize start index for the current segment
+    segment_start = 0
+
+    for i in range(1, len(mode_selector)):
+        # Check for a change in mode or end of array
+        if mode_selector[i] != mode_selector[i-1] or i == len(mode_selector) - 1:
+            # Determine the end index for the current segment
+            segment_end = i if mode_selector[i] != mode_selector[i-1] else i + 1
+
+            # Choose color based on mode
+            color = 'green' if not mode_selector[i-1] else 'red'
+            label = 'Teacher-Forced Sequence' if not mode_selector[i-1] else 'Autonomous Sequence'
+
+            # Plotting the reconstructed segment
+            plt.plot(range(segment_start, segment_end), recon_data[segment_start:segment_end], label=label, color=color)
+
+            # Update start index for the next segment
+            segment_start = segment_end
+
+    # Ensuring that the legend doesn't repeat labels
+    handles, labels = plt.gca().get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    plt.legend(by_label.values(), by_label.keys())
+
     plt.title('Comparison of True and Predicted Sequences')
     plt.xlabel('Time steps')
     plt.ylabel('Value')
     plt.grid(True)
+    
     fig_file = os.path.join(save_dir, f'vis_pred_true_series_{name}.png')
     plt.savefig(fig_file)
     plt.close()
+
 
 # def visualize_sequences(true_data, recon_data, save_dir, n_gen_portion, name=''):
 #     recon_length = len(recon_data) - int(len(recon_data) * n_gen_portion)
@@ -183,19 +206,19 @@ def visualize_variable_evolution(states, save_dir, variable_name='h', alphas=Non
     plt.close()
 
 
-def visualize_teacherforcing_2_autonomous(batch_data, dvae, autonomous_ratio, save_path, explain=''):
+def visualize_teacherforcing_2_autonomous(batch_data, dvae, mode_selector, save_path, explain=''):
     seq_len, batch_size, x_dim = batch_data.shape
-    n_seq = int(min(seq_len, 1000)/x_dim)
-    # portion of sequences to reconstruct
-    n_gen_portion = 1 - autonomous_ratio
-    recon_len = n_seq - int(n_seq * n_gen_portion)
+    n_seq = seq_len  # Use the full sequence length for visualization
 
-    mode_selector = create_mode_selector(n_seq, 'scheduled_sampling', autonomous_ratio=autonomous_ratio)
+    # Reconstruct the first n_seq sequences
+    recon_batch_data = dvae(batch_data[:n_seq, :1, :], mode_selector=mode_selector).detach().clone()
 
-    # reconstruct the first n_seq sequences
-    recon_batch_data = dvae(batch_data[0:n_seq, 0:1, :], mode_selector=mode_selector).detach().clone()
+    # Flattening the time series for true and reconstructed data
+    true_series = batch_data[:n_seq, 0, :].reshape(-1).cpu().numpy()
+    recon_series = recon_batch_data[:n_seq, 0, :].reshape(-1).cpu().numpy()
 
-    true_series = batch_data[0:n_seq, 0, :].reshape(-1).cpu().numpy()
+    # Expanding the mode selector to match the flattened time series
+    expanded_mode_selector = np.repeat(mode_selector[:n_seq], x_dim)
 
     # Plot the reconstruction vs true sequence
-    visualize_sequences(true_series, recon_batch_data[0:recon_len,0,:], recon_batch_data[recon_len:n_seq,0,:], save_path, explain)
+    visualize_sequences(true_series, recon_series, expanded_mode_selector, save_path, explain)

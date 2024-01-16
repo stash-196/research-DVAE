@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 from dvae.learning_algo import LearningAlgorithm
 from dvae.learning_algo_ss import LearningAlgorithm_ss
 from dvae.dataset import sinusoid_dataset, lorenz63_dataset
-from dvae.utils import EvalMetrics, loss_MSE, create_mode_selector, visualize_variable_evolution, visualize_sequences, visualize_spectral_analysis
+from dvae.utils import EvalMetrics, loss_MSE, create_autonomous_mode_selector, visualize_variable_evolution, visualize_sequences, visualize_spectral_analysis, visualize_teacherforcing_2_autonomous
 from torch.nn.functional import mse_loss
 import plotly.graph_objects as go
 import plotly.express as px
@@ -139,23 +139,10 @@ if __name__ == '__main__':
                     visualize_variable_evolution(dvae.z_logvar_p, os.path.dirname(params['saved_dict']), variable_name='z_logvar_prior')
 
 
-                n_seq = int(1000/x_dim)
-                # portion of sequences to reconstruct
-                n_gen_portion = 0.5
-                recon_len = n_seq - int(n_seq * n_gen_portion)
-
-                mode_selector = create_mode_selector(n_seq, 'half_half')
-
-                # reconstruct the first n_seq sequences
-                recon_batch_data = dvae(batch_data[0:n_seq, 0:1, :], mode_selector=mode_selector).detach().clone()
-
-                # generate next n_seq sequences
-                # generate_batch_data = dvae(batch_data[recon_len:n_seq, 0:1, :], autonomous=True, initialize_states=False)
-
-                true_series = batch_data[0:n_seq, 0, :].reshape(-1).cpu().numpy()
+                autonomous_mode_selector = create_autonomous_mode_selector(seq_len, 'half_half')
 
                 # Plot the reconstruction vs true sequence
-                visualize_sequences(true_series, recon_batch_data[0:recon_len,0,:], recon_batch_data[recon_len:n_seq,0,:], os.path.dirname(params['saved_dict']))
+                visualize_teacherforcing_2_autonomous(batch_data, dvae, mode_selector=autonomous_mode_selector, save_path=os.path.dirname(params['saved_dict']), explain='final')
 
 
 
