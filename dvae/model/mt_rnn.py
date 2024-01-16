@@ -209,43 +209,61 @@ class MT_RNN(nn.Module):
         return h_tp1, c_tp1
 
 
-    def forward(self, x, autonomous=False):
+    def forward(self, x, initialize_states=True, update_states=True, mode_selector=None):
 
         # need input:  (seq_len, batch_size, x_dim)
         seq_len, batch_size, _ = x.shape
 
-        # create variable holder and send to GPU if needed
-        self.y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
-        self.h = torch.zeros((seq_len, batch_size, self.dim_RNN)).to(self.device)
-        h_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
-        self.x_features = torch.zeros((seq_len, batch_size, self.dense_x[-1])).to(self.device)
-
-        if self.type_RNN == 'LSTM':
-            c_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
+        if initialize_states:
+            # create variable holder and send to GPU if needed
+            y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
+            h = torch.zeros((seq_len, batch_size, self.dim_RNN)).to(self.device)
+            h_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
+            if self.type_RNN == 'LSTM':
+                c_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
+        else:
+            y = self.y
+            h = self.h
+            h_t = self.h_t
+            if self.type_RNN == 'LSTM':
+                c_t = self.c_t
 
         # main part
-        self.feature_x = self.feature_extractor_x(x)
+        feature_x = self.feature_extractor_x(x)
 
         for t in range(seq_len):
-            if autonomous:
+            if mode_selector is not None and mode_selector[t]:
+                autonomous_mode = True
+            else:
+                autonomous_mode = False
+
+            if autonomous_mode:
                 if t == 0:
-                    feature_xt = self.feature_x[0,:,:].unsqueeze(0)
+                    feature_xt = feature_x[0,:,:].unsqueeze(0)
                 else:
                     feature_xt = self.feature_extractor_x(y_t)
             else:
-                feature_xt = self.feature_x[t,:,:].unsqueeze(0)
+                feature_xt = feature_x[t,:,:].unsqueeze(0)
  
             h_t_last = h_t.view(self.num_RNN, 1, batch_size, self.dim_RNN)[-1,:,:,:]
             y_t = self.generation_x(h_t_last)
-            self.y[t,:,:] = torch.squeeze(y_t, 0)
-            self.h[t,:,:] = torch.squeeze(h_t_last, 0)
+            y[t,:,:] = torch.squeeze(y_t, 0)
+            h[t,:,:] = torch.squeeze(h_t_last, 0)
 
             if self.type_RNN == 'LSTM':
                 h_t, c_t = self.recurrence(feature_xt, h_t, c_t) # recurrence for t+1 
             elif self.type_RNN == 'RNN':
                 h_t, _ = self.recurrence(feature_xt, h_t)
         
-        return self.y
+        # save states
+        self.y = y
+        self.h = h
+        self.feature_x = feature_x
+        self.h_t = h_t
+        if self.type_RNN == 'LSTM':
+            self.c_t = c_t
+
+        return y
 
         
     def get_info(self):
