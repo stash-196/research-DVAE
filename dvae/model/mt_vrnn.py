@@ -42,7 +42,7 @@ def build_MT_VRNN_pp(cfg, device='cpu'):
     beta = cfg.getfloat('Training', 'beta')
 
     # Build model
-    model = MT_VRNN_pp(alphas=alphas, x_dim=x_dim, z_dim=z_dim, activation=activation,
+    model = MT_VRNN(alphas=alphas, x_dim=x_dim, z_dim=z_dim, activation=activation,
                  dense_x=dense_x, dense_z=dense_z,
                  dense_hx_z=dense_hx_z, dense_hz_x=dense_hz_x, 
                  dense_h_z=dense_h_z,
@@ -60,7 +60,7 @@ def inverse_sigmoid(y):
 
 
 
-class MT_VRNN_pp(nn.Module):
+class MT_VRNN(nn.Module):
 
     def __init__(self, alphas, x_dim, z_dim, activation,
                  dense_x, dense_z,
@@ -274,18 +274,18 @@ class MT_VRNN_pp(nn.Module):
         return h_tp1, c_tp1
     
 
-    def forward(self, x, autonomous=False):
+    def forward(self, x, initialize_states=True, update_states=True, mode_selector=None):
 
         # need input:  (seq_len, batch_size, x_dim)
         seq_len, batch_size, _ = x.shape
 
         # create variable holder and send to GPU if needed
-        self.z_mean = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
-        self.z_logvar = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
-        self.y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
-        self.x_features = torch.zeros((seq_len, batch_size, self.dense_x[-1])).to(self.device)
-        self.z = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
-        self.h = torch.zeros((seq_len, batch_size, self.dim_RNN)).to(self.device)
+        z_mean = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
+        z_logvar = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
+        y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
+        x_features = torch.zeros((seq_len, batch_size, self.dense_x[-1])).to(self.device)
+        z = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
+        h = torch.zeros((seq_len, batch_size, self.dim_RNN)).to(self.device)
         z_t = torch.zeros(batch_size, self.z_dim).to(self.device)
         h_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
 
@@ -293,16 +293,21 @@ class MT_VRNN_pp(nn.Module):
             c_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
 
         # main part
-        self.feature_x = self.feature_extractor_x(x)
+        feature_x = self.feature_extractor_x(x)
 
         for t in range(seq_len):
-            if autonomous:
+            if mode_selector is not None and mode_selector[t]:
+                autonomous_mode = True
+            else:
+                autonomous_mode = False
+
+            if autonomous_mode:
                 if t == 0:
-                    feature_xt = self.feature_x[0,:,:].unsqueeze(0)
+                    feature_xt = feature_x[0,:,:].unsqueeze(0)
                 else:
                     feature_xt = self.feature_extractor_x(y_t)
             else:
-                feature_xt = self.feature_x[t,:,:].unsqueeze(0)
+                feature_xt = feature_x[t,:,:].unsqueeze(0)
 
             h_t_last = h_t.view(self.num_RNN, 1, batch_size, self.dim_RNN)[-1,:,:,:]
             mean_zt, logvar_zt = self.inference(feature_xt, h_t_last)
@@ -310,11 +315,11 @@ class MT_VRNN_pp(nn.Module):
             # z_t = mean_zt
             feature_zt = self.feature_extractor_z(z_t)
             y_t = self.generation_x(feature_zt, h_t_last)
-            self.z_mean[t,:,:] = mean_zt
-            self.z_logvar[t,:,:] = logvar_zt
-            self.z[t,:,:] = torch.squeeze(z_t, 0)
-            self.y[t,:,:] = torch.squeeze(y_t, 0)
-            self.h[t,:,:] = torch.squeeze(h_t_last, 0)
+            z_mean[t,:,:] = mean_zt
+            z_logvar[t,:,:] = logvar_zt
+            z[t,:,:] = torch.squeeze(z_t, 0)
+            y[t,:,:] = torch.squeeze(y_t, 0)
+            h[t,:,:] = torch.squeeze(h_t_last, 0)
 
 
             if self.type_RNN == 'LSTM':
@@ -322,7 +327,21 @@ class MT_VRNN_pp(nn.Module):
             elif self.type_RNN == 'RNN':
                 h_t, _ = self.recurrence(feature_xt, feature_zt, h_t, None)
 
-        self.z_mean_p, self.z_logvar_p  = self.generation_z(self.h)
+        z_mean_p, z_logvar_p  = self.generation_z(h)
+
+        # save all attributes
+        self.z_mean = z_mean
+        self.z_logvar = z_logvar
+        self.y = y
+        self.z = z
+        self.h = h
+        self.feature_x = feature_x
+        self.z_t = z_t
+        self.h_t = h_t
+        if self.type_RNN == 'LSTM':
+            self.c_t = c_t
+        self.z_mean_p = z_mean_p
+        self.z_logvar_p = z_logvar_p
         
         return self.y
 

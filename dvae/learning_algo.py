@@ -403,11 +403,11 @@ class LearningAlgorithm():
                 plt.clf()
                 fig = plt.figure(figsize=(8,6))
                 plt.rcParams['font.size'] = 12
-                plt.plot(train_loss[:epoch+1], label='training loss')
-                plt.plot(val_loss[:epoch+1], label='validation loss')
                 # add vertical line for each epoch where KL warm-up is increased
                 for kl_warm_epoch in kl_warm_epochs:
                     plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
+                plt.plot(train_loss[:epoch+1], label='training loss')
+                plt.plot(val_loss[:epoch+1], label='validation loss')
                 plt.legend(fontsize=16, title=self.model_name, title_fontsize=20)
                 plt.xlabel('epochs', fontdict={'size':16})
                 plt.ylabel('loss', fontdict={'size':16})
@@ -418,10 +418,10 @@ class LearningAlgorithm():
                 plt.clf()
                 fig = plt.figure(figsize=(8,6))
                 plt.rcParams['font.size'] = 12
-                plt.plot(train_recon[:epoch+1], label='Training')
-                plt.plot(val_recon[:epoch+1], label='Validation')
                 for kl_warm_epoch in kl_warm_epochs:
                     plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
+                plt.plot(train_recon[:epoch+1], label='Training')
+                plt.plot(val_recon[:epoch+1], label='Validation')
                 plt.legend(fontsize=16, title='{}: Recon. Loss'.format(self.model_name), title_fontsize=20)
                 plt.xlabel('epochs', fontdict={'size':16})
                 plt.ylabel('loss', fontdict={'size':16})
@@ -432,10 +432,10 @@ class LearningAlgorithm():
                 plt.clf()
                 fig = plt.figure(figsize=(8,6))
                 plt.rcParams['font.size'] = 12
-                plt.plot(train_kl[:epoch+1], label='Training')
-                plt.plot(val_kl[:epoch+1], label='Validation')
                 for kl_warm_epoch in kl_warm_epochs:
                     plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
+                plt.plot(train_kl[:epoch+1], label='Training')
+                plt.plot(val_kl[:epoch+1], label='Validation')
                 plt.legend(fontsize=16, title='{}: KL Divergence'.format(self.model_name), title_fontsize=20)
                 plt.xlabel('epochs', fontdict={'size':16})
                 plt.ylabel('loss', fontdict={'size':16})
@@ -479,6 +479,8 @@ class LearningAlgorithm():
             plt.clf()
             fig = plt.figure(figsize=(8,6))
             plt.rcParams['font.size'] = 12
+            for kl_warm_epoch in kl_warm_epochs:
+                plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
             for i in range(sigmas_history.shape[0]):
                 plt.plot(sigmas_history[i, :], label='Sigma {}'.format(i+1))
             plt.legend(fontsize=16, title='Sigma values', title_fontsize=20)
@@ -491,6 +493,8 @@ class LearningAlgorithm():
             plt.clf()
             fig = plt.figure(figsize=(8,6))
             plt.rcParams['font.size'] = 12
+            for kl_warm_epoch in kl_warm_epochs:
+                plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
             for i in range(sigmas_history.shape[0]):
                 alphas = 1 / (1 + np.exp(-sigmas_history[i, :]))
                 plt.plot(alphas, label='Alpha {}'.format(i+1))
