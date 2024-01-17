@@ -75,29 +75,27 @@ def visualize_sequences(true_data, recon_data, mode_selector, save_dir, name='')
     # Plotting the true sequence in blue
     plt.plot(true_data, label='True Sequence', color='blue')
 
-    # Initialize start index for the current segment
-    segment_start = 0
+    for i in range(len(mode_selector)):
+        # Choose color based on mode
+        if mode_selector[i] == 0:
+            color = 'green'  # Teacher-forced
+        elif mode_selector[i] == 1:
+            color = 'red'    # Autonomous
+        else:
+            # Gradient between green (0) and red (1)
+            red_intensity = mode_selector[i]
+            green_intensity = 1 - mode_selector[i]
+            color = (red_intensity, green_intensity, 0)  # RGB color
 
-    for i in range(1, len(mode_selector)):
-        # Check for a change in mode or end of array
-        if mode_selector[i] != mode_selector[i-1] or i == len(mode_selector) - 1:
-            # Determine the end index for the current segment
-            segment_end = i if mode_selector[i] != mode_selector[i-1] else i + 1
+        # Plotting the segment
+        if i < len(recon_data) - 1:
+            plt.plot([i, i + 1], recon_data[i:i + 2], color=color)
 
-            # Choose color based on mode
-            color = 'green' if not mode_selector[i-1] else 'red'
-            label = 'Teacher-Forced Sequence' if not mode_selector[i-1] else 'Autonomous Sequence'
+    # Creating custom legend
+    plt.plot([], [], color='green', label='Teacher-Forced Sequence')
+    plt.plot([], [], color='red', label='Autonomous Sequence')
 
-            # Plotting the reconstructed segment
-            plt.plot(range(segment_start, segment_end), recon_data[segment_start:segment_end], label=label, color=color)
-
-            # Update start index for the next segment
-            segment_start = segment_end
-
-    # Ensuring that the legend doesn't repeat labels
-    handles, labels = plt.gca().get_legend_handles_labels()
-    by_label = dict(zip(labels, handles))
-    plt.legend(by_label.values(), by_label.keys())
+    plt.legend()
 
     plt.title('Comparison of True and Predicted Sequences')
     plt.xlabel('Time steps')
@@ -107,7 +105,6 @@ def visualize_sequences(true_data, recon_data, mode_selector, save_dir, name='')
     fig_file = os.path.join(save_dir, f'vis_pred_true_series_{name}.png')
     plt.savefig(fig_file)
     plt.close()
-
 
 # def visualize_sequences(true_data, recon_data, save_dir, n_gen_portion, name=''):
 #     recon_length = len(recon_data) - int(len(recon_data) * n_gen_portion)

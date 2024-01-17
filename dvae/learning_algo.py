@@ -245,7 +245,7 @@ class LearningAlgorithm():
                 logger.info('KL warm-up, anneal coeff: {}'.format(kl_warm))
 
             
-            model_mode_selector = create_autonomous_mode_selector(self.sequence_len, mode='scheduled_sampling', autonomous_ratio=kl_warm*0.8)  
+            model_mode_selector = create_autonomous_mode_selector(self.sequence_len, mode='mix_sampling', autonomous_ratio=kl_warm*0.5)  
 
 
             # Batch training

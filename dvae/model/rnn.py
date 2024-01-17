@@ -176,18 +176,18 @@ class RNN(nn.Module):
         feature_x = self.feature_extractor_x(x)
 
         for t in range(seq_len):
-            if mode_selector is not None and mode_selector[t]:
-                autonomous_mode = True
+            if mode_selector is not None:
+                # Calculate the mix of autonomous and teacher-forced inputs
+                mix_ratio = mode_selector[t]
             else:
-                autonomous_mode = False
+                mix_ratio = 0.0  # Default to full teacher forcing if mode_selector is not provided
 
-            if autonomous_mode:
-                if t == 0:
-                    feature_xt = feature_x[0,:,:].unsqueeze(0)
-                else:
-                    feature_xt = self.feature_extractor_x(y_t)
-            else:
-                feature_xt = feature_x[t,:,:].unsqueeze(0)
+            # Generate features for both teacher-forced and autonomous mode
+            feature_tf = feature_x[t,:,:].unsqueeze(0)  # Teacher-forced feature
+            feature_auto = self.feature_extractor_x(y_t) if t > 0 else feature_x[0,:,:].unsqueeze(0)  # Autonomous feature
+
+            # Mix the features based on the ratio
+            feature_xt = mix_ratio * feature_auto + (1 - mix_ratio) * feature_tf
 
             h_t_last = h_t.view(self.num_RNN, 1, batch_size, self.dim_RNN)[-1,:,:,:]
             y_t = self.generation_x(h_t_last)
