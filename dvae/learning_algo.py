@@ -19,7 +19,7 @@ import torch
 import matplotlib.pyplot as plt
 from .utils import myconf, get_logger, loss_ISD, loss_KLD, loss_MPJPE, loss_MSE, create_autonomous_mode_selector, visualize_model_parameters, visualize_combined_parameters, visualize_teacherforcing_2_autonomous
 from .dataset import h36m_dataset, speech_dataset, lorenz63_dataset, sinusoid_dataset
-from .model import build_VAE, build_DKF, build_STORN, build_VRNN, build_SRNN, build_RVAE, build_DSAE, build_VRNN_pp, build_RNN, build_MT_RNN, build_MT_VRNN_pp
+from .model import build_VAE, build_DKF, build_STORN, build_VRNN, build_SRNN, build_RVAE, build_DSAE, build_RNN, build_MT_RNN, build_MT_VRNN_pp
 import subprocess
 
 
@@ -136,8 +136,11 @@ class LearningAlgorithm():
                 z_dim = self.cfg.getint('Network','z_dim')
                 filename = "{}_{}_{}_z_dim={}_h_dim={}".format(self.dataset_name, self.date, tag, z_dim, h_dim)
             save_dir = os.path.join(saved_root, filename)
-            if not(os.path.isdir(save_dir)):
+            try:
                 os.makedirs(save_dir)
+            except FileExistsError:
+                # The directory already exists, so you can either pass or handle it as needed
+                print(f"Directory already exists: {save_dir}")
         else:
             tag = self.cfg.get('Network', 'tag')
             save_dir = self.params['model_dir']
@@ -245,7 +248,7 @@ class LearningAlgorithm():
                 logger.info('KL warm-up, anneal coeff: {}'.format(kl_warm))
 
             
-            model_mode_selector = create_autonomous_mode_selector(self.sequence_len, mode='mix_sampling', autonomous_ratio=kl_warm*0.5)  
+            model_mode_selector = create_autonomous_mode_selector(self.sequence_len, mode='mix_sampling', autonomous_ratio=kl_warm*0.8)  
 
 
             # Batch training
@@ -443,6 +446,38 @@ class LearningAlgorithm():
                 plt.savefig(fig_file)
                 plt.close(fig)
 
+                
+                if self.optimize_alphas:
+                    plt.clf()
+                    fig = plt.figure(figsize=(8,6))
+                    plt.rcParams['font.size'] = 12
+                    for kl_warm_epoch in kl_warm_epochs:
+                        plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
+                    for i in range(sigmas_history.shape[0]):
+                        plt.plot(sigmas_history[i, :], label='Sigma {}'.format(i+1))
+                    plt.legend(fontsize=16, title='Sigma values', title_fontsize=20)
+                    plt.xlabel('epochs', fontdict={'size':16})
+                    plt.ylabel('sigma', fontdict={'size':16})
+                    fig_file = os.path.join(save_dir, 'history_sigma_{}.png'.format(tag))
+                    plt.savefig(fig_file)
+                    plt.close(fig)
+
+                    plt.clf()
+                    fig = plt.figure(figsize=(8,6))
+                    plt.rcParams['font.size'] = 12
+                    for kl_warm_epoch in kl_warm_epochs:
+                        plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
+                    for i in range(sigmas_history.shape[0]):
+                        alphas = 1 / (1 + np.exp(-sigmas_history[i, :]))
+                        plt.plot(alphas, label='Alpha {}'.format(i+1))
+                    plt.legend(fontsize=16, title='Alpha values', title_fontsize=20)
+                    plt.xlabel('epochs', fontdict={'size':16})
+                    plt.ylabel('alpha', fontdict={'size':16})
+                    plt.yscale('log')  # Set y-axis to logarithmic scale
+                    fig_file = os.path.join(save_dir, 'history_alpha_{}.png'.format(tag))
+                    plt.savefig(fig_file)
+                    plt.close(fig)
+
                 visualize_combined_parameters(self.model, explain='epoch_{}'.format(epoch), save_path=save_dir)
 
                 visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector, save_path=save_dir, explain='epoch_{}'.format(epoch))
@@ -474,37 +509,6 @@ class LearningAlgorithm():
 
 
 
-
-        if self.optimize_alphas:
-            plt.clf()
-            fig = plt.figure(figsize=(8,6))
-            plt.rcParams['font.size'] = 12
-            for kl_warm_epoch in kl_warm_epochs:
-                plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
-            for i in range(sigmas_history.shape[0]):
-                plt.plot(sigmas_history[i, :], label='Sigma {}'.format(i+1))
-            plt.legend(fontsize=16, title='Sigma values', title_fontsize=20)
-            plt.xlabel('epochs', fontdict={'size':16})
-            plt.ylabel('sigma', fontdict={'size':16})
-            fig_file = os.path.join(save_dir, 'history_sigma_{}.png'.format(tag))
-            plt.savefig(fig_file)
-            plt.close(fig)
-
-            plt.clf()
-            fig = plt.figure(figsize=(8,6))
-            plt.rcParams['font.size'] = 12
-            for kl_warm_epoch in kl_warm_epochs:
-                plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
-            for i in range(sigmas_history.shape[0]):
-                alphas = 1 / (1 + np.exp(-sigmas_history[i, :]))
-                plt.plot(alphas, label='Alpha {}'.format(i+1))
-            plt.legend(fontsize=16, title='Alpha values', title_fontsize=20)
-            plt.xlabel('epochs', fontdict={'size':16})
-            plt.ylabel('alpha', fontdict={'size':16})
-            plt.yscale('log')  # Set y-axis to logarithmic scale
-            fig_file = os.path.join(save_dir, 'history_alpha_{}.png'.format(tag))
-            plt.savefig(fig_file)
-            plt.close(fig)
 
         # run evaluation script
         subprocess.run(["python", "eval_sinusoid.py", "--saved_dict", save_file])
