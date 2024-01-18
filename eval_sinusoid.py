@@ -114,15 +114,17 @@ if __name__ == '__main__':
             MY_MSE += MY_MSE.item() / (seq_len * batch_size)
 
             if i == 0:
-                if overlap:
-                    true_series_overlapping = batch_data[:, 0, :].reshape(-1).cpu().numpy()
+                true_series = batch_data[:, 0, :].reshape(-1).cpu().numpy()
 
-                    recon_series = recon_batch_data[:, 0, :].reshape(-1).cpu().numpy()
-                else:        
-                    true_series = batch_data[:, 0, :].reshape(-1).cpu().numpy()
-                    recon_series = recon_batch_data[:, 0, :].reshape(-1).cpu().numpy()
                 # Plot the spectral analysis
-                visualize_spectral_analysis(true_series, recon_series, os.path.dirname(params['saved_dict']))
+                autonomous_mode_selector = create_autonomous_mode_selector(seq_len, 'half_half').astype(bool)
+                recon_series = dvae(batch_data, mode_selector=autonomous_mode_selector)
+                # recon data for teacher forcing mode
+                recon_teacherforced_series = recon_series[~autonomous_mode_selector, :1, :].reshape(-1).cpu().numpy()
+                visualize_spectral_analysis(true_series[~autonomous_mode_selector], recon_teacherforced_series, os.path.dirname(params['saved_dict']), explain='teacherforced')
+                # recon data for autonomous mode
+                recon_autonomous_series = recon_series[autonomous_mode_selector, :1, :].reshape(-1).cpu().numpy()
+                visualize_spectral_analysis(true_series[autonomous_mode_selector], recon_autonomous_series, os.path.dirname(params['saved_dict']), explain='autonomous')                
 
                 # visualize the hidden states
                 visualize_variable_evolution(dvae.h, os.path.dirname(params['saved_dict']), variable_name='hidden', alphas=alphas_per_unit)

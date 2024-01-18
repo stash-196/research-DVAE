@@ -126,7 +126,7 @@ def visualize_sequences(true_data, recon_data, mode_selector, save_dir, name='')
 #     fig.write_image(os.path.join(save_dir, f'vis_pred_true_series{name}.svg'), format='svg')
 
 
-def visualize_spectral_analysis(true_data, recon_data, save_dir, sampling_rate=0.25):  # 1 sample every 4 seconds = 0.25 Hz
+def visualize_spectral_analysis(true_data, recon_data, save_dir, sampling_rate=0.25, explain=''):  # 1 sample every 4 seconds = 0.25 Hz
     true_fft = np.fft.fft(true_data)
     recon_fft = np.fft.fft(recon_data)
 
@@ -150,11 +150,11 @@ def visualize_spectral_analysis(true_data, recon_data, save_dir, sampling_rate=0
     plt.loglog(periods[nonzero_indices], true_power, label='True Sequence Power Spectrum', color='blue')
     plt.loglog(periods[nonzero_indices], recon_power, label='Predicted Sequence Power Spectrum', color='red')
     plt.legend()
-    plt.title('Power Spectral Analysis')
+    plt.title('Power Spectral Analysis {}'.format(explain))
     plt.xlabel('Period (seconds)')
     plt.ylabel('Power')
     plt.grid(True)
-    fig_file = os.path.join(save_dir, 'vis_pred_true_power_spectrums_loglog.png')
+    fig_file = os.path.join(save_dir, 'vis_pred_true_power_spectrums_loglog_{}.png'.format(explain))
     plt.savefig(fig_file)
     plt.close()
 
@@ -163,11 +163,11 @@ def visualize_spectral_analysis(true_data, recon_data, save_dir, sampling_rate=0
     plt.semilogx(periods[nonzero_indices], recon_phase, label='Predicted Sequence Phase Spectrum', color='red')
     plt.semilogx(periods[nonzero_indices], true_phase, label='True Sequence Phase Spectrum', color='blue')
     plt.legend()
-    plt.title('Phase Spectral Analysis')
+    plt.title('Phase Spectral Analysis {}'.format(explain))
     plt.xlabel('Frequency (Hz)')
     plt.ylabel('Phase (radians)')
     plt.grid(True)
-    fig_file = os.path.join(save_dir, 'vis_pred_true_phase_spectrums_semilogx.png')
+    fig_file = os.path.join(save_dir, 'vis_pred_true_phase_spectrums_semilogx_{}.png'.format(explain))
     plt.savefig(fig_file)
     plt.close()
 

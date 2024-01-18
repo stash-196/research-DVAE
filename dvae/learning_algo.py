@@ -46,30 +46,20 @@ class LearningAlgorithm():
 
         # Get host name and date
         self.hostname = socket.gethostname()
-        self.date = datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
+        # Get current date
+        self.datetime_str = datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
+        self.date_str = datetime.datetime.now().strftime("%Y-%m-%d")
         
         # Load model parameters
         self.use_cuda = self.cfg.getboolean('Training', 'use_cuda')
         self.device = 'cuda' if torch.cuda.is_available() and self.use_cuda else 'cpu'
 
 
+
+
     def build_model(self):
-        if self.model_name == 'VAE':
-            self.model = build_VAE(cfg=self.cfg, device=self.device)
-        elif self.model_name == 'DKF':
-            self.model = build_DKF(cfg=self.cfg, device=self.device)
-        elif self.model_name == 'STORN':
-            self.model = build_STORN(cfg=self.cfg, device=self.device)
-        elif self.model_name == 'VRNN':
+        if self.model_name == 'VRNN':
             self.model = build_VRNN(cfg=self.cfg, device=self.device)
-        elif self.model_name == 'SRNN':
-            self.model = build_SRNN(cfg=self.cfg, device=self.device)
-        elif self.model_name == 'RVAE':
-            self.model = build_RVAE(cfg=self.cfg, device=self.device)
-        elif self.model_name == 'DSAE':
-            self.model = build_DSAE(cfg=self.cfg, device=self.device)
-        elif self.model_name == 'VRNN_pp':
-            self.model = build_VRNN_pp(cfg=self.cfg, device=self.device)
         elif self.model_name == 'RNN':
             self.model = build_RNN(cfg=self.cfg, device=self.device)
         elif self.model_name == 'MT_RNN':
@@ -103,7 +93,7 @@ class LearningAlgorithm():
     def get_basic_info(self):
         basic_info = []
         basic_info.append('HOSTNAME: ' + self.hostname)
-        basic_info.append('Time: ' + self.date)
+        basic_info.append('Time: ' + self.datetime_str)
         basic_info.append('Device for training: ' + self.device)
         if self.device == 'cuda':
             basic_info.append('Cuda verion: {}'.format(torch.version.cuda))
@@ -131,11 +121,11 @@ class LearningAlgorithm():
             tag = self.cfg.get('Network', 'tag')
             h_dim = self.cfg.getint('Network','dim_RNN')
             if self.model_name == 'RNN' or self.model_name == 'MT_RNN':
-                filename = "{}_{}_{}_h_dim={}".format(self.dataset_name, self.date, tag, h_dim)
+                filename = "{}_{}_{}_h_dim={}".format(self.dataset_name, self.datetime_str, tag, h_dim)
             else:
                 z_dim = self.cfg.getint('Network','z_dim')
-                filename = "{}_{}_{}_z_dim={}_h_dim={}".format(self.dataset_name, self.date, tag, z_dim, h_dim)
-            save_dir = os.path.join(saved_root, filename)
+                filename = "{}_{}_{}_z_dim={}_h_dim={}".format(self.dataset_name, self.datetime_str, tag, z_dim, h_dim)
+            save_dir = os.path.join(saved_root, self.date_str, filename)
             try:
                 os.makedirs(save_dir)
             except FileExistsError:
@@ -171,16 +161,12 @@ class LearningAlgorithm():
         optimizer = self.init_optimizer()
 
         # Create data loader
-        if self.dataset_name == 'WSJ0':
-            train_dataloader, val_dataloader, train_num, val_num = speech_dataset.build_dataloader(self.cfg)
-        elif self.dataset_name == 'H36M':
-            train_dataloader, val_dataloader, train_num, val_num = h36m_dataset.build_dataloader(self.cfg)
-        elif self.dataset_name == "Lorenz63":
+        if self.dataset_name == "Lorenz63":
             train_dataloader, val_dataloader, train_num, val_num = lorenz63_dataset.build_dataloader(self.cfg, device=self.device)
         elif self.dataset_name == "Sinusoid":
             train_dataloader, val_dataloader, train_num, val_num = sinusoid_dataset.build_dataloader(self.cfg, device=self.device)
         else:
-            logger.error('Unknown datset')
+            logger.error('Unknown datset!')
         logger.info('Training samples: {}'.format(train_num))
         logger.info('Validation samples: {}'.format(val_num))
 
@@ -248,7 +234,7 @@ class LearningAlgorithm():
                 logger.info('KL warm-up, anneal coeff: {}'.format(kl_warm))
 
             
-            model_mode_selector = create_autonomous_mode_selector(self.sequence_len, mode='mix_sampling', autonomous_ratio=kl_warm*0.8)  
+            model_mode_selector = create_autonomous_mode_selector(self.sequence_len, mode='bernoulli_sampling', autonomous_ratio=kl_warm*0.8)  
 
 
             # Batch training

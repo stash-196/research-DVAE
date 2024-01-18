@@ -83,11 +83,11 @@ class Sinusoid(Dataset):
         
         # Load and process data
         if self.long:
-            filename = f'{self.path_to_data}/dataset_long.pkl'
+            filename = f'{self.path_to_data}/sinusoid/dataset_long.pkl'
         elif self.data_cfgs['s_dim'] == 1:
-            filename = f'{self.path_to_data}/dataset_1d.pkl'
+            filename = f'{self.path_to_data}/sinusoid/dataset_1d.pkl'
         else:
-            filename = f'{self.path_to_data}/dataset.pkl'
+            filename = f'{self.path_to_data}/sinusoid/dataset.pkl'
         with open(filename, 'rb') as f:
             the_sequence = np.array(pickle.load(f))
         
@@ -97,7 +97,7 @@ class Sinusoid(Dataset):
         # Generate sequences with or without overlap
         if self.overlap:
             the_sequence = self.create_moving_window_sequences(the_sequence, self.x_dim)
-        else:
+        else: # Remove the last sequence if it is not the correct length
             the_sequence = np.array([the_sequence[i:i+x_dim] for i in range(0, len(the_sequence), x_dim) if i+x_dim <= len(the_sequence)])
 
         self.seq = torch.from_numpy(the_sequence).float().to(device)

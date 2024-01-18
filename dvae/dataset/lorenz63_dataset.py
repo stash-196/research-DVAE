@@ -21,12 +21,26 @@ def build_dataloader(cfg, device):
     sequence_len = cfg.getint('DataFrame', 'sequence_len')
     sample_rate = cfg.getint('DataFrame', 'sample_rate')
     skip_rate = cfg.getint('DataFrame', 'skip_rate')
-    val_indices = cfg.getint('DataFrame', 'val_indices')
+    val_indices = cfg.getfloat('DataFrame', 'val_indices')
     observation_process = cfg.get('DataFrame', 'observation_process')
+    overlap = cfg.getboolean('DataFrame', 'overlap')
+  
+        
+    data_cfgs = {}
+    # define long as a boolean if field exists
+    if cfg.has_option('DataFrame', 'long'):
+        long = cfg.getboolean('DataFrame', 'long')
+    else:
+        long = False
+
+    if cfg.has_option('DataFrame', 's_dim'):
+        data_cfgs['s_dim'] = cfg.getint('DataFrame', 's_dim')
+    else:
+        data_cfgs['s_dim'] = False
   
     # Load dataset
-    train_dataset = Lorenz63(path_to_data=data_dir, split=0, seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate, skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device)
-    val_dataset = Lorenz63(path_to_data=data_dir, split=2, seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate, skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device)
+    train_dataset = Lorenz63(path_to_data=data_dir, split=0, seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate, skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap, long=long, data_cfgs=data_cfgs)
+    val_dataset = Lorenz63(path_to_data=data_dir, split=0, seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate, skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap, long=long, data_cfgs=data_cfgs)
 
 
     train_num = train_dataset.__len__()    
@@ -41,7 +55,7 @@ def build_dataloader(cfg, device):
 
 # define a class for Lorenz63 dataset in the same style as the above HumanPoseXYZ, dataset
 class Lorenz63(Dataset):
-    def __init__(self, path_to_data, split, seq_len, x_dim, sample_rate, skip_rate, val_indices, observation_process, device):
+    def __init__(self, path_to_data, split, seq_len, x_dim, sample_rate, skip_rate, val_indices, observation_process, device, overlap, long, data_cfgs):
         """
         :param path_to_data: path to the data folder
         :param split: train, test or val
@@ -59,6 +73,9 @@ class Lorenz63(Dataset):
         self.skip_rate = skip_rate
         self.val_indices = val_indices
         self.observation_process = observation_process
+        self.overlap = overlap
+        self.long = long
+        self.data_cfgs = data_cfgs
         
         self.seq = {}
         self.data_idx = []
@@ -66,7 +83,7 @@ class Lorenz63(Dataset):
         self.device = device
         
         # read motion data from pickle file
-        filename = '{0}/dataset.pkl'.format(self.path_to_data)
+        filename = '{0}/lorenz63/dataset.pkl'.format(self.path_to_data)
         with open(filename, 'rb') as f:
             the_sequence = np.array(pickle.load(f))
         
@@ -85,24 +102,74 @@ class Lorenz63(Dataset):
             the_sequence = np.array([the_sequence[i:i+x_dim] for i in range(0, len(the_sequence), x_dim) if i+x_dim <= len(the_sequence)])
 
             
+        # Process the sequence based on the observation process
+        the_sequence = self.apply_observation_process(the_sequence)
+
+        # Generate sequences with or without overlap
+        if self.overlap:
+            the_sequence = self.create_moving_window_sequences(the_sequence, self.x_dim)
+        else: # Remove the last sequence if it is not the correct length
+            the_sequence = np.array([the_sequence[i:i+x_dim] for i in range(0, len(the_sequence), x_dim) if i+x_dim <= len(the_sequence)])
         
-        # Convert to torch tensor and send to device
-        self.seq = torch.from_numpy(the_sequence).float().to(self.device)
+        self.seq = torch.from_numpy(the_sequence).float().to(device)
         
-        # save valid start frames, based on skip_rate
-        num_frames = self.seq.shape[0] # Number of complete sequences in the data
-        
+        # Determine indices for training and validation sets
+        num_frames = self.seq.shape[0]
+        all_indices = data_utils.find_indices(num_frames, self.seq_len, num_frames // self.seq_len)
+        train_indices, validation_indices = self.split_dataset(all_indices, self.val_indices)
+
+
+        # Select appropriate indices based on the split
         if self.split <= 1: # for train and test
-            valid_frames = np.arange(0, num_frames - self.seq_len + 1, self.skip_rate)
+            valid_frames = train_indices
         else: # for validation
-            valid_frames = data_utils.find_indices(num_frames, self.seq_len, self.val_indices)
-        
+            valid_frames = validation_indices
+
         self.data_idx = list(valid_frames)
+
+    def apply_observation_process(self, sequence):
+        """
+        Applies an observation process to the sequence data.
+        """
+        if self.observation_process == '3dto3d':
+            pass  # For a 3D to 3D observation process
+        elif self.observation_process == '3dto3d_w_noise':
+            pass  # For a 3D to 3D observation process with noise
+        elif self.observation_process == '3dto1d':
+            v = np.ones(sequence.shape[-1])
+            sequence = sequence @ v  # Vector product to convert 3D to 1D
+        elif self.observation_process == '3dto1d_w_noise':
+            v = np.ones(sequence.shape[-1])
+            sequence = sequence @ v + np.random.normal(0, 5.7, sequence.shape[0])  # Add Gaussian noise
+        elif self.observation_process == 'only_x':
+            # observe only x out of xyz dimensions
+            sequence = sequence[:,0]
+        elif self.observation_process == 'only_x_w_noise':
+            sequence = sequence[:,0] + np.random.normal(0, 5.7, sequence.shape[0])
+        else:
+            raise ValueError('Observation process not recognized.')
+        return sequence
         
+    @staticmethod
+    def create_moving_window_sequences(sequence, window_size):
+        """
+        Converts a 1D time series into a 2D array of overlapping sequences.
+        """
+        return np.lib.stride_tricks.sliding_window_view(sequence, window_shape=window_size)
+
+    @staticmethod
+    def split_dataset(indices, val_indices):
+        """
+        Splits the dataset into training and validation sets.
+        """
+        np.random.shuffle(indices)
+        split_point = int(len(indices) * (1 - val_indices))
+        return indices[:split_point], indices[split_point:]
+
     def __len__(self):
         return len(self.data_idx)
     
-    def __getitem__(self, item):
-        start_frame = self.data_idx[item]
-        fs = np.arange(start_frame, start_frame + self.seq_len)
-        return self.seq[fs]
+    def __getitem__(self, index):
+        start_frame = self.data_idx[index]
+        return self.seq[start_frame:start_frame + self.seq_len]
+
