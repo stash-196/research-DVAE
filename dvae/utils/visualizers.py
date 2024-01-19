@@ -219,3 +219,71 @@ def visualize_teacherforcing_2_autonomous(batch_data, dvae, mode_selector, save_
 
     # Plot the reconstruction vs true sequence
     visualize_sequences(true_series, recon_series, expanded_mode_selector, save_path, explain)
+
+
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+import numpy as np
+
+def reduce_dimensions(embeddings, technique='pca', n_components=3):
+    """
+    Reduce dimensions of embeddings using specified technique (PCA or t-SNE).
+
+    Args:
+    - embeddings: A numpy array of shape (num_samples, embedding_dim).
+    - technique: Dimensionality reduction technique ('pca' or 'tsne').
+    - n_components: Number of dimensions to reduce to.
+
+    Returns:
+    - reduced_embeddings: Embeddings in the reduced dimension space.
+    """
+    if technique.lower() == 'pca':
+        reducer = PCA(n_components=n_components)
+    elif technique.lower() == 'tsne':
+        reducer = TSNE(n_components=n_components, n_iter=300)
+    else:
+        raise ValueError("Unsupported dimensionality reduction technique. Choose 'pca' or 'tsne'.")
+
+    reduced_embeddings = reducer.fit_transform(embeddings)
+    return reduced_embeddings
+
+def visualize_embedding_space(states, save_dir, alphas=None, variable_name='embedding', title='Embedding Space Trajectory', technique='pca'):
+    """
+    Visualize the trajectory of embeddings in a 3D space using specified dimensionality reduction technique.
+
+    Args:
+    - embeddings: A numpy array of shape (num_samples, embedding_dim).
+    - alphas: Optional. A numpy array of alpha values for coloring.
+    - save_dir: Directory to save the plot.
+    - variable_name: Name of the variable to be used in the plot title.
+    - title: Title of the plot.
+    - technique: Dimensionality reduction technique ('pca' or 'tsne').
+    """
+    reduced_embeddings = reduce_dimensions(states, technique=technique)
+
+    fig = plt.figure(figsize=(12, 8))
+    ax = fig.add_subplot(111, projection='3d')
+
+    xs = reduced_embeddings[:, 0]
+    ys = reduced_embeddings[:, 1]
+    zs = reduced_embeddings[:, 2]
+
+    # Color mapping
+    if alphas is not None:
+        colors = [plt.cm.viridis(alpha) for alpha in alphas]
+        for i in range(len(xs) - 1):
+            ax.plot(xs[i:i+2], ys[i:i+2], zs[i:i+2], marker='o', color=colors[i])
+    else:
+        ax.plot(xs, ys, zs, marker='o')
+
+    ax.set_xlabel('Component 1')
+    ax.set_ylabel('Component 2')
+    ax.set_zlabel('Component 3')
+    plt.title(title)
+
+    fig_file = os.path.join(save_dir, f'vis_{variable_name}_space_trajectory_{technique}_{technique}.png')
+    plt.savefig(fig_file)
+    plt.close()
+

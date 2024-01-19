@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 from dvae.learning_algo import LearningAlgorithm
 from dvae.learning_algo_ss import LearningAlgorithm_ss
 from dvae.dataset import sinusoid_dataset, lorenz63_dataset
-from dvae.utils import EvalMetrics, loss_MSE, create_autonomous_mode_selector, visualize_variable_evolution, visualize_sequences, visualize_spectral_analysis, visualize_teacherforcing_2_autonomous
+from dvae.utils import EvalMetrics, loss_MSE, create_autonomous_mode_selector, visualize_variable_evolution, visualize_sequences, visualize_spectral_analysis, visualize_teacherforcing_2_autonomous, visualize_embedding_space
 from torch.nn.functional import mse_loss
 import plotly.graph_objects as go
 import plotly.express as px
@@ -128,6 +128,8 @@ if __name__ == '__main__':
 
                 # visualize the hidden states
                 visualize_variable_evolution(dvae.h, os.path.dirname(params['saved_dict']), variable_name='hidden', alphas=alphas_per_unit)
+                visualize_embedding_space(dvae.h[:,0,:], os.path.dirname(params['saved_dict']), variable_name='hidden', alphas=alphas_per_unit)
+                visualize_embedding_space(dvae.h[:,0,:], os.path.dirname(params['saved_dict']), variable_name='hidden', alphas=alphas_per_unit, technique='tsne')
 
                 # visualize the x_features
                 visualize_variable_evolution(dvae.feature_x, os.path.dirname(params['saved_dict']), variable_name='x_features')
