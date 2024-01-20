@@ -7,7 +7,7 @@ from mpl_toolkits.mplot3d import Axes3D
 from torch.autograd import Variable
 from tqdm import tqdm_notebook as tqdm
 from collections import defaultdict
-
+import os
 
 # Handy function stolen from the fast.ai library
 def V(x, requires_grad=False, gpu=False):
@@ -33,8 +33,9 @@ class L63():
         for n in range(n_steps): self.step()
 
 import plotly.graph_objects as go
+import plotly.io as pio
 
-def plot_attractor_plotly(hists):
+def plot_attractor_plotly(hists, save_dir=None, explain=None, format='pdf'):
     if np.array(hists).ndim == 2:
         hists = [hists]
     hists = [np.array(h) for h in hists]
@@ -44,14 +45,19 @@ def plot_attractor_plotly(hists):
     fig.update_layout(scene=dict(
         xaxis_title='x',
         yaxis_title='y',
-        zaxis_title='z'
-    ))
+        zaxis_title='z', 
+    ), title=f'Attractor Plot for {explain} set')
     fig.show()
+    if save_dir is not None:
+        save_path = os.path.join(save_dir, f'attractor_{explain}.{format}')
+        pio.write_image(fig, save_path)
+
+    
 
 
 from plotly.subplots import make_subplots
 
-def plot_attractor_subplots(hists):
+def plot_attractor_subplots(hists, explain, save_dir=None, format='pdf'):
     if np.array(hists).ndim == 2:
         hists = [hists]
     hists = [np.array(h) for h in hists]
@@ -68,13 +74,16 @@ def plot_attractor_subplots(hists):
         # Z timeseries
         fig.add_trace(go.Scatter(y=h[:, 2], mode='lines', line=dict(color='green')), row=3, col=1)
 
-    fig.update_layout(title_text="Timeseries Subplots for X, Y, and Z")
+    fig.update_layout(title_text="Timeseries Subplots for X, Y, and Z for {} set".format(explain))
     fig.show()
+    if save_dir is not None:
+        save_path = os.path.join(save_dir, f'timeseries_{explain}.{format}')
+        pio.write_image(fig, save_path)
 
 
 import plotly.graph_objects as go
 
-def plot_components_vs_time_plotly(time_series, time_step):
+def plot_components_vs_time_plotly(time_series, time_step, explain, save_dir=None, format='pdf'):
     t = np.arange(0, len(time_series) * time_step, time_step)
     x, y, z = time_series[:, 0], time_series[:, 1], time_series[:, 2]
     
@@ -84,14 +93,16 @@ def plot_components_vs_time_plotly(time_series, time_step):
     fig.add_trace(go.Scatter(x=t, y=y, mode='lines', name='y', line=dict(color='green')))
     fig.add_trace(go.Scatter(x=t, y=z, mode='lines', name='z', line=dict(color='red')))
     
-    fig.update_layout(title='Components of Lorenz63 System vs. Time',
+    fig.update_layout(title='Components of Lorenz63 System vs. Time for {} set'.format(explain),
                       xaxis_title='Time',
                       yaxis_title='Values',
                       showlegend=True,
                       template='plotly_white')
     
     fig.show()
-
+    if save_dir is not None:
+        save_path = os.path.join(save_dir, f'components_vs_time_{explain}.{format}')
+        pio.write_image(fig, save_path)
 
 
 #%%
@@ -121,7 +132,7 @@ def power_spectrum(time_series):
 
 import plotly.graph_objects as go
 
-def plot_power_spectrum_plotly(time_series):
+def plot_power_spectrum_plotly(time_series, explain, save_dir=None, format='pdf'):
     # Create a figure
     fig = go.Figure()
 
@@ -137,7 +148,7 @@ def plot_power_spectrum_plotly(time_series):
 
     # Set the x-axis to be log scale
     fig.update_layout(
-        title="Power Spectrum of Lorenz63 System",
+        title="Power Spectrum of Lorenz63 System for {} set".format(explain),
         xaxis=dict(type="log", title="Time Periods"),
         # yaxis=dict(type="log", title="Power"),
         yaxis=dict(title="Power"),
@@ -147,9 +158,13 @@ def plot_power_spectrum_plotly(time_series):
     # Display the figure
     fig.show()
 
+    if save_dir is not None:
+        save_path = os.path.join(save_dir, f'power_spectrum_{explain}.{format}')
+        pio.write_image(fig, save_path)
+
 from plotly.subplots import make_subplots
 
-def plot_power_spectrum_subplots_loglog(time_series):
+def plot_power_spectrum_subplots_loglog(time_series, explain, save_dir=None, format='pdf'):
     # Create a subplots figure with 3 rows and 1 column
     fig = make_subplots(rows=3, cols=1, subplot_titles=('X Power Spectrum', 'Y Power Spectrum', 'Z Power Spectrum'))
     
@@ -164,7 +179,7 @@ def plot_power_spectrum_subplots_loglog(time_series):
         fig.add_trace(go.Scatter(x=time_periods, y=spectrum, mode='lines', name=f'{component} power spectrum'), row=i+1, col=1)
 
     # Update the layout with log-log axes
-    fig.update_layout(title="Power Spectrum of Lorenz63 Components")
+    fig.update_layout(title="Power Spectrum of Lorenz63 Components for {} set".format(explain))
     fig.update_xaxes(type="log", title="Time Periods")
     # fig.update_yaxes(type="log", title="Power")
     fig.update_yaxes(title="Power")
@@ -179,16 +194,21 @@ sigma = 10
 rho = 28
 beta = 8/3
 N = 15*60*24*5
-l = L63(sigma, rho, beta, init=[1, 10, 20], dt=1e-2)
+l1 = L63(sigma, rho, beta, init=[1, 10, 20], dt=1e-2)
+l2 = L63(sigma, rho, beta, init=[10, 1, 2], dt=1e-2)
 
 
-l.integrate(N)
+l1.integrate(N)
+l2.integrate(N)
 
-plot_attractor_plotly([l.hist])
+plot_attractor_plotly([l1.hist], save_dir='temp_save/lorenz63', explain='s10_r28_b8d3_train')
+plot_attractor_plotly([l2.hist], save_dir='temp_save/lorenz63', explain='s10_r28_b8d3_test')
 
-plot_attractor_subplots([l.hist])
+plot_attractor_subplots([l1.hist], save_dir='temp_save/lorenz63', explain='s10_r28_b8d3_train')
+plot_attractor_subplots([l2.hist], save_dir='temp_save/lorenz63', explain='s10_r28_b8d3_test')
 
-plot_components_vs_time_plotly(np.array(l.hist), time_step=1e-2)
+plot_components_vs_time_plotly(np.array(l1.hist), time_step=1e-2, explain='s10_r28_b8d3_train', save_dir='temp_save/lorenz63')
+plot_components_vs_time_plotly(np.array(l2.hist), time_step=1e-2, explain='s10_r28_b8d3_test', save_dir='temp_save/lorenz63')
 
 
 # store l.hist as pickle data for later use in pytorch dataloader
@@ -197,15 +217,17 @@ def save_pickle(data, path):
     with open(path, 'wb') as f:
         pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-# save_pickle(l.hist, 'lorenz63.pkl')
-# save_pickle(l.hist, 'lorenz63_2.pkl')
+save_pickle(l1.hist, 'temp_save/lorenz63/dataset_train.pkl')
+save_pickle(l2.hist, 'temp_save/lorenz63/dataset_test.pkl')
 
 # Call the function to display the plot
-plot_power_spectrum_plotly(np.array(l.hist))
+plot_power_spectrum_plotly(np.array(l1.hist), explain='s10_r28_b8d3_train', save_dir='temp_save/lorenz63')
+plot_power_spectrum_plotly(np.array(l2.hist), explain='s10_r28_b8d3_test', save_dir='temp_save/lorenz63')
 
 # Call the function to display the plots
 
-plot_power_spectrum_subplots_loglog(np.array(l.hist))
+plot_power_spectrum_subplots_loglog(np.array(l1.hist), explain='s10_r28_b8d3_train', save_dir='temp_save/lorenz63')
+plot_power_spectrum_subplots_loglog(np.array(l2.hist), explain='s10_r28_b8d3_test', save_dir='temp_save/lorenz63')
 
 
 # %%

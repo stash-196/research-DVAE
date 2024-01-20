@@ -113,6 +113,7 @@ class Sinusoid(Dataset):
         else: # for validation
             valid_frames = validation_indices
 
+        # Set the indices for the dataset
         self.data_idx = list(valid_frames)
 
     def apply_observation_process(self, sequence):
