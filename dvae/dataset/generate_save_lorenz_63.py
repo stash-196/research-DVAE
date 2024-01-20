@@ -199,7 +199,7 @@ l2 = L63(sigma, rho, beta, init=[10, 1, 2], dt=1e-2)
 
 
 l1.integrate(N)
-l2.integrate(N)
+l2.integrate(int(N*0.1))
 
 plot_attractor_plotly([l1.hist], save_dir='temp_save/lorenz63', explain='s10_r28_b8d3_train')
 plot_attractor_plotly([l2.hist], save_dir='temp_save/lorenz63', explain='s10_r28_b8d3_test')
