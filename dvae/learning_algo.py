@@ -440,7 +440,7 @@ class LearningAlgorithm():
                     for kl_warm_epoch in kl_warm_epochs:
                         plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
                     for i in range(sigmas_history.shape[0]):
-                        plt.plot(sigmas_history[i, :], label='Sigma {}'.format(i+1))
+                        plt.plot(sigmas_history[i, :epoch+1], label='Sigma {}'.format(i+1))
                     plt.legend(fontsize=16, title='Sigma values', title_fontsize=20)
                     plt.xlabel('epochs', fontdict={'size':16})
                     plt.ylabel('sigma', fontdict={'size':16})
@@ -455,7 +455,7 @@ class LearningAlgorithm():
                         plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
                     for i in range(sigmas_history.shape[0]):
                         alphas = 1 / (1 + np.exp(-sigmas_history[i, :]))
-                        plt.plot(alphas, label='Alpha {}'.format(i+1))
+                        plt.plot(alphas[:epoch+1], label='Alpha {}'.format(i+1))
                     plt.legend(fontsize=16, title='Alpha values', title_fontsize=20)
                     plt.xlabel('epochs', fontdict={'size':16})
                     plt.ylabel('alpha', fontdict={'size':16})
