@@ -249,17 +249,21 @@ def reduce_dimensions(embeddings, technique='pca', n_components=3):
     reduced_embeddings = reducer.fit_transform(embeddings)
     return reduced_embeddings
 
-def visualize_embedding_space(states, save_dir, alphas=None, variable_name='embedding', title='Embedding Space Trajectory', technique='pca'):
+from matplotlib.animation import PillowWriter, FuncAnimation
+
+def visualize_embedding_space(states, save_dir, alphas=None, variable_name='embedding', explain='', technique='pca', rotation_speed=5, total_rotation=360):
     """
-    Visualize the trajectory of embeddings in a 3D space using specified dimensionality reduction technique.
+    Visualize the trajectory of embeddings in a 3D space using specified dimensionality reduction technique and save as a GIF showing the plot rotating slowly.
 
     Args:
-    - embeddings: A numpy array of shape (num_samples, embedding_dim).
+    - states: A numpy array of shape (num_samples, embedding_dim).
     - alphas: Optional. A numpy array of alpha values for coloring.
     - save_dir: Directory to save the plot.
     - variable_name: Name of the variable to be used in the plot title.
-    - title: Title of the plot.
+    - explain: Additional explanation for the title.
     - technique: Dimensionality reduction technique ('pca' or 'tsne').
+    - rotation_speed: Degrees to rotate the plot for each frame (lower value for slower rotation).
+    - total_rotation: Total degrees of rotation for the GIF.
     """
     reduced_embeddings = reduce_dimensions(states, technique=technique)
 
@@ -274,16 +278,24 @@ def visualize_embedding_space(states, save_dir, alphas=None, variable_name='embe
     if alphas is not None:
         colors = [plt.cm.viridis(alpha) for alpha in alphas]
         for i in range(len(xs) - 1):
-            ax.plot(xs[i:i+2], ys[i:i+2], zs[i:i+2], marker='o', color=colors[i])
+            ax.plot(xs[i:i+2], ys[i:i+2], zs[i:i+2], color=colors[i])
     else:
-        ax.plot(xs, ys, zs, marker='o')
+        ax.plot(xs, ys, zs)
 
     ax.set_xlabel('Component 1')
     ax.set_ylabel('Component 2')
     ax.set_zlabel('Component 3')
-    plt.title(title)
+    plt.title('Trajectory of {} in {} {} space'.format(variable_name, explain.upper(), technique.upper()))
 
-    fig_file = os.path.join(save_dir, f'vis_{variable_name}_space_trajectory_{technique}_{technique}.png')
-    plt.savefig(fig_file)
+    # Function to update the plot for each frame
+    def update(frame):
+        ax.view_init(30, frame)
+        return fig,
+
+    # Creating animation
+    anim = FuncAnimation(fig, update, frames=np.arange(0, total_rotation, rotation_speed), interval=200, blit=True)  # increased interval for slower rotation
+    fig_file = os.path.join(save_dir, f'vis_{variable_name}_space_trajectory_{technique}.gif')
+    anim.save(fig_file, writer=PillowWriter(fps=10))
     plt.close()
+
 

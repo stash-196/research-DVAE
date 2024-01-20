@@ -76,16 +76,28 @@ if __name__ == '__main__':
     cfg = learning_algo.cfg
     print('Total params: %.2fM' % (sum(p.numel() for p in dvae.parameters()) / 1000000.0))
 
+
+    data_dir = cfg.get('User', 'data_dir')
+    x_dim = cfg.getint('Network', 'x_dim')
+    num_workers = cfg.getint('DataFrame', 'num_workers')
+    sample_rate = cfg.getint('DataFrame', 'sample_rate')
+    skip_rate = cfg.getint('DataFrame', 'skip_rate')
+    observation_process = cfg.get('DataFrame', 'observation_process')
+    overlap = cfg.getboolean('DataFrame', 'overlap')
+
     if cfg['DataFrame']["dataset_name"] == "Sinusoid":
         train_dataloader, val_dataloader, train_num, val_num = sinusoid_dataset.build_dataloader(cfg, device)
     elif cfg['DataFrame']["dataset_name"] == "Lorenz63":
-        train_dataloader, val_dataloader, train_num, val_num = lorenz63_dataset.build_dataloader(cfg, device)
+        # Load test dataset
+        test_dataset = lorenz63_dataset.Lorenz63(path_to_data=data_dir, split='test', seq_len=None, x_dim=x_dim, sample_rate=sample_rate, observation_process=observation_process, device=device, overlap=overlap, skip_rate=skip_rate, val_indices=1)
+        # Build test dataloader
+        test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=num_workers)
     else:
         raise ValueError("Unsupported dataset_name in configuration file.")
 
     overlap = cfg['DataFrame'].getboolean('overlap')
 
-    test_num = len(val_dataloader.dataset)
+    test_num = len(test_dataloader.dataset)
     print('Test samples: {}'.format(test_num))
 
     # Check if "alpha" exists in the config.ini under the [Network] section
@@ -96,8 +108,9 @@ if __name__ == '__main__':
     RMSE = 0
     MSE = 0
     MY_MSE = 0
+
     with torch.no_grad():
-        for i, batch_data in tqdm(enumerate(val_dataloader)):
+        for i, batch_data in tqdm(enumerate(test_dataloader)):
 
             batch_data = batch_data.to(device)
             # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
@@ -119,28 +132,39 @@ if __name__ == '__main__':
                 # Plot the spectral analysis
                 autonomous_mode_selector = create_autonomous_mode_selector(seq_len, 'half_half').astype(bool)
                 recon_series = dvae(batch_data, mode_selector=autonomous_mode_selector)
-                # recon data for teacher forcing mode
-                recon_teacherforced_series = recon_series[~autonomous_mode_selector, :1, :].reshape(-1).cpu().numpy()
-                visualize_spectral_analysis(true_series[~autonomous_mode_selector], recon_teacherforced_series, os.path.dirname(params['saved_dict']), explain='teacherforced')
-                # recon data for autonomous mode
-                recon_autonomous_series = recon_series[autonomous_mode_selector, :1, :].reshape(-1).cpu().numpy()
-                visualize_spectral_analysis(true_series[autonomous_mode_selector], recon_autonomous_series, os.path.dirname(params['saved_dict']), explain='autonomous')                
 
-                # visualize the hidden states
-                visualize_variable_evolution(dvae.h, os.path.dirname(params['saved_dict']), variable_name='hidden', alphas=alphas_per_unit)
-                visualize_embedding_space(dvae.h[:,0,:], os.path.dirname(params['saved_dict']), variable_name='hidden', alphas=alphas_per_unit)
-                visualize_embedding_space(dvae.h[:,0,:], os.path.dirname(params['saved_dict']), variable_name='hidden', alphas=alphas_per_unit, technique='tsne')
+                # Create a dictionary to map mode names to their series and selectors
+                modes = {
+                    'teacherforced': {
+                        'series': recon_series[~autonomous_mode_selector, :1, :].reshape(-1).cpu().numpy(),
+                        'selector': ~autonomous_mode_selector
+                    },
+                    'autonomous': {
+                        'series': recon_series[autonomous_mode_selector, :1, :].reshape(-1).cpu().numpy(),
+                        'selector': autonomous_mode_selector
+                    }
+                }
+                show_limited_seq_len = min(1000, seq_len)
+                show_limited_seq_len_halfhalf_idx = range(seq_len // 2 - show_limited_seq_len, seq_len // 2 + show_limited_seq_len)
+                
+                for mode_name, mode_data in modes.items():
+                    visualize_spectral_analysis(true_series[mode_data['selector']], mode_data['series'], os.path.dirname(params['saved_dict']), explain='teacherforced')
 
-                # visualize the x_features
-                visualize_variable_evolution(dvae.feature_x, os.path.dirname(params['saved_dict']), variable_name='x_features')
+                    # visualize the hidden states
+                    visualize_variable_evolution(dvae.h[mode_data['selector'], :, :], os.path.dirname(params['saved_dict']), variable_name=f'hidden_{mode_name}', alphas=alphas_per_unit)
+                    visualize_embedding_space(dvae.h[mode_data['selector'],0,:], os.path.dirname(params['saved_dict']), variable_name=f'hidden_{mode_name}', alphas=alphas_per_unit)
+                    visualize_embedding_space(dvae.h[mode_data['selector'],0,:], os.path.dirname(params['saved_dict']), variable_name=f'hidden_{mode_name}', alphas=alphas_per_unit, technique='tsne')
 
-                # Check if the model has a z variable
-                if hasattr(dvae, 'z_mean'):
-                    # visualize the latent states
-                    visualize_variable_evolution(dvae.z_mean, os.path.dirname(params['saved_dict']), variable_name='z_mean_posterior')
-                    visualize_variable_evolution(dvae.z_logvar, os.path.dirname(params['saved_dict']), variable_name='z_logvar_posterior')
-                    visualize_variable_evolution(dvae.z_mean_p, os.path.dirname(params['saved_dict']), variable_name='z_mean_prior')
-                    visualize_variable_evolution(dvae.z_logvar_p, os.path.dirname(params['saved_dict']), variable_name='z_logvar_prior')
+                    # visualize the x_features
+                    visualize_variable_evolution(dvae.feature_x[mode_data['selector'],:,:], os.path.dirname(params['saved_dict']), variable_name=f'x_features_{mode_name}')
+
+                    # Check if the model has a z variable
+                    if hasattr(dvae, 'z_mean'):
+                        # visualize the latent states
+                        visualize_variable_evolution(dvae.z_mean[mode_data['selector'],:,:], os.path.dirname(params['saved_dict']), variable_name=f'z_mean_posterior_{mode_name}')
+                        visualize_variable_evolution(dvae.z_logvar[mode_data['selector'],:,:], os.path.dirname(params['saved_dict']), variable_name=f'z_logvar_posterior_{mode_name}')
+                        visualize_variable_evolution(dvae.z_mean_p[mode_data['selector'],:,:], os.path.dirname(params['saved_dict']), variable_name=f'z_mean_prior_{mode_name}')
+                        visualize_variable_evolution(dvae.z_logvar_p[mode_data['selector'],:,:], os.path.dirname(params['saved_dict']), variable_name=f'z_logvar_prior_{mode_name}')
 
 
                 autonomous_mode_selector = create_autonomous_mode_selector(seq_len, 'half_half')

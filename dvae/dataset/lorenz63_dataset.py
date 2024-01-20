@@ -39,8 +39,8 @@ def build_dataloader(cfg, device):
         data_cfgs['s_dim'] = False
   
     # Load dataset
-    train_dataset = Lorenz63(path_to_data=data_dir, split=0, seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate, skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap, long=long, data_cfgs=data_cfgs)
-    val_dataset = Lorenz63(path_to_data=data_dir, split=0, seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate, skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap, long=long, data_cfgs=data_cfgs)
+    train_dataset = Lorenz63(path_to_data=data_dir, split='train', seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate, skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap, long=long, data_cfgs=data_cfgs)
+    val_dataset = Lorenz63(path_to_data=data_dir, split='valid', seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate, skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap, long=long, data_cfgs=data_cfgs)
 
 
     train_num = train_dataset.__len__()    
@@ -55,7 +55,7 @@ def build_dataloader(cfg, device):
 
 # define a class for Lorenz63 dataset in the same style as the above HumanPoseXYZ, dataset
 class Lorenz63(Dataset):
-    def __init__(self, path_to_data, split, seq_len, x_dim, sample_rate, skip_rate, val_indices, observation_process, device, overlap, long, data_cfgs):
+    def __init__(self, path_to_data, split, seq_len, x_dim, sample_rate, skip_rate, val_indices, observation_process, device, overlap):
         """
         :param path_to_data: path to the data folder
         :param split: train, test or val
@@ -74,16 +74,15 @@ class Lorenz63(Dataset):
         self.val_indices = val_indices
         self.observation_process = observation_process
         self.overlap = overlap
-        self.long = long
-        self.data_cfgs = data_cfgs
-        
-        self.seq = {}
-        self.data_idx = []
 
         self.device = device
         
         # read motion data from pickle file
-        filename = '{0}/lorenz63/dataset.pkl'.format(self.path_to_data)
+        if split == 'test':
+            filename = '{0}/lorenz63/dataset_test.pkl'.format(self.path_to_data)
+        else:
+            filename = '{0}/lorenz63/dataset.pkl'.format(self.path_to_data)
+
         with open(filename, 'rb') as f:
             the_sequence = np.array(pickle.load(f))
         
@@ -113,19 +112,22 @@ class Lorenz63(Dataset):
         
         self.seq = torch.from_numpy(the_sequence).float().to(device)
         
-        # Determine indices for training and validation sets
-        num_frames = self.seq.shape[0]
-        all_indices = data_utils.find_indices(num_frames, self.seq_len, num_frames // self.seq_len)
-        train_indices, validation_indices = self.split_dataset(all_indices, self.val_indices)
+        # Use entire sequence if seq_len is None
+        if seq_len is None:
+            self.seq_len = len(self.seq)
+            self.data_idx = [0]  # Only one index representing the start of the entire sequence
+        else:
+            # Determine indices for training and validation sets
+            num_frames = self.seq.shape[0]
+            all_indices = data_utils.find_indices(num_frames, self.seq_len, num_frames // self.seq_len)
+            train_indices, validation_indices = self.split_dataset(all_indices, self.val_indices)
+            # Select appropriate indices based on the split
+            if self.split == 'train': # for train and test
+                valid_frames = train_indices
+            else: # for validation
+                valid_frames = validation_indices
 
-
-        # Select appropriate indices based on the split
-        if self.split <= 1: # for train and test
-            valid_frames = train_indices
-        else: # for validation
-            valid_frames = validation_indices
-
-        self.data_idx = list(valid_frames)
+            self.data_idx = list(valid_frames)
 
     def apply_observation_process(self, sequence):
         """
@@ -171,5 +173,6 @@ class Lorenz63(Dataset):
     
     def __getitem__(self, index):
         start_frame = self.data_idx[index]
-        return self.seq[start_frame:start_frame + self.seq_len]
+        end_frame = min(start_frame + self.seq_len, len(self.seq))
+        return self.seq[start_frame:end_frame]
 
