@@ -25,10 +25,11 @@ import matplotlib.pyplot as plt
 from dvae.learning_algo import LearningAlgorithm
 from dvae.learning_algo_ss import LearningAlgorithm_ss
 from dvae.dataset import sinusoid_dataset, lorenz63_dataset
-from dvae.utils import EvalMetrics, loss_MSE, create_autonomous_mode_selector, visualize_variable_evolution, visualize_sequences, visualize_spectral_analysis, visualize_teacherforcing_2_autonomous, visualize_embedding_space, visualize_accuracy_over_time
+from dvae.utils import EvalMetrics, loss_MSE, create_autonomous_mode_selector, visualize_variable_evolution, visualize_sequences, visualize_spectral_analysis, visualize_teacherforcing_2_autonomous, visualize_embedding_space, visualize_accuracy_over_time, visualize_delay_embedding, visualize_alpha_history
 from torch.nn.functional import mse_loss
 import plotly.graph_objects as go
 import plotly.express as px
+import pickle
 
 
 class Options:
@@ -118,9 +119,24 @@ if __name__ == '__main__':
     if 'Network' in cfg and 'alphas' in cfg['Network']:
         alphas_per_unit = dvae.alphas_per_unit()
 
-    RMSE = 0
-    MSE = 0
-    MY_MSE = 0
+
+    ############################################################################    
+    # Path to the directory where the model and loss_model.pckl are saved
+    save_dir = os.path.dirname(params['saved_dict'])
+    loss_file = os.path.join(save_dir, 'loss_model.pckl')
+
+    # Check if the loss_model.pckl file exists
+    if os.path.isfile(loss_file):
+        print(f"Loading loss data from {loss_file}")
+        with open(loss_file, 'rb') as f:
+            # Load the data
+            loaded_data = pickle.load(f)
+            
+    else:
+        print(f"No loss data file found at {loss_file}")
+
+    ############################################################################
+        
 
     def calculate_expected_accuracy(true_data, reconstructed_data, accuracy_measure):
         """
@@ -192,6 +208,55 @@ if __name__ == '__main__':
 
     with torch.no_grad():
 
+        # Visualize results
+        save_dir = os.path.dirname(params['saved_dict'])
+
+
+        ############################################################################
+
+        # Prepare the long sequence data
+        batch_data_long = next(iter(test_dataloader_long))  # Single batch for demonstration
+        batch_data_long = batch_data_long.to(device)
+        # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
+        batch_data_long = batch_data_long.permute(1, 0, 2)
+        seq_len_long, batch_size_long, _ = batch_data_long.shape
+        half_point_long = seq_len_long // 2
+        # Plot the spectral analysis
+        autonomous_mode_selector_long = create_autonomous_mode_selector(seq_len_long, 'half_half').astype(bool)
+        recon_data_long = dvae(batch_data_long, mode_selector=autonomous_mode_selector_long)
+
+
+        # Visualize the spectral analysis
+        long_data_lst = [batch_data_long[:,0,:].reshape(-1), recon_data_long[~autonomous_mode_selector_long,0,:].reshape(-1), recon_data_long[autonomous_mode_selector_long,0,:].reshape(-1)]
+        name_lst = ['true', 'teacher-forced', 'autonomous']        
+        colors_lst = ['blue', 'green', 'red']
+
+        sampling_rate = 0.25
+        power_spectrum_lst, periods = visualize_spectral_analysis(data_lst=long_data_lst, name_lst=name_lst, colors_lst=colors_lst, save_dir=save_dir, sampling_rate=sampling_rate, max_sequences=5000)
+
+        # Visualize the alphas against the power spectral density
+        if 'Network' in cfg and 'alphas' in cfg['Network']:
+            sigmas_history = loaded_data['sigmas_history']
+            kl_warm_epochs = loaded_data['kl_warm_epochs']            
+            # Visualize the alphas
+            visualize_alpha_history(sigmas_history=sigmas_history, power_spectrum=power_spectrum_lst[0], periods=periods, sampling_rate=sampling_rate, save_dir=save_dir, kl_warm_epochs=kl_warm_epochs)
+
+        time_delay = 10
+        delay_emedding_dimensions = 3
+        visualize_delay_embedding(observation=batch_data_long[:,0,:].reshape(-1), delay=time_delay, dimensions=delay_emedding_dimensions, save_dir=save_dir, variable_name='true_signal')
+        visualize_delay_embedding(observation=recon_data_long[~autonomous_mode_selector_long,0,:].reshape(-1), delay=time_delay, dimensions=delay_emedding_dimensions, save_dir=save_dir, variable_name='teacher-forced_reconstruction', base_color='Greens')
+        visualize_delay_embedding(observation=recon_data_long[autonomous_mode_selector_long,0,:].reshape(-1), delay=time_delay, dimensions=delay_emedding_dimensions, save_dir=save_dir, variable_name='autonomous_reconstruction', base_color='Reds')
+
+        # Plot the reconstruction vs true sequence
+        visualize_teacherforcing_2_autonomous(batch_data_long, dvae, mode_selector=autonomous_mode_selector_long, save_path=save_dir, explain='final_long')
+
+        # visualize the hidden states 3d
+        visualize_embedding_space(dvae.h[~autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_teacher-forced', base_color='Greens')
+        visualize_embedding_space(dvae.h[autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_autonomous', base_color='Reds')
+        visualize_embedding_space(dvae.h[~autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_teacher-forced', technique='tsne', base_color='Greens')
+        visualize_embedding_space(dvae.h[autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_autonomous', technique='tsne', base_color='Reds')
+
+
 
 
         ############################################################################
@@ -223,13 +288,11 @@ if __name__ == '__main__':
         save_dir = os.path.dirname(params['saved_dict'])
 
         visualize_accuracy_over_time(expected_rmse, expected_rmse_variance, save_dir, measure='rsme', num_batches=batch_size, num_iter=num_iterations, explain="over multiple series", autonomous_mode_selector=expanded_autonomous_mode_selector)
-        # visualize_accuracy_over_time(expected_rmse_single, expected_rmse_variance_single, save_dir, measure='rsme', num_samples=batch_size, explain="over single series", autonomous_mode_selector=expanded_autonomous_mode_selector)
         visualize_accuracy_over_time(expected_r2, expected_r2_variance, save_dir, measure='r2', num_batches=batch_size, num_iter=num_iterations, explain="over multiple series", autonomous_mode_selector=expanded_autonomous_mode_selector)
-        # visualize_accuracy_over_time(expected_r2_single, expected_r2_variance_single, save_dir, measure='r2', num_samples=batch_size, explain="over single series", autonomous_mode_selector=expanded_autonomous_mode_selector)
+
 
         # visualize the hidden states
         visualize_variable_evolution(dvae.h, batch_data=batch_data, save_dir=save_dir, variable_name=f'hidden', alphas=alphas_per_unit, add_lines_lst=[half_point])
-
 
         # visualize the x_features
         visualize_variable_evolution(dvae.feature_x, batch_data=batch_data, save_dir=save_dir, variable_name=f'x_features', add_lines_lst=[half_point])
@@ -245,40 +308,4 @@ if __name__ == '__main__':
 
         # Plot the reconstruction vs true sequence
         visualize_teacherforcing_2_autonomous(batch_data, dvae, mode_selector=autonomous_mode_selector, save_path=save_dir, explain='final')
-
-        ############################################################################
-
-        # Visualize results
-        save_dir = os.path.dirname(params['saved_dict'])
-
-
-        # Prepare the long sequence data
-        batch_data_long = next(iter(test_dataloader_long))  # Single batch for demonstration
-        batch_data_long = batch_data_long.to(device)
-        # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
-        batch_data_long = batch_data_long.permute(1, 0, 2)
-        seq_len_long, batch_size_long, _ = batch_data_long.shape
-        half_point_long = seq_len_long // 2
-        # Plot the spectral analysis
-        autonomous_mode_selector_long = create_autonomous_mode_selector(seq_len_long, 'half_half').astype(bool)
-        recon_data_long = dvae(batch_data_long, mode_selector=autonomous_mode_selector_long)
-
-
-        # Visualize the spectral analysis
-        long_data_lst = [batch_data_long[:,0,:].reshape(-1), recon_data_long[~autonomous_mode_selector_long,0,:].reshape(-1), recon_data_long[autonomous_mode_selector_long,0,:].reshape(-1)]
-        name_lst = ['true', 'teacher-forced', 'autonomous']        
-        colors_lst = ['blue', 'green', 'red']
-        visualize_spectral_analysis(data_lst=long_data_lst, name_lst=name_lst, colors_lst=colors_lst, save_dir=save_dir, explain='teacherforced', max_sequences=5000)
-
-        # Plot the reconstruction vs true sequence
-        visualize_teacherforcing_2_autonomous(batch_data_long, dvae, mode_selector=autonomous_mode_selector_long, save_path=save_dir, explain='final_long')
-
-        # visualize the hidden states 3d
-        visualize_embedding_space(dvae.h[~autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_teacher-forced', base_color='Greens')
-        visualize_embedding_space(dvae.h[autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_autonomous', base_color='Reds')
-        visualize_embedding_space(dvae.h[~autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_teacher-forced', technique='tsne', base_color='Greens')
-        visualize_embedding_space(dvae.h[autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_autonomous', technique='tsne', base_color='Reds')
-
-
-
 

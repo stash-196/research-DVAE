@@ -129,7 +129,7 @@ def visualize_sequences(true_data, recon_data, mode_selector, save_dir, name='')
 #     fig.write_image(os.path.join(save_dir, f'vis_pred_true_series{name}.svg'), format='svg')
 
 
-def visualize_spectral_analysis(data_lst, name_lst, colors_lst, save_dir, sampling_rate=0.25, explain='', max_sequences=None):
+def visualize_spectral_analysis(data_lst, name_lst, colors_lst, save_dir, sampling_rate, explain='', max_sequences=None):
     # Limit the number of sequences if max_sequences is specified
     if max_sequences is not None and len(data_lst) > max_sequences:
         data_lst = data_lst[:max_sequences]
@@ -141,6 +141,7 @@ def visualize_spectral_analysis(data_lst, name_lst, colors_lst, save_dir, sampli
     num_datasets = len(data_lst)
     fig, axs = plt.subplots(num_datasets, 2, figsize=(20, 6 * num_datasets))  # 2 columns for Power and Phase spectra
 
+    power_spectrum_lst = []
     for idx, data in enumerate(data_lst):
         padded_data = np.pad(data, (0, max_length - len(data)), mode='constant')  # Pad the signal
         fft = np.fft.fft(padded_data)
@@ -152,6 +153,7 @@ def visualize_spectral_analysis(data_lst, name_lst, colors_lst, save_dir, sampli
         nonzero_indices = np.where(freqs > 0)
 
         power_spectrum = np.abs(fft[nonzero_indices]) ** 2  # Power spectrum
+        power_spectrum_lst.append(power_spectrum)
         phase_spectrum = np.angle(fft[nonzero_indices])  # Phase spectrum
 
         # Color for the current dataset
@@ -179,7 +181,7 @@ def visualize_spectral_analysis(data_lst, name_lst, colors_lst, save_dir, sampli
     print(f"Spectral analysis plots saved at: {fig_file}")
 
     # return power spectra, phase spectra, and periods
-    return 
+    return power_spectrum_lst, periods[nonzero_indices]
 
 
 def visualize_variable_evolution(states, batch_data, save_dir, variable_name='h', alphas=None, add_lines_lst=[]):
@@ -302,7 +304,7 @@ def visualize_embedding_space(states, save_dir, variable_name='embedding', expla
     ax.set_xlabel('Component 1')
     ax.set_ylabel('Component 2')
     ax.set_zlabel('Component 3')
-    plt.title('Trajectory of {} in {} {} space'.format(variable_name.replace('_', ' '), explain.upper(), technique.upper()))
+    plt.title('Trajectory of {} in {} {} space'.format(variable_name.replace('_', ' '), explain.upper(), technique.upper()), fontsize=16)
 
     # Function to update the plot for each frame
     def update(frame):
@@ -370,3 +372,143 @@ def visualize_accuracy_over_time(accuracy_values, variance_values, save_dir, mea
     plt.savefig(fig_file)
     print(f"{measure} plot saved at: {fig_file}")
     plt.close()
+
+
+def visualize_delay_embedding(observation, delay, dimensions, save_dir, variable_name, explain='', base_color='Blues', rotation_speed=5, total_rotation=360):
+    n = len(observation)
+    embedding_length = n - (dimensions - 1) * delay
+    if embedding_length <= 0:
+        raise ValueError("Delay and dimensions are too large for the length of the observation array.")
+
+    embedded = np.empty((embedding_length, dimensions))
+    for i in range(dimensions):
+        embedded[:, i] = observation[i * delay: i * delay + embedding_length]
+
+    if dimensions != 3:
+        raise NotImplementedError("Rotation and color gradient for dimensions other than 3 is not implemented.")
+
+    fig = plt.figure(figsize=(12, 8))
+    ax = fig.add_subplot(111, projection='3d')
+
+    cmap = plt.get_cmap(base_color)
+    zs = embedded[:, 2]
+    z_min, z_max = zs.min(), zs.max()
+
+    for i in range(1, len(embedded)):
+        x = embedded[i-1:i+1, 0]
+        y = embedded[i-1:i+1, 1]
+        z = embedded[i-1:i+1, 2]
+        color_value = (z.mean() - z_min) / (z_max - z_min)
+        ax.plot(x, y, z, color=cmap(color_value))
+
+    ax.set_xlabel('X(t)')
+    ax.set_ylabel('X(t + delay)')
+    ax.set_zlabel('X(t + 2 * delay)')
+    title = f'Delay Embedding of {variable_name.capitalize()} {explain} (Delay: {delay})'
+    plt.title(title, fontsize=16)
+
+    def update(frame):
+        ax.view_init(30, frame)
+        return fig,
+
+    anim = FuncAnimation(fig, update, frames=np.arange(0, total_rotation, rotation_speed), interval=200, blit=True)
+    fig_file = os.path.join(save_dir, f'vis_delay_embedding_of_{variable_name}_τ{delay}_{explain}.gif')
+
+    print(f"Saving animation at: {fig_file}")
+    start_time = time.time()
+    anim.save(fig_file, writer=PillowWriter(fps=10))
+    end_time = time.time()
+
+    print(f"Animation saved in {end_time - start_time:.2f} seconds")
+    
+    plt.close()
+
+
+
+def visualize_alpha_history(sigmas_history, power_spectrum, periods, save_dir, sampling_rate, kl_warm_epochs=None, explain=''):
+    """
+    Visualize the history of alpha values over epochs and compare with power spectrum, with aligned y-axis scales and additional period scale.
+
+    Args:
+    - sigmas_history: Numpy array containing the history of sigma values.
+    - power_spectrum: Power spectrum of the signal.
+    - periods: Corresponding periods for the power spectrum.
+    - save_dir: Directory to save the plot.
+    - kl_warm_epochs: List of epochs where KL warm-up occurs.
+    - sampling_rate: Sampling rate of the signal.
+    - explain: Additional explanation for the plot title.
+    """
+    plt.clf()
+
+    # Define figure and subplots with different widths
+    fig = plt.figure(figsize=(10, 10))
+    gs = fig.add_gridspec(1, 2, width_ratios=[3, 1])
+    ax1 = fig.add_subplot(gs[0])
+    ax2 = fig.add_subplot(gs[1])
+
+    plt.rcParams['font.size'] = 12
+
+    # Calculate alphas from periods for scale alignment
+    alphas_from_periods = sampling_rate / periods
+
+    periods_max, periods_min = np.max(periods), np.min(periods)
+
+    alpha_range_min = 1 / (1 + np.exp(-np.max(sigmas_history))) / 10
+    alpha_range_max = 1.1
+
+    ylim_max = max(sampling_rate/alpha_range_min, periods_max)
+    ylim_min = min(sampling_rate/alpha_range_max, periods_min)
+
+    # Left subplot: Alpha values over epochs
+
+    num_alphas = sigmas_history.shape[0]
+    for i in range(num_alphas):
+        alphas = 1 / (1 + np.exp(-sigmas_history[i]))
+        periods_from_alpha = sampling_rate / alphas
+        ax1.plot(periods_from_alpha, label=f'α {i+1}')
+
+    if kl_warm_epochs:
+        for kl_warm_epoch in kl_warm_epochs:
+            ax1.axvline(x=kl_warm_epoch, color='r', linestyle='--')
+
+    ax1.legend(fontsize=16, title='α values', title_fontsize=20)
+    ax1.set_xlabel('Epochs', fontsize=16)
+    ax1.set_ylabel('Period (sec)', fontsize=16)
+    ax1.set_yscale('log')
+    ax1.set_ylim([ylim_min, ylim_max])  # Align y-axis range with right subplot
+    ax1.grid(True)
+
+    # Adding a secondary y-axis for the original periods
+    ax1_right = ax1.twinx()
+    ax1_right.set_ylabel('α =Δt/T', fontsize=16)
+    ax1_right.set_yscale('log')
+    ax1_right.set_ylim(sampling_rate/ylim_min, sampling_rate/ylim_max)  # Set the period scale
+    ax1_right.invert_yaxis()  # Invert to align with the alpha scale
+
+    # Right subplot: Power spectrum with periods on y-axis
+    ax2.loglog(power_spectrum, periods, color='blue')
+    ax2.set_xlabel('Amplitude', fontsize=16)
+    ax2.set_ylabel('Period (sec)', fontsize=16)
+    ax2.set_ylim([ylim_min, ylim_max])  # Align y-axis range with left subplot
+    ax2.grid(True)
+    ax2.invert_xaxis()  # Flip x-axis
+
+    # Adding a secondary y-axis for the original periods
+    ax2_right = ax2.twinx()
+    ax2_right.set_ylabel('Frequency (Hz)', fontsize=16)
+    ax2_right.set_yscale('log')
+    ax2_right.set_ylim(1/ylim_min, 1/ylim_max)  # Set the period scale
+    ax2_right.invert_yaxis()  # Invert to align with the alpha scale
+
+    # # Add vertical title to the right of the right subplot
+    # fig.subplots_adjust(right=0.85)
+    # ax2.text(1.1, 0.5, 'Power Spectrum', va='center', ha='left', rotation=90, transform=ax2.transAxes, fontsize=16)
+
+    # Add overall title
+    plt.suptitle(f'α History and Power Spectrum {explain}', fontsize=20, x=0.5, y=1.02)
+
+    plt.tight_layout()
+    fig_file = os.path.join(save_dir, f'vis_alpha_vs_power_spectrum_{explain}.png')
+    plt.savefig(fig_file, bbox_inches='tight')
+    plt.close()
+    print(f"Alpha vs Power Spectrum plot saved at: {fig_file}")

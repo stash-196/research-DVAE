@@ -485,15 +485,23 @@ class LearningAlgorithm():
         val_recon = val_recon[:epoch+1]
         val_kl = val_kl[:epoch+1]
         if self.optimize_alphas:
-            sigmas_history = sigmas_history[:, :epoch+1]            
+            sigmas_history = sigmas_history[:, :epoch+1]
         loss_file = os.path.join(save_dir, 'loss_model.pckl')
+
+        # create dictionary to save(pickle) the loss
+        pickle_dict = {'train_loss': train_loss, 'val_loss': val_loss, 'train_recon': train_recon, 'train_kl': train_kl, 'val_recon': val_recon, 'val_kl': val_kl, 'kl_warm_epochs': kl_warm_epochs}
+        if self.optimize_alphas:
+            pickle_dict['sigmas_history'] = sigmas_history
+
         with open(loss_file, 'wb') as f:
-            if self.optimize_alphas:
-                pickle.dump([train_loss, val_loss, train_recon, train_kl, val_recon, val_kl, sigmas_history], f)
-            else:
-                pickle.dump([train_loss, val_loss, train_recon, train_kl, val_recon, val_kl], f)
+            # if self.optimize_alphas:
+            #     pickle.dump([train_loss, val_loss, train_recon, train_kl, val_recon, val_kl, sigmas_history], f)
+            # else:
+            #     pickle.dump([train_loss, val_loss, train_recon, train_kl, val_recon, val_kl], f)
+            pickle.dump(pickle_dict, f)
 
-
+            print('Loss saved in: {}'.format(loss_file))
+            
 
 
         # run evaluation script

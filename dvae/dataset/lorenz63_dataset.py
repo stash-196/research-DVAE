@@ -23,9 +23,8 @@ def build_dataloader(cfg, device):
     skip_rate = cfg.getint('DataFrame', 'skip_rate')
     val_indices = cfg.getfloat('DataFrame', 'val_indices')
     observation_process = cfg.get('DataFrame', 'observation_process')
-    overlap = cfg.getboolean('DataFrame', 'overlap')
-  
-        
+    overlap = cfg.getboolean('DataFrame', 'overlap')  
+
     data_cfgs = {}
     # define long as a boolean if field exists
     if cfg.has_option('DataFrame', 'long'):
@@ -37,10 +36,10 @@ def build_dataloader(cfg, device):
         data_cfgs['s_dim'] = cfg.getint('DataFrame', 's_dim')
     else:
         data_cfgs['s_dim'] = False
-  
+
     # Load dataset
-    train_dataset = Lorenz63(path_to_data=data_dir, split='train', seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate, skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap, long=long, data_cfgs=data_cfgs)
-    val_dataset = Lorenz63(path_to_data=data_dir, split='valid', seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate, skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap, long=long, data_cfgs=data_cfgs)
+    train_dataset = Lorenz63(path_to_data=data_dir, split='train', seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate, skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap,)
+    val_dataset = Lorenz63(path_to_data=data_dir, split='valid', seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate, skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap,)
 
 
     train_num = train_dataset.__len__()    

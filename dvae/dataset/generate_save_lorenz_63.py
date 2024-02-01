@@ -231,3 +231,45 @@ plot_power_spectrum_subplots_loglog(np.array(l2.hist), explain='s10_r28_b8d3_tes
 
 
 # %%
+import numpy as np
+import plotly.graph_objects as go
+
+
+def plot_delay_embedding(observation, delay, dimensions):
+    """
+    Plots the delay embedding of a 1D observation with lines.
+
+    :param observation: 1D array of observations.
+    :param delay: Time delay for embedding.
+    :param dimensions: Number of embedding dimensions.
+    """
+    n = len(observation)
+    embedding_length = n - (dimensions - 1) * delay
+    if embedding_length <= 0:
+        raise ValueError("Delay and dimensions are too large for the length of the observation array.")
+
+    # Create the delay-embedded matrix
+    embedded = np.empty((embedding_length, dimensions))
+    for i in range(dimensions):
+        embedded[:, i] = observation[i * delay: i * delay + embedding_length]
+
+    # Plotting
+    if dimensions == 2:
+        fig = go.Figure(data=go.Scatter(x=embedded[:, 0], y=embedded[:, 1], mode='lines'))
+        fig.update_layout(title='2D Delay Embedding', xaxis_title='X(t)', yaxis_title='X(t + delay)')
+    elif dimensions == 3:
+        fig = go.Figure(data=go.Scatter3d(x=embedded[:, 0], y=embedded[:, 1], z=embedded[:, 2], mode='lines'))
+        fig.update_layout(title='3D Delay Embedding', scene=dict(xaxis_title='X(t)', yaxis_title='X(t + delay)', zaxis_title='X(t + 2 * delay)'))
+    else:
+        raise NotImplementedError("Plotting for dimensions higher than 3 is not implemented.")
+
+    fig.show()
+
+
+# Example usage
+# Assuming you have an array `x` from the Lorenz system:
+x = np.array(l1.hist)[:,0]
+plot_delay_embedding(x, delay=20, dimensions=3)
+
+
+# %%
