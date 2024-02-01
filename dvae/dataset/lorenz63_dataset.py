@@ -55,7 +55,7 @@ def build_dataloader(cfg, device):
 
 # define a class for Lorenz63 dataset in the same style as the above HumanPoseXYZ, dataset
 class Lorenz63(Dataset):
-    def __init__(self, path_to_data, split, seq_len, x_dim, sample_rate, skip_rate, val_indices, observation_process, device, overlap):
+    def __init__(self, path_to_data, split, seq_len, x_dim, sample_rate, skip_rate, val_indices, observation_process, device, overlap, shuffle=True):
         """
         :param path_to_data: path to the data folder
         :param split: train, test or val
@@ -74,7 +74,7 @@ class Lorenz63(Dataset):
         self.val_indices = val_indices
         self.observation_process = observation_process
         self.overlap = overlap
-
+        self.shuffle = shuffle
         self.device = device
         
         # read motion data from pickle file
@@ -159,12 +159,13 @@ class Lorenz63(Dataset):
         """
         return np.lib.stride_tricks.sliding_window_view(sequence, window_shape=window_size)
 
-    @staticmethod
-    def split_dataset(indices, val_indices):
+    def split_dataset(self, indices, val_indices):
         """
         Splits the dataset into training and validation sets.
         """
-        np.random.shuffle(indices)
+        # only shuffle when self.shuffle is True
+        if self.shuffle:
+            np.random.shuffle(indices)
         split_point = int(len(indices) * (1 - val_indices))
         return indices[:split_point], indices[split_point:]
 

@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 from dvae.learning_algo import LearningAlgorithm
 from dvae.learning_algo_ss import LearningAlgorithm_ss
 from dvae.dataset import sinusoid_dataset, lorenz63_dataset
-from dvae.utils import EvalMetrics, loss_MSE, create_autonomous_mode_selector, visualize_variable_evolution, visualize_sequences, visualize_spectral_analysis, visualize_teacherforcing_2_autonomous, visualize_embedding_space
+from dvae.utils import EvalMetrics, loss_MSE, create_autonomous_mode_selector, visualize_variable_evolution, visualize_sequences, visualize_spectral_analysis, visualize_teacherforcing_2_autonomous, visualize_embedding_space, visualize_accuracy_over_time
 from torch.nn.functional import mse_loss
 import plotly.graph_objects as go
 import plotly.express as px
@@ -84,21 +84,34 @@ if __name__ == '__main__':
     skip_rate = cfg.getint('DataFrame', 'skip_rate')
     observation_process = cfg.get('DataFrame', 'observation_process')
     overlap = cfg.getboolean('DataFrame', 'overlap')
+    seq_len = cfg.getint('DataFrame', 'sequence_len')
+
+
+    # specify seq_len for the visualization
+    seq_len = min(1000, seq_len)
 
     if cfg['DataFrame']["dataset_name"] == "Sinusoid":
         train_dataloader, val_dataloader, train_num, val_num = sinusoid_dataset.build_dataloader(cfg, device)
     elif cfg['DataFrame']["dataset_name"] == "Lorenz63":
         # Load test dataset
-        test_dataset = lorenz63_dataset.Lorenz63(path_to_data=data_dir, split='test', seq_len=None, x_dim=x_dim, sample_rate=sample_rate, observation_process=observation_process, device=device, overlap=overlap, skip_rate=skip_rate, val_indices=1)
+        test_dataset = lorenz63_dataset.Lorenz63(path_to_data=data_dir, split='test', seq_len=seq_len, x_dim=x_dim, sample_rate=sample_rate, observation_process=observation_process, device=device, overlap=overlap, skip_rate=skip_rate, val_indices=1, shuffle=False)
         # Build test dataloader
-        test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=num_workers)
+        test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=False, num_workers=num_workers)
+
+        # Load test dataset for long sequence
+        test_dataset_long = lorenz63_dataset.Lorenz63(path_to_data=data_dir, split='test', seq_len=None, x_dim=x_dim, sample_rate=sample_rate, observation_process=observation_process, device=device, overlap=overlap, skip_rate=skip_rate, val_indices=1, shuffle=False)
+        # Build test dataloader
+        test_dataloader_long = torch.utils.data.DataLoader(test_dataset_long, batch_size=1, shuffle=False, num_workers=num_workers)
+
     else:
         raise ValueError("Unsupported dataset_name in configuration file.")
 
     overlap = cfg['DataFrame'].getboolean('overlap')
 
     test_num = len(test_dataloader.dataset)
-    print('Test samples: {}'.format(test_num))
+    test_num_long = len(test_dataloader_long.dataset)
+
+    print('Test samples: {}, {}'.format(test_num, test_num_long))
 
     # Check if "alpha" exists in the config.ini under the [Network] section
     alphas_per_unit = None
@@ -109,84 +122,163 @@ if __name__ == '__main__':
     MSE = 0
     MY_MSE = 0
 
+    def calculate_expected_accuracy(true_data, reconstructed_data, accuracy_measure):
+        """
+        Calculate the expected accuracy measure over batch data.
+
+        Args:
+        - true_data: The true data in batch format (seq_len, batch_size, x_dim).
+        - reconstructed_data: The reconstructed data in the same format as true_data.
+        - accuracy_measure: Function to compute the accuracy measure (e.g., RMSE).
+
+        Returns:
+        - A tensor of accuracy values averaged over batches.
+        """
+        seq_len, batch_size, num_iterations, x_dim = true_data.shape
+
+        reshaped_true = true_data.reshape(seq_len * x_dim, batch_size, num_iterations)
+        reshaped_recon = reconstructed_data.reshape(seq_len * x_dim, batch_size, num_iterations)
+
+        accuracy_values = torch.zeros(seq_len * x_dim, device=true_data.device)
+        variance_values = torch.zeros(seq_len * x_dim, device=true_data.device)
+
+        for t in range(seq_len * x_dim):
+            accuracy_t = accuracy_measure(reshaped_true[t], reshaped_recon[t])
+            accuracy_values[t] = accuracy_t.mean()
+            variance_values[t] = accuracy_t.var()
+
+        return accuracy_values, variance_values
+
+
+    def rmse(true_data, pred_data):
+        """
+        Root Mean Squared Error (RMSE) calculation.
+
+        Args:
+        - true_data: True data tensor.
+        - pred_data: Predicted data tensor.
+
+        Returns:
+        - RMSE value.
+        """
+        return torch.sqrt(torch.mean((true_data - pred_data) ** 2, dim=-1))  # RMSE per batch item
+
+    def r_squared(true_data, pred_data, epsilon=1e-8):
+        """
+        Coefficient of Determination (R^2) calculation with stability check.
+
+        Args:
+        - true_data: True data tensor.
+        - pred_data: Predicted data tensor.
+        - epsilon: A small value to ensure numerical stability.
+
+        Returns:
+        - R^2 value.
+        """
+        ss_total = torch.sum((true_data - true_data.mean(dim=-1, keepdim=True)) ** 2, dim=-1)
+        ss_res = torch.sum((true_data - pred_data) ** 2, dim=-1)
+
+        # Avoid division by very small or zero values
+        stable_ss_total = torch.where(ss_total > epsilon, ss_total, torch.ones_like(ss_total) * epsilon)
+        r2 = 1 - ss_res / stable_ss_total
+        return r2  # R^2 per batch item
+
+
+
+    def expand_autonomous_mode_selector(selector, x_dim):
+        return np.repeat(selector, x_dim)
+
+
+
     with torch.no_grad():
-        for i, batch_data in tqdm(enumerate(test_dataloader)):
-
-            batch_data = batch_data.to(device)
-            # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
-            batch_data = batch_data.permute(1, 0, 2)
-            recon_batch_data = dvae(batch_data)
-            
-            rmse_recon = torch.sqrt(mse_loss(batch_data, recon_batch_data))  # Compute RMSE
-            mse_recon = mse_loss(batch_data, recon_batch_data)  # Compute MSE
-            MY_MSE = loss_MSE(batch_data, recon_batch_data)  # Compute MSE
-
-            seq_len, batch_size, x_dim = batch_data.shape
-            RMSE += rmse_recon.item() / (seq_len * batch_size)
-            MSE += mse_recon.item() / (seq_len * batch_size)
-            MY_MSE += MY_MSE.item() / (seq_len * batch_size)
-
-            if i == 0:
-                true_series = batch_data[:, 0, :].reshape(-1).cpu().numpy()
-
-                # Plot the spectral analysis
-                autonomous_mode_selector = create_autonomous_mode_selector(seq_len, 'half_half').astype(bool)
-                recon_series = dvae(batch_data, mode_selector=autonomous_mode_selector)
-
-                # Create a dictionary to map mode names to their series and selectors
-                modes = {
-                    'teacherforced': {
-                        'series': recon_series[~autonomous_mode_selector, :1, :].reshape(-1).cpu().numpy(),
-                        'selector': ~autonomous_mode_selector
-                    },
-                    'autonomous': {
-                        'series': recon_series[autonomous_mode_selector, :1, :].reshape(-1).cpu().numpy(),
-                        'selector': autonomous_mode_selector
-                    }
-                }
-                show_limited_seq_len = min(1000, seq_len)
-                show_limited_seq_len_halfhalf_idx = range(seq_len // 2 - show_limited_seq_len, seq_len // 2 + show_limited_seq_len)
-                
-                for mode_name, mode_data in modes.items():
-                    visualize_spectral_analysis(true_series[mode_data['selector']], mode_data['series'], os.path.dirname(params['saved_dict']), explain='teacherforced')
-
-                    # visualize the hidden states
-                    visualize_variable_evolution(dvae.h[mode_data['selector'], :, :], os.path.dirname(params['saved_dict']), variable_name=f'hidden_{mode_name}', alphas=alphas_per_unit)
-                    visualize_embedding_space(dvae.h[mode_data['selector'],0,:], os.path.dirname(params['saved_dict']), variable_name=f'hidden_{mode_name}', alphas=alphas_per_unit)
-                    visualize_embedding_space(dvae.h[mode_data['selector'],0,:], os.path.dirname(params['saved_dict']), variable_name=f'hidden_{mode_name}', alphas=alphas_per_unit, technique='tsne')
-
-                    # visualize the x_features
-                    visualize_variable_evolution(dvae.feature_x[mode_data['selector'],:,:], os.path.dirname(params['saved_dict']), variable_name=f'x_features_{mode_name}')
-
-                    # Check if the model has a z variable
-                    if hasattr(dvae, 'z_mean'):
-                        # visualize the latent states
-                        visualize_variable_evolution(dvae.z_mean[mode_data['selector'],:,:], os.path.dirname(params['saved_dict']), variable_name=f'z_mean_posterior_{mode_name}')
-                        visualize_variable_evolution(dvae.z_logvar[mode_data['selector'],:,:], os.path.dirname(params['saved_dict']), variable_name=f'z_logvar_posterior_{mode_name}')
-                        visualize_variable_evolution(dvae.z_mean_p[mode_data['selector'],:,:], os.path.dirname(params['saved_dict']), variable_name=f'z_mean_prior_{mode_name}')
-                        visualize_variable_evolution(dvae.z_logvar_p[mode_data['selector'],:,:], os.path.dirname(params['saved_dict']), variable_name=f'z_logvar_prior_{mode_name}')
-
-
-                autonomous_mode_selector = create_autonomous_mode_selector(seq_len, 'half_half')
-
-                # Plot the reconstruction vs true sequence
-                visualize_teacherforcing_2_autonomous(batch_data, dvae, mode_selector=autonomous_mode_selector, save_path=os.path.dirname(params['saved_dict']), explain='final')
 
 
 
+        ############################################################################
+        # Prepare shorter sequence data
+        batch_data = next(iter(test_dataloader))  # Single batch for demonstration
+        batch_data = batch_data.to(device)
+        # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
+        batch_data = batch_data.permute(1, 0, 2)
+        seq_len, batch_size, x_dim = batch_data.shape
+        half_point = seq_len // 2
+        num_iterations = 1000
+        # iterated batch data of single series To calculate the accuracy measure for the same time series 
+        batch_data_repeated = batch_data.repeat(1, num_iterations, 1)
+
+        autonomous_mode_selector = create_autonomous_mode_selector(seq_len, 'half_half').astype(bool)
+        expanded_autonomous_mode_selector = expand_autonomous_mode_selector(autonomous_mode_selector, x_dim)
+        recon_data_repeated = dvae(batch_data_repeated, mode_selector=autonomous_mode_selector)
+
+        batch_data_repeated = batch_data_repeated.reshape(seq_len, batch_size, num_iterations, x_dim)
+        recon_data_repeated = recon_data_repeated.reshape(seq_len, batch_size, num_iterations, x_dim)
+
+        # Calculate expected RMSE
+        expected_rmse, expected_rmse_variance = calculate_expected_accuracy(batch_data_repeated, recon_data_repeated, rmse)
+
+        # Calculate expected R^2
+        expected_r2, expected_r2_variance = calculate_expected_accuracy(batch_data_repeated, recon_data_repeated, r_squared)
+
+        # Visualize results
+        save_dir = os.path.dirname(params['saved_dict'])
+
+        visualize_accuracy_over_time(expected_rmse, expected_rmse_variance, save_dir, measure='rsme', num_batches=batch_size, num_iter=num_iterations, explain="over multiple series", autonomous_mode_selector=expanded_autonomous_mode_selector)
+        # visualize_accuracy_over_time(expected_rmse_single, expected_rmse_variance_single, save_dir, measure='rsme', num_samples=batch_size, explain="over single series", autonomous_mode_selector=expanded_autonomous_mode_selector)
+        visualize_accuracy_over_time(expected_r2, expected_r2_variance, save_dir, measure='r2', num_batches=batch_size, num_iter=num_iterations, explain="over multiple series", autonomous_mode_selector=expanded_autonomous_mode_selector)
+        # visualize_accuracy_over_time(expected_r2_single, expected_r2_variance_single, save_dir, measure='r2', num_samples=batch_size, explain="over single series", autonomous_mode_selector=expanded_autonomous_mode_selector)
+
+        # visualize the hidden states
+        visualize_variable_evolution(dvae.h, batch_data=batch_data, save_dir=save_dir, variable_name=f'hidden', alphas=alphas_per_unit, add_lines_lst=[half_point])
+
+
+        # visualize the x_features
+        visualize_variable_evolution(dvae.feature_x, batch_data=batch_data, save_dir=save_dir, variable_name=f'x_features', add_lines_lst=[half_point])
+
+        # Check if the model has a z variable
+        if hasattr(dvae, 'z_mean'):
+            # visualize the latent states
+            visualize_variable_evolution(dvae.z_mean, batch_data=batch_data, save_dir=save_dir, variable_name=f'z_mean_posterior', add_lines_lst=[half_point])
+            visualize_variable_evolution(dvae.z_logvar, batch_data=batch_data, save_dir=save_dir, variable_name=f'z_logvar_posterior', add_lines_lst=[half_point])
+            visualize_variable_evolution(dvae.z_mean_p, batch_data=batch_data, save_dir=save_dir, variable_name=f'z_mean_prior', add_lines_lst=[half_point])
+            visualize_variable_evolution(dvae.z_logvar_p, batch_data=batch_data, save_dir=save_dir, variable_name=f'z_logvar_prior', add_lines_lst=[half_point])
+
+
+        # Plot the reconstruction vs true sequence
+        visualize_teacherforcing_2_autonomous(batch_data, dvae, mode_selector=autonomous_mode_selector, save_path=save_dir, explain='final')
+
+        ############################################################################
+
+        # Visualize results
+        save_dir = os.path.dirname(params['saved_dict'])
+
+
+        # Prepare the long sequence data
+        batch_data_long = next(iter(test_dataloader_long))  # Single batch for demonstration
+        batch_data_long = batch_data_long.to(device)
+        # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
+        batch_data_long = batch_data_long.permute(1, 0, 2)
+        seq_len_long, batch_size_long, _ = batch_data_long.shape
+        half_point_long = seq_len_long // 2
+        # Plot the spectral analysis
+        autonomous_mode_selector_long = create_autonomous_mode_selector(seq_len_long, 'half_half').astype(bool)
+        recon_data_long = dvae(batch_data_long, mode_selector=autonomous_mode_selector_long)
+
+
+        # Visualize the spectral analysis
+        long_data_lst = [batch_data_long[:,0,:].reshape(-1), recon_data_long[~autonomous_mode_selector_long,0,:].reshape(-1), recon_data_long[autonomous_mode_selector_long,0,:].reshape(-1)]
+        name_lst = ['true', 'teacher-forced', 'autonomous']        
+        colors_lst = ['blue', 'green', 'red']
+        visualize_spectral_analysis(data_lst=long_data_lst, name_lst=name_lst, colors_lst=colors_lst, save_dir=save_dir, explain='teacherforced', max_sequences=5000)
+
+        # Plot the reconstruction vs true sequence
+        visualize_teacherforcing_2_autonomous(batch_data_long, dvae, mode_selector=autonomous_mode_selector_long, save_path=save_dir, explain='final_long')
+
+        # visualize the hidden states 3d
+        visualize_embedding_space(dvae.h[~autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_teacher-forced', base_color='Greens')
+        visualize_embedding_space(dvae.h[autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_autonomous', base_color='Reds')
+        visualize_embedding_space(dvae.h[~autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_teacher-forced', technique='tsne', base_color='Greens')
+        visualize_embedding_space(dvae.h[autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_autonomous', technique='tsne', base_color='Reds')
 
 
 
 
-    RMSE = RMSE / test_num
-    print('RMSE: {:.2f}'.format(RMSE))
-    print('MSE: {:.2f}'.format(MSE))
-    print('MY_MSE: {:.2f}'.format(MY_MSE))
-
-    results_path = os.path.join(os.path.dirname(params['saved_dict']), 'results.txt')
-    with open(results_path, 'w') as f:
-        f.write('RMSE: {:.2f}\n'.format(RMSE))
-        f.write('MSE: {:.2f}\n'.format(MSE))
-        f.write('MY_MSE: {:.2f}\n'.format(MY_MSE))
-
-    # Plot the reconstruction

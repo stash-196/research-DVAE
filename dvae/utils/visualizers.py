@@ -3,6 +3,9 @@ import seaborn as sns
 import os
 import numpy as np
 from dvae.utils import create_autonomous_mode_selector
+import torch
+
+import time
 
 def visualize_model_parameters(model, explain, save_path=None, fixed_scale=None):
     if save_path:
@@ -126,81 +129,103 @@ def visualize_sequences(true_data, recon_data, mode_selector, save_dir, name='')
 #     fig.write_image(os.path.join(save_dir, f'vis_pred_true_series{name}.svg'), format='svg')
 
 
-def visualize_spectral_analysis(true_data, recon_data, save_dir, sampling_rate=0.25, explain=''):  # 1 sample every 4 seconds = 0.25 Hz
-    true_fft = np.fft.fft(true_data)
-    recon_fft = np.fft.fft(recon_data)
+def visualize_spectral_analysis(data_lst, name_lst, colors_lst, save_dir, sampling_rate=0.25, explain='', max_sequences=None):
+    # Limit the number of sequences if max_sequences is specified
+    if max_sequences is not None and len(data_lst) > max_sequences:
+        data_lst = data_lst[:max_sequences]
+        name_lst = name_lst[:max_sequences]
 
-    freqs = np.fft.fftfreq(len(true_data), 1/sampling_rate)  # Get proper frequency axis based on sampling rate
-    periods = np.zeros_like(freqs)
-    periods[1:] = 1 / freqs[1:]  # Get periods corresponding to frequencies
-    
-    # Filter out zero frequencies (to avoid log(0) issues)
-    nonzero_indices = np.where(freqs > 0)
+    max_length = max(len(data) for data in data_lst)  # Find the length of the longest signal
 
-    # Power spectrum (magnitude squared)
-    true_power = np.abs(true_fft[nonzero_indices]) ** 2
-    recon_power = np.abs(recon_fft[nonzero_indices]) ** 2
-    
-    # Phase spectrum
-    true_phase = np.angle(true_fft[nonzero_indices])
-    recon_phase = np.angle(recon_fft[nonzero_indices])
+    # Preparing for subplots
+    num_datasets = len(data_lst)
+    fig, axs = plt.subplots(num_datasets, 2, figsize=(20, 6 * num_datasets))  # 2 columns for Power and Phase spectra
 
-    # Power spectral plots
-    plt.figure(figsize=(10, 6))
-    plt.loglog(periods[nonzero_indices], true_power, label='True Sequence Power Spectrum', color='blue')
-    plt.loglog(periods[nonzero_indices], recon_power, label='Predicted Sequence Power Spectrum', color='red')
-    plt.legend()
-    plt.title('Power Spectral Analysis {}'.format(explain))
-    plt.xlabel('Period (seconds)')
-    plt.ylabel('Power')
-    plt.grid(True)
-    fig_file = os.path.join(save_dir, 'vis_pred_true_power_spectrums_loglog_{}.png'.format(explain))
+    for idx, data in enumerate(data_lst):
+        padded_data = np.pad(data, (0, max_length - len(data)), mode='constant')  # Pad the signal
+        fft = np.fft.fft(padded_data)
+
+        freqs = np.fft.fftfreq(max_length, 1/sampling_rate)
+        periods = np.zeros_like(freqs)
+        periods[1:] = 1 / freqs[1:]  # Get periods corresponding to frequencies
+
+        nonzero_indices = np.where(freqs > 0)
+
+        power_spectrum = np.abs(fft[nonzero_indices]) ** 2  # Power spectrum
+        phase_spectrum = np.angle(fft[nonzero_indices])  # Phase spectrum
+
+        # Color for the current dataset
+        dataset_color = colors_lst[idx]
+
+        # Power spectral plot
+        axs[idx, 0].loglog(periods[nonzero_indices], power_spectrum, label=f'{name_lst[idx]} Power Spectrum', color=dataset_color)
+        axs[idx, 0].set_title(f'{name_lst[idx]} Power Spectrum')
+        axs[idx, 0].set_xlabel('Period (seconds)')
+        axs[idx, 0].set_ylabel('Power')
+        axs[idx, 0].grid(True)
+
+        # Phase spectral plot
+        axs[idx, 1].semilogx(periods[nonzero_indices], phase_spectrum, label=f'{name_lst[idx]} Phase Spectrum', color=dataset_color)
+        axs[idx, 1].set_title(f'{name_lst[idx]} Phase Spectrum')
+        axs[idx, 1].set_xlabel('Frequency (Hz)')
+        axs[idx, 1].set_ylabel('Phase (radians)')
+        axs[idx, 1].grid(True)
+
+    plt.tight_layout()
+    fig_file = os.path.join(save_dir, f'vis_spectral_analysis_{explain}.png')
     plt.savefig(fig_file)
     plt.close()
 
-    # Phase spectral plots
-    plt.figure(figsize=(10, 6))
-    plt.semilogx(periods[nonzero_indices], recon_phase, label='Predicted Sequence Phase Spectrum', color='red')
-    plt.semilogx(periods[nonzero_indices], true_phase, label='True Sequence Phase Spectrum', color='blue')
-    plt.legend()
-    plt.title('Phase Spectral Analysis {}'.format(explain))
-    plt.xlabel('Frequency (Hz)')
-    plt.ylabel('Phase (radians)')
-    plt.grid(True)
-    fig_file = os.path.join(save_dir, 'vis_pred_true_phase_spectrums_semilogx_{}.png'.format(explain))
-    plt.savefig(fig_file)
-    plt.close()
+    print(f"Spectral analysis plots saved at: {fig_file}")
+
+    # return power spectra, phase spectra, and periods
+    return 
 
 
+def visualize_variable_evolution(states, batch_data, save_dir, variable_name='h', alphas=None, add_lines_lst=[]):
+    seq_len, batch_size, x_dim = batch_data.shape
+    reshaped_batch_data = batch_data[:, 0, :].reshape(-1).cpu().numpy()  # Assuming batch size is at least 1
 
-def visualize_variable_evolution(states, save_dir, variable_name='h', alphas=None):
-    plt.figure(figsize=(12, 8))
-    
     num_dims = states.shape[2]
-    
-    # If alphas are provided, determine unique colors based on unique alphas.
+
+    # Prepare colors for the plots
     if alphas is not None:
         colors = [plt.cm.viridis(alpha.item()) for alpha in alphas]
     else:
         colors = plt.cm.viridis(np.linspace(0, 1, num_dims))
-  
-      # Given h_states is of shape (seq_len, batch_size, dim)
-    # For this example, we are plotting for batch 0 and all dimensions
+
+    # Create a figure with two subplots, making the bottom subplot smaller
+    fig, axs = plt.subplots(2, 1, figsize=(12, 8), gridspec_kw={'height_ratios': [3, 1]})
+
+    # Plotting the variables
     for dim in range(num_dims):
-          plt.plot(states[:, 0, dim].cpu().numpy(), label=f'Dim {dim}', color=colors[dim])
-    
+        axs[0].plot(states[:, 0, dim].cpu().numpy(), label=f'Dim {dim}', color=colors[dim])
+
+    # Add vertical lines at specified epochs
+    for t in add_lines_lst:
+        axs[0].axvline(x=t, color='r', linestyle='--')
+        axs[1].axvline(x=t * x_dim, color='r', linestyle='--')
+
     str_alphas = ' α:' + str(set(alphas.numpy())) if alphas is not None else ''
-
-    plt.title(f'Evolution of {variable_name} States over Time' + str_alphas)
-    plt.xlabel('Time steps')
-    plt.ylabel(f'{variable_name} state value')
+    axs[0].set_title(f'Evolution of {variable_name} States over Time' + str_alphas)
+    axs[0].set_xlabel('Time steps')
+    axs[0].set_ylabel(f'{variable_name} state value')
     if num_dims <= 10:
-        plt.legend(loc='upper right', bbox_to_anchor=(1.25, 1))
-    plt.grid(True)
+        axs[0].legend(loc='upper right', bbox_to_anchor=(1.25, 1))
+    axs[0].grid(True)
 
-    fig_file = os.path.join(save_dir, f'vis_{variable_name}_state_evolution.png')
+    # Plotting the true signal
+    axs[1].plot(reshaped_batch_data, label='True Signal', color='blue')
+    axs[1].set_title(f'True Signal for {variable_name}')
+    axs[1].set_xlabel('Time steps')
+    axs[1].set_ylabel('Signal value')
+    axs[1].legend()
+    axs[1].grid(True)
+
+    # Save the figure
+    fig_file = os.path.join(save_dir, f'vis_evolution_of_{variable_name}_state.png')
     plt.savefig(fig_file, bbox_inches='tight')
-    plt.close()
+    plt.close(fig)
 
 
 def visualize_teacherforcing_2_autonomous(batch_data, dvae, mode_selector, save_path, explain=''):
@@ -251,41 +276,33 @@ def reduce_dimensions(embeddings, technique='pca', n_components=3):
 
 from matplotlib.animation import PillowWriter, FuncAnimation
 
-def visualize_embedding_space(states, save_dir, alphas=None, variable_name='embedding', explain='', technique='pca', rotation_speed=5, total_rotation=360):
-    """
-    Visualize the trajectory of embeddings in a 3D space using specified dimensionality reduction technique and save as a GIF showing the plot rotating slowly.
-
-    Args:
-    - states: A numpy array of shape (num_samples, embedding_dim).
-    - alphas: Optional. A numpy array of alpha values for coloring.
-    - save_dir: Directory to save the plot.
-    - variable_name: Name of the variable to be used in the plot title.
-    - explain: Additional explanation for the title.
-    - technique: Dimensionality reduction technique ('pca' or 'tsne').
-    - rotation_speed: Degrees to rotate the plot for each frame (lower value for slower rotation).
-    - total_rotation: Total degrees of rotation for the GIF.
-    """
+def visualize_embedding_space(states, save_dir, variable_name='embedding', explain='', technique='pca', rotation_speed=5, total_rotation=360, base_color='Blues'):
     reduced_embeddings = reduce_dimensions(states, technique=technique)
+
+    # Get the z-values for color mapping
+    zs = reduced_embeddings[:, 2]
+
+    # Get the color map
+    cmap = plt.get_cmap(base_color)
 
     fig = plt.figure(figsize=(12, 8))
     ax = fig.add_subplot(111, projection='3d')
 
-    xs = reduced_embeddings[:, 0]
-    ys = reduced_embeddings[:, 1]
-    zs = reduced_embeddings[:, 2]
+    # Determine min and max z-values for coloring
+    z_min, z_max = zs.min(), zs.max()
 
-    # Color mapping
-    if alphas is not None:
-        colors = [plt.cm.viridis(alpha) for alpha in alphas]
-        for i in range(len(xs) - 1):
-            ax.plot(xs[i:i+2], ys[i:i+2], zs[i:i+2], color=colors[i])
-    else:
-        ax.plot(xs, ys, zs)
+    # Plot each segment with color based on z-value
+    for i in range(1, len(reduced_embeddings)):
+        x = reduced_embeddings[i-1:i+1, 0]
+        y = reduced_embeddings[i-1:i+1, 1]
+        z = reduced_embeddings[i-1:i+1, 2]
+        color_value = (z.mean() - z_min) / (z_max - z_min)  # Normalize color value within the range
+        ax.plot(x, y, z, color=cmap(color_value))
 
     ax.set_xlabel('Component 1')
     ax.set_ylabel('Component 2')
     ax.set_zlabel('Component 3')
-    plt.title('Trajectory of {} in {} {} space'.format(variable_name, explain.upper(), technique.upper()))
+    plt.title('Trajectory of {} in {} {} space'.format(variable_name.replace('_', ' '), explain.upper(), technique.upper()))
 
     # Function to update the plot for each frame
     def update(frame):
@@ -293,9 +310,63 @@ def visualize_embedding_space(states, save_dir, alphas=None, variable_name='embe
         return fig,
 
     # Creating animation
-    anim = FuncAnimation(fig, update, frames=np.arange(0, total_rotation, rotation_speed), interval=200, blit=True)  # increased interval for slower rotation
-    fig_file = os.path.join(save_dir, f'vis_{variable_name}_space_trajectory_{technique}.gif')
+    anim = FuncAnimation(fig, update, frames=np.arange(0, total_rotation, rotation_speed), interval=200, blit=True)
+    fig_file = os.path.join(save_dir, f'vis_trajectory_of_{variable_name}_space_{technique}.gif')
+
+    print(f"Saving animation at: {fig_file}")
+    # Measure the time taken to save the GIF
+    start_time = time.time()
     anim.save(fig_file, writer=PillowWriter(fps=10))
+    end_time = time.time()
+
+    # Print the duration
+    print(f"Animation saved in {end_time - start_time:.2f} seconds")
+
+    
     plt.close()
 
 
+
+
+
+def visualize_accuracy_over_time(accuracy_values, variance_values, save_dir, measure, num_batches, num_iter, explain, autonomous_mode_selector):
+    """
+    Visualize and save the accuracy over time, with different colors for teacher-forced and autonomous modes.
+
+    Args:
+    - accuracy_values: A tensor of accuracy values.
+    - save_dir: Directory to save the plot.
+    - measure: The name of the accuracy measure (e.g., 'rmse').
+    - num_samples: Number of samples used in the evaluation.
+    - explain: Additional explanation for the plot title.
+    - autonomous_mode_selector: Array indicating the mode (0 for teacher-forced, 1 for autonomous).
+    """
+    plt.figure(figsize=(10, 6))
+    
+    time_steps = range(len(accuracy_values))
+
+    # Plot the average accuracy line
+    for i in range(len(time_steps) - 1):
+        color = 'green' if autonomous_mode_selector[i] == 0 else 'red'
+        plt.plot(time_steps[i:i + 2], accuracy_values.cpu().numpy()[i:i + 2], color=color)
+
+    # Shading the variance
+    std_dev = torch.sqrt(variance_values).cpu().numpy()
+    plt.fill_between(time_steps, (accuracy_values - std_dev).cpu().numpy(), (accuracy_values + std_dev).cpu().numpy(), color='gray', alpha=0.3)
+
+    plt.xlabel('Time Steps')
+    plt.ylabel(measure.upper())
+    title = f'Expected {measure.upper()} Over Time - {explain.capitalize()} (Nbatch={num_batches}, Niter={num_iter})'
+    plt.title(title)
+    plt.grid(True)
+
+    # Custom legend
+    plt.plot([], [], color='green', label='Teacher-Forced Sequence')
+    plt.plot([], [], color='red', label='Autonomous Sequence')
+    plt.plot([], [], color='gray', alpha=0.3, label='Variance')
+    plt.legend()
+
+    fig_file = os.path.join(save_dir, f'vis_accuracy_{measure}_{explain.replace(" ", "_")}_btch{num_batches}_iter{num_iter}.png')
+    plt.savefig(fig_file)
+    print(f"{measure} plot saved at: {fig_file}")
+    plt.close()
