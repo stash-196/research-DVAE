@@ -341,7 +341,7 @@ class LearningAlgorithm():
             val_kl[epoch] = val_kl[epoch] / val_num
 
             # Early stop patiance
-            if val_loss[epoch] < best_val_loss or kl_warm <1:
+            if val_loss[epoch] < best_val_loss and kl_warm <1:
                 best_val_loss = val_loss[epoch]
                 cpt_patience = 0
                 best_state_dict = self.model.state_dict()
@@ -400,7 +400,7 @@ class LearningAlgorithm():
                 plt.legend(fontsize=16, title=self.model_name, title_fontsize=20)
                 plt.xlabel('epochs', fontdict={'size':16})
                 plt.ylabel('loss', fontdict={'size':16})
-                fig_file = os.path.join(save_dir, 'loss_{}.png'.format(tag))
+                fig_file = os.path.join(save_dir, 'vis_training_loss_{}.png'.format(tag))
                 plt.savefig(fig_file)
                 plt.close(fig)
 
@@ -414,7 +414,7 @@ class LearningAlgorithm():
                 plt.legend(fontsize=16, title='{}: Recon. Loss'.format(self.model_name), title_fontsize=20)
                 plt.xlabel('epochs', fontdict={'size':16})
                 plt.ylabel('loss', fontdict={'size':16})
-                fig_file = os.path.join(save_dir, 'loss_recon_{}.png'.format(tag))
+                fig_file = os.path.join(save_dir, 'vis_training_loss_recon_{}.png'.format(tag))
                 plt.savefig(fig_file) 
                 plt.close(fig)
 
@@ -428,7 +428,7 @@ class LearningAlgorithm():
                 plt.legend(fontsize=16, title='{}: KL Divergence'.format(self.model_name), title_fontsize=20)
                 plt.xlabel('epochs', fontdict={'size':16})
                 plt.ylabel('loss', fontdict={'size':16})
-                fig_file = os.path.join(save_dir, 'loss_KLD_{}.png'.format(tag))
+                fig_file = os.path.join(save_dir, 'vis_training_loss_KLD_{}.png'.format(tag))
                 plt.savefig(fig_file)
                 plt.close(fig)
 
@@ -444,7 +444,7 @@ class LearningAlgorithm():
                     plt.legend(fontsize=16, title='Sigma values', title_fontsize=20)
                     plt.xlabel('epochs', fontdict={'size':16})
                     plt.ylabel('sigma', fontdict={'size':16})
-                    fig_file = os.path.join(save_dir, 'history_sigma_{}.png'.format(tag))
+                    fig_file = os.path.join(save_dir, 'vis_training_history_of_sigma_{}.png'.format(tag))
                     plt.savefig(fig_file)
                     plt.close(fig)
 
@@ -460,7 +460,7 @@ class LearningAlgorithm():
                     plt.xlabel('epochs', fontdict={'size':16})
                     plt.ylabel('alpha', fontdict={'size':16})
                     plt.yscale('log')  # Set y-axis to logarithmic scale
-                    fig_file = os.path.join(save_dir, 'history_alpha_{}.png'.format(tag))
+                    fig_file = os.path.join(save_dir, 'vis_training_history_of_alpha_{}.png'.format(tag))
                     plt.savefig(fig_file)
                     plt.close(fig)
 
