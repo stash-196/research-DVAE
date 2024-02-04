@@ -222,17 +222,15 @@ class LearningAlgorithm():
                 sigmas_history = np.zeros((len(alphas_init), epochs))
 
         kl_warm_epochs = []
+        kl_warm_values = []
+        best_state_epochs = []
+        cpt_patience_epochs = []
+        delta_per_epoch = []
+
         # Train with mini-batch SGD
         for epoch in range(start_epoch+1, epochs):
             
             start_time = datetime.datetime.now()
-
-            # KL warm-up
-            if epoch % early_stop_patience == 0 and kl_warm < 1 and epoch > 0:
-                kl_warm += 0.2 
-                kl_warm_epochs += [epoch]
-                logger.info('KL warm-up, anneal coeff: {}'.format(kl_warm))
-
             
             model_mode_selector = create_autonomous_mode_selector(self.sequence_len, mode='bernoulli_sampling', autonomous_ratio=kl_warm*0.8)  
 
@@ -340,21 +338,42 @@ class LearningAlgorithm():
             val_recon[epoch] = val_recon[epoch] / val_num 
             val_kl[epoch] = val_kl[epoch] / val_num
 
-            # Early stop patiance
-            if val_loss[epoch] < best_val_loss and kl_warm <1:
-                best_val_loss = val_loss[epoch]
-                cpt_patience = 0
-                best_state_dict = self.model.state_dict()
-                best_optim_dict = optimizer.state_dict()
-                cur_best_epoch = epoch
-            else:
-                cpt_patience += 1
-
             # Training time
             end_time = datetime.datetime.now()
             interval = (end_time - start_time).seconds / 60
             logger.info('Epoch: {} training time {:.2f}m'.format(epoch, interval))
             logger.info('Train => tot: {:.2f} recon {:.2f} KL {:.2f} Val => tot: {:.2f} recon {:.2f} KL {:.2f}'.format(train_loss[epoch], train_recon[epoch], train_kl[epoch], val_loss[epoch], val_recon[epoch], val_kl[epoch]))
+
+
+            delta = val_loss[epoch] - best_val_loss
+            delta_per_epoch.append(delta)
+
+            # Early stop patiance
+            if delta < -1e-4:
+                best_val_loss = val_loss[epoch]
+                cpt_patience = 0
+                best_state_dict = self.model.state_dict()
+                best_optim_dict = optimizer.state_dict()
+                cur_best_epoch = epoch
+                best_state_epochs.append(epoch)
+            else:
+                cpt_patience += 1
+
+            cpt_patience_epochs.append(cpt_patience)
+
+            # KL warm-up
+            if epoch % early_stop_patience == 0 and kl_warm < 1 and epoch > 0:
+                kl_warm += 0.2 
+                kl_warm_epochs += [epoch]
+                kl_warm_values += [kl_warm]
+                logger.info('KL warm-up, anneal coeff: {}'.format(kl_warm))
+                # reset early stop patience and best_val_loss
+                best_val_loss = val_loss[epoch]
+                cpt_patience = 0
+                best_state_dict = self.model.state_dict()
+                best_optim_dict = optimizer.state_dict()
+                cur_best_epoch = epoch
+                best_state_epochs.append(epoch)
 
             # Stop traning if early-stop triggers
             if cpt_patience == early_stop_patience:
@@ -365,10 +384,16 @@ class LearningAlgorithm():
                     # increase kl_warm
                     kl_warm += 0.2 
                     kl_warm_epochs += [epoch]
+                    kl_warm_values += [kl_warm]
                     logger.info('KL warm-up, anneal coeff: {}'.format(kl_warm))
+                    cpt_patience = 0
+                    best_val_loss = val_loss[epoch]
+                    best_state_dict = self.model.state_dict()
+                    best_optim_dict = optimizer.state_dict()
+                    cur_best_epoch = epoch
+                    best_state_epochs.append(epoch)
             
             
-            # and kl_warm >= 1.0:
 
             # Save model parameters regularly
             if epoch % save_frequency == 0:
@@ -432,7 +457,33 @@ class LearningAlgorithm():
                 plt.savefig(fig_file)
                 plt.close(fig)
 
-                
+
+                # Save visualization of delta_per_epoch, kl_warm_values, cpt_patience_epochs, best_state_epochs with subplots
+                plt.clf()
+                fig, axs = plt.subplots(4, 1, figsize=(12, 12))
+                plt.rcParams['font.size'] = 12
+                axs[0].plot(delta_per_epoch[:epoch+1], label='delta')
+                axs[0].legend(fontsize=16, title='delta', title_fontsize=20)
+                axs[0].set_xlabel('epochs', fontdict={'size':16})
+                axs[0].set_ylabel('delta', fontdict={'size':16})
+                axs[1].plot(kl_warm_values[:epoch+1], label='kl_warm')
+                axs[1].legend(fontsize=16, title='kl_warm', title_fontsize=20)
+                axs[1].set_xlabel('epochs', fontdict={'size':16})
+                axs[1].set_ylabel('kl_warm', fontdict={'size':16})
+                axs[2].plot(cpt_patience_epochs[:epoch+1], label='cpt_patience')
+                axs[2].legend(fontsize=16, title='cpt_patience', title_fontsize=20)
+                axs[2].set_xlabel('epochs', fontdict={'size':16})
+                axs[2].set_ylabel('cpt_patience', fontdict={'size':16})
+                axs[3].plot(best_state_epochs, np.zeros_like(best_state_epochs), 'ro', label='best_state')
+                axs[3].legend(fontsize=16, title='best_state', title_fontsize=20)
+                axs[3].set_xlabel('epochs', fontdict={'size':16})
+                axs[3].set_ylabel('best_state', fontdict={'size':16})
+                fig_file = os.path.join(save_dir, 'vis_training_delta_kl_cpt_best_state_{}.png'.format(tag))
+                plt.savefig(fig_file)
+                plt.close(fig)
+
+
+                # Save hisotry of sigma and alpha
                 if self.optimize_alphas:
                     plt.clf()
                     fig = plt.figure(figsize=(8,6))

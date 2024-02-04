@@ -72,7 +72,7 @@ def visualize_combined_parameters(model, explain, save_path=None, fixed_scale=No
 import matplotlib.pyplot as plt
 import os
 
-def visualize_sequences(true_data, recon_data, mode_selector, save_dir, name=''):
+def visualize_sequences(true_data, recon_data, mode_selector, save_dir, explain=''):
     plt.figure(figsize=(10, 6))
     
     # Plotting the true sequence in blue
@@ -100,12 +100,12 @@ def visualize_sequences(true_data, recon_data, mode_selector, save_dir, name='')
 
     plt.legend()
 
-    plt.title('Comparison of True and Predicted Sequences')
+    plt.title('Comparison of True and Predicted Sequences {}'.format(explain))
     plt.xlabel('Time steps')
     plt.ylabel('Value')
     plt.grid(True)
     
-    fig_file = os.path.join(save_dir, f'vis_pred_true_series_{name}.png')
+    fig_file = os.path.join(save_dir, f'vis_pred_true_series_{explain}.png')
     plt.savefig(fig_file)
     plt.close()
 
@@ -254,27 +254,53 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
 
+from sklearn.decomposition import PCA, FastICA, NMF, KernelPCA
+from sklearn.manifold import TSNE, LocallyLinearEmbedding, MDS, Isomap, SpectralEmbedding
+from umap import UMAP
+
 def reduce_dimensions(embeddings, technique='pca', n_components=3):
     """
-    Reduce dimensions of embeddings using specified technique (PCA or t-SNE).
+    Reduce dimensions of embeddings using specified technique.
 
     Args:
     - embeddings: A numpy array of shape (num_samples, embedding_dim).
-    - technique: Dimensionality reduction technique ('pca' or 'tsne').
+    - technique: Dimensionality reduction technique.
     - n_components: Number of dimensions to reduce to.
 
     Returns:
     - reduced_embeddings: Embeddings in the reduced dimension space.
     """
-    if technique.lower() == 'pca':
+    technique = technique.lower()
+    if technique == 'pca':
         reducer = PCA(n_components=n_components)
-    elif technique.lower() == 'tsne':
+    elif technique == 'tsne':
         reducer = TSNE(n_components=n_components, n_iter=300)
+    elif technique == 'lle':
+        reducer = LocallyLinearEmbedding(n_components=n_components)
+    elif technique == 'umap':
+        reducer = UMAP(n_components=n_components)
+    elif technique == 'ica':
+        reducer = FastICA(n_components=n_components)
+    elif technique == 'mds':
+        reducer = MDS(n_components=n_components)
+    elif technique == 'nmf':
+        # Shift data to be non-negative if using NMF
+        embeddings_min = embeddings.min()
+        if embeddings_min < 0:
+            embeddings = embeddings - embeddings_min
+        reducer = NMF(n_components=n_components, init='random', random_state=0)
+    elif technique == 'isomap':
+        reducer = Isomap(n_components=n_components)
+    elif technique == 'laplacian':
+        reducer = SpectralEmbedding(n_components=n_components)
+    elif technique == 'kernel_pca':
+        reducer = KernelPCA(n_components=n_components, kernel='rbf')
     else:
-        raise ValueError("Unsupported dimensionality reduction technique. Choose 'pca' or 'tsne'.")
+        raise ValueError(f"Unsupported dimensionality reduction technique: {technique}")
 
     reduced_embeddings = reducer.fit_transform(embeddings)
     return reduced_embeddings
+
 
 from matplotlib.animation import PillowWriter, FuncAnimation
 
@@ -287,7 +313,7 @@ def visualize_embedding_space(states, save_dir, variable_name='embedding', expla
     # Get the color map
     cmap = plt.get_cmap(base_color)
 
-    fig = plt.figure(figsize=(12, 8))
+    fig = plt.figure(figsize=(10, 10))
     ax = fig.add_subplot(111, projection='3d')
 
     # Determine min and max z-values for coloring
@@ -442,7 +468,7 @@ def visualize_alpha_history(sigmas_history, power_spectrum, periods, save_dir, s
 
     # Define figure and subplots with different widths
     fig = plt.figure(figsize=(10, 10))
-    gs = fig.add_gridspec(1, 2, width_ratios=[3, 1])
+    gs = fig.add_gridspec(1, 2, width_ratios=[4, 1])
     ax1 = fig.add_subplot(gs[0])
     ax2 = fig.add_subplot(gs[1])
 
