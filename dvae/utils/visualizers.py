@@ -1,3 +1,5 @@
+import matplotlib
+matplotlib.use('Agg')  # Set the backend to 'Agg' to avoid GUI issues
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
@@ -304,54 +306,62 @@ def reduce_dimensions(embeddings, technique='pca', n_components=3):
 
 from matplotlib.animation import PillowWriter, FuncAnimation
 
-def visualize_embedding_space(states, save_dir, variable_name='embedding', explain='', technique='pca', rotation_speed=5, total_rotation=360, base_color='Blues'):
-    reduced_embeddings = reduce_dimensions(states, technique=technique)
 
-    # Get the z-values for color mapping
-    zs = reduced_embeddings[:, 2]
+def visualize_embedding_space(states_list, save_dir, variable_name, condition_names, explain='', technique='pca', rotation_speed=5, total_rotation=360, base_colors=['Blues']):
+    """
+    Visualize a list of embedding states in separate 3D subplots, each with its own animation.
 
-    # Get the color map
-    cmap = plt.get_cmap(base_color)
+    Args:
+    - states_list: List of states numpy arrays.
+    - save_dir: Directory to save the plots.
+    - variable_name_list: List of names for each variable corresponding to states.
+    - explain: Explanation text to add to the plot title.
+    - technique: Dimensionality reduction technique to use.
+    - rotation_speed: Degrees to rotate for each frame of the animation.
+    - total_rotation: Total degrees of rotation.
+    - base_color_list: List of base colors for each subplot.
+    """
+    num_plots = len(states_list)
+    fig = plt.figure(figsize=(10, 10 * num_plots))
+    
+    for i, (states, condition_name, base_color) in enumerate(zip(states_list, condition_names, base_colors)):
+        ax = fig.add_subplot(num_plots, 1, i + 1, projection='3d')
+        reduced_embeddings = reduce_dimensions(states, technique=technique)
+        zs = reduced_embeddings[:, 2]
+        cmap = plt.get_cmap(base_color)
+        z_min, z_max = zs.min(), zs.max()
 
-    fig = plt.figure(figsize=(10, 10))
-    ax = fig.add_subplot(111, projection='3d')
+        for j in range(1, len(reduced_embeddings)):
+            x, y, z = reduced_embeddings[j-1:j+1, 0], reduced_embeddings[j-1:j+1, 1], reduced_embeddings[j-1:j+1, 2]
+            color_value = (z.mean() - z_min) / (z_max - z_min)
+            ax.plot(x, y, z, color=cmap(color_value))
+        
+        ax.set_xlabel('Component 1')
+        ax.set_ylabel('Component 2')
+        ax.set_zlabel('Component 3')
+        ax.set_title(f'Trajectory of {variable_name.capitalize()} {condition_name.capitalize()} in {explain} {technique} space', fontsize=16)
 
-    # Determine min and max z-values for coloring
-    z_min, z_max = zs.min(), zs.max()
-
-    # Plot each segment with color based on z-value
-    for i in range(1, len(reduced_embeddings)):
-        x = reduced_embeddings[i-1:i+1, 0]
-        y = reduced_embeddings[i-1:i+1, 1]
-        z = reduced_embeddings[i-1:i+1, 2]
-        color_value = (z.mean() - z_min) / (z_max - z_min)  # Normalize color value within the range
-        ax.plot(x, y, z, color=cmap(color_value))
-
-    ax.set_xlabel('Component 1')
-    ax.set_ylabel('Component 2')
-    ax.set_zlabel('Component 3')
-    plt.title('Trajectory of {} in {} {} space'.format(variable_name.replace('_', ' '), explain.upper(), technique.upper()), fontsize=16)
-
-    # Function to update the plot for each frame
     def update(frame):
-        ax.view_init(30, frame)
+        for ax in fig.axes:
+            ax.view_init(30, frame)
         return fig,
 
-    # Creating animation
     anim = FuncAnimation(fig, update, frames=np.arange(0, total_rotation, rotation_speed), interval=200, blit=True)
+    
+    # Create save directory if it doesn't exist
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    
+    # Construct a unique filename to avoid overwriting
     fig_file = os.path.join(save_dir, f'vis_trajectory_of_{variable_name}_space_{technique}.gif')
-
     print(f"Saving animation at: {fig_file}")
-    # Measure the time taken to save the GIF
+
     start_time = time.time()
     anim.save(fig_file, writer=PillowWriter(fps=10))
     end_time = time.time()
-
-    # Print the duration
     print(f"Animation saved in {end_time - start_time:.2f} seconds")
+    plt.close(fig)
 
-    
-    plt.close()
 
 
 

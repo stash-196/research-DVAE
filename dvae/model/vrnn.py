@@ -238,7 +238,7 @@ class VRNN(nn.Module):
         return h_tp1, c_tp1
 
 
-    def forward(self, x, initialize_states=True, update_states=True, mode_selector=None):
+    def forward(self, x, initialize_states=True, update_states=True, mode_selector=None, inference_mode=False):
 
         # need input:  (seq_len, batch_size, x_dim)
         seq_len, batch_size, _ = x.shape
@@ -285,8 +285,12 @@ class VRNN(nn.Module):
 
             h_t_last = h_t.view(self.num_RNN, 1, batch_size, self.dim_RNN)[-1,:,:,:]
             mean_zt, logvar_zt = self.inference(feature_xt, h_t_last)
-            z_t = self.reparameterization(mean_zt, logvar_zt)
-            # z_t = mean_zt
+
+            if inference_mode:
+                z_t = mean_zt
+            else:
+                z_t = self.reparameterization(mean_zt, logvar_zt)
+
             feature_zt = self.feature_extractor_z(z_t)
             y_t = self.generation_x(feature_zt, h_t_last)
             z_mean[t,:,:] = mean_zt
