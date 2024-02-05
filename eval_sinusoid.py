@@ -259,34 +259,28 @@ if __name__ == '__main__':
         embedding_states_colors = ['Greens', 'Reds']
 
         # visualize the hidden states 3d
-        vis_embedding_space_params = [
-            {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'nmf'},
-            {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'kernel_pca'},
-            {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'isomap'},
-            {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'lle'},
-            {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'umap'},
-            {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'ica'},
-            {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'mds'},
-            {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors},
-            {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'tsne'},
-        ]
-        run_parallel_visualizations(visualize_embedding_space, vis_embedding_space_params)
+        # vis_embedding_space_params = [
+        #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'nmf'},
+        #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'kernel_pca'},
+        #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'isomap'},
+        #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'lle'},
+        #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'umap'},
+        #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'ica'},
+        #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'mds'},
+        #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors},
+        #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'tsne'},
+        # ]
+        # run_parallel_visualizations(visualize_embedding_space, vis_embedding_space_params)
+        # visualize the hidden states 3d in different techniques
         visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='nmf')
-
-        visualize_embedding_space(dvae.h[~autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_teacher-forced', base_color='Greens', technique='nmf')
-        visualize_embedding_space(dvae.h[~autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_teacher-forced', base_color='Greens', technique='kernel_pca')
-        visualize_embedding_space(dvae.h[~autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_teacher-forced', base_color='Greens', technique='isomap')
-        visualize_embedding_space(dvae.h[~autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_teacher-forced', base_color='Greens', technique='lle')
-        visualize_embedding_space(dvae.h[~autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_teacher-forced', base_color='Greens', technique='umap')
-        visualize_embedding_space(dvae.h[~autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_teacher-forced', base_color='Greens', technique='ica')
-        visualize_embedding_space(dvae.h[~autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_teacher-forced', base_color='Greens', technique='mds')
-        visualize_embedding_space(dvae.h[~autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_teacher-forced', base_color='Greens')
-        visualize_embedding_space(dvae.h[autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_autonomous', base_color='Reds')
-        visualize_embedding_space(dvae.h[~autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_teacher-forced', technique='tsne', base_color='Greens')
-        visualize_embedding_space(dvae.h[autonomous_mode_selector_long,0,:], save_dir=save_dir, variable_name=f'hidden_autonomous', technique='tsne', base_color='Reds')
-
-
-
+        visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='kernel_pca')
+        visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='isomap')
+        visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='lle')
+        visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='umap')
+        visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='ica')
+        visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='mds')
+        visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'])
+        visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='tsne')
 
         ############################################################################
         # Prepare shorter sequence data
