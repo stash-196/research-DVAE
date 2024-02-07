@@ -325,7 +325,14 @@ def reduce_dimensions(embeddings, technique='pca', n_components=3):
     else:
         raise ValueError(f"Unsupported dimensionality reduction technique: {technique}")
 
-    reduced_embeddings = reducer.fit_transform(embeddings)
+    # Perform the dimensionality reduction
+    # show error if it fails
+    try:
+        reduced_embeddings = reducer.fit_transform(embeddings)
+    except Exception as e:
+        print(f"Failed to reduce dimensions using {technique}. Error: {e}")
+        return None
+    
     return reduced_embeddings
 
 

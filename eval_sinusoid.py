@@ -250,8 +250,18 @@ if __name__ == '__main__':
                 sigmas_history = loaded_data['sigmas_history']
                 kl_warm_epochs = loaded_data['kl_warm_epochs']            
                 # Visualize the alphas
-                true_alphas = [0.00490695, 0.02916397, 0.01453569]
-                # true_alphas = [0.1, 0.2, 0.3]
+                # if lorenz63, true_alphas = [0.00490695, 0.02916397, 0.01453569]
+                if cfg['DataFrame']["dataset_name"] == "Lorenz63":
+                    true_alphas = [0.00490695, 0.02916397, 0.01453569]
+                elif cfg['DataFrame']["dataset_name"] == "Sinusoid":
+                    if s_dim == 1:
+                        true_alphas = [dt*2*np.pi]
+                    elif s_dim == 2:
+                        true_alphas = [dt*2*np.pi, dt*2*np.pi/100]
+                    elif s_dim == 3:
+                        true_alphas = [dt*2*np.pi, dt*2*np.pi/100, 2*np.pi/1000]
+                else:
+                    raise ValueError("Unsupported dataset_name in configuration file.")
                 visualize_alpha_history(sigmas_history=sigmas_history, power_spectrum_lst=power_spectrum_lst[:3], spectrum_color_lst=colors_lst[:3], spectrum_name_lst=name_lst, frequencies=frequencies, dt=dt, save_dir=save_dir, kl_warm_epochs=kl_warm_epochs, true_alphas=true_alphas)
 
             # Plot the reconstruction vs true sequence
