@@ -316,3 +316,5 @@ def plot_delay_embedding(observation, delay, dimensions):
 # Assuming you have an array `x` from the Lorenz system:
 x = np.array(l1.hist)[:,0]
 plot_delay_embedding(x, delay=20, dimensions=3)
+
+# %%

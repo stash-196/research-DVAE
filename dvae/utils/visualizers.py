@@ -132,44 +132,68 @@ def visualize_sequences(true_data, recon_data, mode_selector, save_dir, explain=
 
 
 def visualize_spectral_analysis(data_lst, name_lst, colors_lst, save_dir, sampling_rate, explain='', max_sequences=None):
-    # Limit the number of sequences if max_sequences is specified
     if max_sequences is not None and len(data_lst) > max_sequences:
         data_lst = data_lst[:max_sequences]
         name_lst = name_lst[:max_sequences]
 
-    max_length = max(len(data) for data in data_lst)  # Find the length of the longest signal
+    max_length = max(len(data) for data in data_lst)
 
-    # Preparing for subplots
     num_datasets = len(data_lst)
-    fig, axs = plt.subplots(num_datasets, 2, figsize=(20, 6 * num_datasets))  # 2 columns for Power and Phase spectra
+    fig, axs = plt.subplots(num_datasets, 2, figsize=(10, 3 * num_datasets))
 
-    power_spectrum_lst = []
-    for idx, data in enumerate(data_lst):
-        padded_data = np.pad(data, (0, max_length - len(data)), mode='constant')  # Pad the signal
+    power_spectrum_list = []
+    min_power, max_power = float('inf'), float('-inf')  # Initialize min and max power
+
+    # First pass: Compute the power spectrum and update min/max values
+    for data in data_lst:
+        padded_data = np.pad(data, (0, max_length - len(data)), mode='constant')
         fft = np.fft.fft(padded_data)
-
         freqs = np.fft.fftfreq(max_length, 1/sampling_rate)
-        periods = np.zeros_like(freqs)
-        periods[1:] = 1 / freqs[1:]  # Get periods corresponding to frequencies
-
         nonzero_indices = np.where(freqs > 0)
+        
+        power_spectrum = np.abs(fft[nonzero_indices]) ** 2
+        power_spectrum_list.append(power_spectrum)
 
-        power_spectrum = np.abs(fft[nonzero_indices]) ** 2  # Power spectrum
-        power_spectrum_lst.append(power_spectrum)
-        phase_spectrum = np.angle(fft[nonzero_indices])  # Phase spectrum
+        # Update global min and max power spectrum values
+        min_power = min(min_power, power_spectrum.min())
+        max_power = max(max_power, power_spectrum.max())
+        # Calculate the limits for the frequency axis
+        freq_min, freq_max = freqs[nonzero_indices].min(), freqs[nonzero_indices].max()
 
-        # Color for the current dataset
+        # Convert these frequency limits to period limits for the secondary axis
+        period_max, period_min = 1 / freq_min, 1 / freq_max  # Note the inversion here
+
+
+    # Second pass: Plotting with unified y-axis range
+    for idx, (data, power_spectrum) in enumerate(zip(data_lst, power_spectrum_list)):
+        padded_data = np.pad(data, (0, max_length - len(data)), mode='constant')
+        fft = np.fft.fft(padded_data)
+        freqs = np.fft.fftfreq(max_length, 1/sampling_rate)
+        nonzero_indices = np.where(freqs > 0)
+        freqs_nonzero = freqs[nonzero_indices]
+        periods_nonzero = 1 / freqs_nonzero
+
         dataset_color = colors_lst[idx]
 
-        # Power spectral plot
-        axs[idx, 0].loglog(periods[nonzero_indices], power_spectrum, label=f'{name_lst[idx]} Power Spectrum', color=dataset_color)
+        # Power spectral plot with unified y-axis
+        axs[idx, 0].loglog(freqs_nonzero, power_spectrum, label=f'{name_lst[idx]} Power Spectrum', color=dataset_color)
+        axs[idx, 0].set_ylim(min_power, max_power)  # Set the same y-axis range for all plots
+        axs[idx, 0].set_xlim(freq_min, freq_max)
         axs[idx, 0].set_title(f'{name_lst[idx]} Power Spectrum')
-        axs[idx, 0].set_xlabel('Period (seconds)')
+        axs[idx, 0].set_xlabel('Frequency (Hz)')
         axs[idx, 0].set_ylabel('Power')
         axs[idx, 0].grid(True)
 
+        # Adding secondary x-axis for periods
+        ax_new = axs[idx, 0].twiny()
+        ax_new.loglog(periods_nonzero, power_spectrum, alpha=0)  # Invisible plot to generate secondary x-axis
+        ax_new.set_xlabel('Period (seconds)')
+        ax_new.set_xscale('log')
+        ax_new.set_xlim(period_min, period_max)
+
         # Phase spectral plot
-        axs[idx, 1].semilogx(periods[nonzero_indices], phase_spectrum, label=f'{name_lst[idx]} Phase Spectrum', color=dataset_color)
+        phase_spectrum = np.angle(fft[nonzero_indices])
+        axs[idx, 1].semilogx(freqs_nonzero, phase_spectrum, label=f'{name_lst[idx]} Phase Spectrum', color=dataset_color)
         axs[idx, 1].set_title(f'{name_lst[idx]} Phase Spectrum')
         axs[idx, 1].set_xlabel('Frequency (Hz)')
         axs[idx, 1].set_ylabel('Phase (radians)')
@@ -182,8 +206,9 @@ def visualize_spectral_analysis(data_lst, name_lst, colors_lst, save_dir, sampli
 
     print(f"Spectral analysis plots saved at: {fig_file}")
 
-    # return power spectra, phase spectra, and periods
-    return power_spectrum_lst, periods[nonzero_indices]
+    # Returning only for the first dataset for simplicity
+    return power_spectrum_list, freqs_nonzero, periods_nonzero
+
 
 
 def visualize_variable_evolution(states, batch_data, save_dir, variable_name='h', alphas=None, add_lines_lst=[]):
@@ -232,12 +257,12 @@ def visualize_variable_evolution(states, batch_data, save_dir, variable_name='h'
     plt.close(fig)
 
 
-def visualize_teacherforcing_2_autonomous(batch_data, dvae, mode_selector, save_path, explain=''):
+def visualize_teacherforcing_2_autonomous(batch_data, dvae, mode_selector, save_path, explain='', inference_mode=False):
     seq_len, batch_size, x_dim = batch_data.shape
     n_seq = seq_len  # Use the full sequence length for visualization
 
     # Reconstruct the first n_seq sequences
-    recon_batch_data = dvae(batch_data[:n_seq, :1, :], mode_selector=mode_selector).detach().clone()
+    recon_batch_data = dvae(batch_data[:n_seq, :1, :], mode_selector=mode_selector, inference_mode=inference_mode).detach().clone()
 
     # Flattening the time series for true and reconstructed data
     true_series = batch_data[:n_seq, 0, :].reshape(-1).cpu().numpy()
@@ -460,89 +485,84 @@ def visualize_delay_embedding(observation, delay, dimensions, save_dir, variable
     plt.close()
 
 
-
-def visualize_alpha_history(sigmas_history, power_spectrum, periods, save_dir, sampling_rate, kl_warm_epochs=None, explain=''):
-    """
-    Visualize the history of alpha values over epochs and compare with power spectrum, with aligned y-axis scales and additional period scale.
-
-    Args:
-    - sigmas_history: Numpy array containing the history of sigma values.
-    - power_spectrum: Power spectrum of the signal.
-    - periods: Corresponding periods for the power spectrum.
-    - save_dir: Directory to save the plot.
-    - kl_warm_epochs: List of epochs where KL warm-up occurs.
-    - sampling_rate: Sampling rate of the signal.
-    - explain: Additional explanation for the plot title.
-    """
+def visualize_alpha_history(sigmas_history, power_spectrum_lst, spectrum_color_lst,spectrum_name_lst, frequencies, save_dir, dt, kl_warm_epochs=None, explain='', true_alphas=[]):
     plt.clf()
-
-    # Define figure and subplots with different widths
-    fig = plt.figure(figsize=(10, 10))
-    gs = fig.add_gridspec(1, 2, width_ratios=[4, 1])
+    periods = 1 / frequencies
+    fig = plt.figure(figsize=(12, 8))
+    gs = fig.add_gridspec(1, 2, width_ratios=[3, 1])
     ax1 = fig.add_subplot(gs[0])
     ax2 = fig.add_subplot(gs[1])
-
     plt.rcParams['font.size'] = 12
 
-    # Calculate alphas from periods for scale alignment
-    alphas_from_periods = sampling_rate / periods
+    # Example color scheme for alpha curves
+    alpha_colors = ['blue', 'green', 'red', 'cyan', 'magenta', 'yellow', 'black']
 
+
+    alphas_from_periods = dt / periods
     periods_max, periods_min = np.max(periods), np.min(periods)
-
     alpha_range_min = 1 / (1 + np.exp(-np.max(sigmas_history))) / 10
     alpha_range_max = 1.1
-
-    ylim_max = max(sampling_rate/alpha_range_min, periods_max)
-    ylim_min = min(sampling_rate/alpha_range_max, periods_min)
-
-    # Left subplot: Alpha values over epochs
-
-    num_alphas = sigmas_history.shape[0]
-    for i in range(num_alphas):
-        alphas = 1 / (1 + np.exp(-sigmas_history[i]))
-        periods_from_alpha = sampling_rate / alphas
-        ax1.plot(periods_from_alpha, label=f'α {i+1}')
+    ylim_max = max(dt/alpha_range_min, periods_max)
+    ylim_min = min(dt/alpha_range_max, periods_min)
 
     if kl_warm_epochs:
         for kl_warm_epoch in kl_warm_epochs:
-            ax1.axvline(x=kl_warm_epoch, color='r', linestyle='--')
+            ax1.axvline(x=kl_warm_epoch, color='r', linestyle='--', label='KL & SS Warm-up' if kl_warm_epoch == kl_warm_epochs[0] else "")
 
-    ax1.legend(fontsize=16, title='α values', title_fontsize=20)
+    # Plot and annotate true alphas with a specific color
+    true_alpha_color = 'black'
+    for idx, true_alpha in enumerate(true_alphas, start=1):
+        line_y = dt/true_alpha
+        ax1.axhline(y=line_y, color=true_alpha_color, linestyle='--', label=f"\"True\" α" if idx == 1 else "")
+        ax2.axhline(y=true_alpha/dt, color=true_alpha_color, linestyle='--')
+        ax1.text(0.5, line_y, f"α_true: {true_alpha:.{4}g}", verticalalignment='bottom', horizontalalignment='center', transform=ax1.get_yaxis_transform(), color=true_alpha_color, fontsize=15)
+
+    num_alphas = sigmas_history.shape[0]
+    for i in range(min(num_alphas, len(alpha_colors))):  # Ensure we don't exceed the number of predefined colors
+        alphas = 1 / (1 + np.exp(-sigmas_history[i]))
+        periods_from_alpha = dt / alphas
+        curve_color = alpha_colors[i]  # Get color for this curve
+        ax1.plot(periods_from_alpha, label=f'α {i+1}', color=curve_color)
+        # Annotate the last alpha value
+        last_alpha_period = periods_from_alpha[-1]
+        ax1.text(len(sigmas_history[i])-1, last_alpha_period, f"α_end: {alphas[-1]:.{4}g}", verticalalignment='bottom', horizontalalignment='right', color=curve_color, fontsize=15)
+        # Optionally, annotate the initial alpha value
+        init_alpha_period = periods_from_alpha[0]
+        ax1.text(0, init_alpha_period, f"α_0: {alphas[0]:.{4}g}", verticalalignment='bottom', horizontalalignment='left', color=curve_color, fontsize=15)
+
+
+    ax1.set_title('α values during training', fontsize=18)
+    ax1.legend(fontsize=16, loc='upper left')
     ax1.set_xlabel('Epochs', fontsize=16)
     ax1.set_ylabel('Period (sec)', fontsize=16)
     ax1.set_yscale('log')
-    ax1.set_ylim([ylim_min, ylim_max])  # Align y-axis range with right subplot
+    ax1.set_ylim(ylim_min, ylim_max)
     ax1.grid(True)
 
-    # Adding a secondary y-axis for the original periods
     ax1_right = ax1.twinx()
     ax1_right.set_ylabel('α =Δt/T', fontsize=16)
     ax1_right.set_yscale('log')
-    ax1_right.set_ylim(sampling_rate/ylim_min, sampling_rate/ylim_max)  # Set the period scale
-    ax1_right.invert_yaxis()  # Invert to align with the alpha scale
+    ax1_right.set_ylim(dt/ylim_max, dt/ylim_min)
+    ax1_right.invert_yaxis()
 
-    # Right subplot: Power spectrum with periods on y-axis
-    ax2.loglog(power_spectrum, periods, color='blue')
+    for power_spectrum, color, label in zip(power_spectrum_lst, spectrum_color_lst, spectrum_name_lst):
+        ax2.loglog(power_spectrum, frequencies, color=color, alpha=0.5, label=label)
+    
+    ax2.set_title('Lorenz63\nPower Spectrum', fontsize=18)
+    ax2.legend(fontsize=16, loc='upper right')
     ax2.set_xlabel('Amplitude', fontsize=16)
-    ax2.set_ylabel('Period (sec)', fontsize=16)
-    ax2.set_ylim([ylim_min, ylim_max])  # Align y-axis range with left subplot
+    ax2.set_ylabel('Frequency (Hz)', fontsize=16)
+    ax2.set_ylim(1/ylim_min, 1/ylim_max)
     ax2.grid(True)
-    ax2.invert_xaxis()  # Flip x-axis
+    ax2.invert_xaxis()
 
-    # Adding a secondary y-axis for the original periods
     ax2_right = ax2.twinx()
-    ax2_right.set_ylabel('Frequency (Hz)', fontsize=16)
+    ax2_right.set_ylabel('Periods (s)', fontsize=16)
     ax2_right.set_yscale('log')
-    ax2_right.set_ylim(1/ylim_min, 1/ylim_max)  # Set the period scale
-    ax2_right.invert_yaxis()  # Invert to align with the alpha scale
+    ax2_right.set_ylim(ylim_max, ylim_min)
+    ax2_right.invert_yaxis()
 
-    # # Add vertical title to the right of the right subplot
-    # fig.subplots_adjust(right=0.85)
-    # ax2.text(1.1, 0.5, 'Power Spectrum', va='center', ha='left', rotation=90, transform=ax2.transAxes, fontsize=16)
-
-    # Add overall title
-    plt.suptitle(f'α History and Power Spectrum {explain}', fontsize=20, x=0.5, y=1.02)
-
+    plt.suptitle(f'α during training and Power Spectrum {explain}', fontsize=20, x=0.5, y=1.02)
     plt.tight_layout()
     fig_file = os.path.join(save_dir, f'vis_alpha_vs_power_spectrum_{explain}.png')
     plt.savefig(fig_file, bbox_inches='tight')
