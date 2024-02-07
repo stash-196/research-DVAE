@@ -232,7 +232,7 @@ class LearningAlgorithm():
             
             start_time = datetime.datetime.now()
             
-            model_mode_selector = create_autonomous_mode_selector(self.sequence_len, mode='bernoulli_sampling', autonomous_ratio=kl_warm*0.8)  
+            model_mode_selector = create_autonomous_mode_selector(self.sequence_len, mode='bernoulli_sampling', autonomous_ratio=kl_warm*0.9)  
 
 
             # Batch training

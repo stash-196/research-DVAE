@@ -87,13 +87,20 @@ if __name__ == '__main__':
     observation_process = cfg.get('DataFrame', 'observation_process')
     overlap = cfg.getboolean('DataFrame', 'overlap')
     seq_len = cfg.getint('DataFrame', 'sequence_len')
-
+    s_dim = cfg.getint('DataFrame', 's_dim')
 
     # specify seq_len for the visualization
     seq_len = min(1000, seq_len)
 
     if cfg['DataFrame']["dataset_name"] == "Sinusoid":
-        train_dataloader, val_dataloader, train_num, val_num = sinusoid_dataset.build_dataloader(cfg, device)
+        # Load test dataset
+        test_dataset = sinusoid_dataset.Sinusoid(path_to_data=data_dir, split='test', seq_len=seq_len, x_dim=x_dim, sample_rate=sample_rate, observation_process=observation_process, device=device, overlap=overlap, skip_rate=skip_rate, val_indices=1, shuffle=False, s_dim=s_dim)
+        # Build test dataloader
+        test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=False, num_workers=num_workers)
+        # Load test dataset for long sequence
+        test_dataset_long = sinusoid_dataset.Sinusoid(path_to_data=data_dir, split='test', seq_len=None, x_dim=x_dim, sample_rate=sample_rate, observation_process=observation_process, device=device, overlap=overlap, skip_rate=skip_rate, val_indices=1, shuffle=False, s_dim=s_dim)
+        # Build test dataloader
+        test_dataloader_long = torch.utils.data.DataLoader(test_dataset_long, batch_size=1, shuffle=False, num_workers=num_workers)
     elif cfg['DataFrame']["dataset_name"] == "Lorenz63":
         # Load test dataset
         test_dataset = lorenz63_dataset.Lorenz63(path_to_data=data_dir, split='test', seq_len=seq_len, x_dim=x_dim, sample_rate=sample_rate, observation_process=observation_process, device=device, overlap=overlap, skip_rate=skip_rate, val_indices=1, shuffle=False)
@@ -104,7 +111,6 @@ if __name__ == '__main__':
         test_dataset_long = lorenz63_dataset.Lorenz63(path_to_data=data_dir, split='test', seq_len=None, x_dim=x_dim, sample_rate=sample_rate, observation_process=observation_process, device=device, overlap=overlap, skip_rate=skip_rate, val_indices=1, shuffle=False)
         # Build test dataloader
         test_dataloader_long = torch.utils.data.DataLoader(test_dataset_long, batch_size=1, shuffle=False, num_workers=num_workers)
-
     else:
         raise ValueError("Unsupported dataset_name in configuration file.")
 

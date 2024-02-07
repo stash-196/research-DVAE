@@ -17,7 +17,7 @@ class DirectSinusoid():
             y = [A * np.sin(2 * np.pi * f * t + phi) for A, f, phi in zip(self.amplitudes, self.frequencies, self.phases)]
             self.values.append(y)
 
-def plot_sinusoids_plotly(time_series, time_step):
+def plot_sinusoids_plotly(time_series, time_step, name):
     t = np.arange(0, len(time_series) * time_step, time_step)
     time_series = np.array(time_series)
 
@@ -31,18 +31,29 @@ def plot_sinusoids_plotly(time_series, time_step):
                       showlegend=True,
                       template='plotly_white')
     
-    fig.show()
+    # fig.show()
+    # save fig
+    fig.write_image(f"temp_save/sinusoid/sinusoids_{name}.png")
+
 #%%
 # Parameters for two sinusoids
-amplitudes = [1]
-frequencies = [1]  # Frequency in Hz
-phases = [0]   # Starting phases
-time_step = 0.01        # Time step for the generation
-n_steps = 1000000 #15*60*24*5          # Number of time steps to generate
+amplitudes = [1, 1, 1]
+frequencies = [1, 1/100, 1/1000]  # Frequency in Hz
+phases = [0, 0, 0]   # Starting phases
+time_step = 1e-2        # Time step for the generation
+n_steps = 100000 #15*60*24*5          # Number of time steps to generate
 
-s = DirectSinusoid(amplitudes, frequencies, phases, time_step)
-s.generate(n_steps)
-plot_sinusoids_plotly(s.values, time_step)
+s_train = DirectSinusoid(amplitudes, frequencies, phases, time_step)
+s_train.generate(n_steps)
+name_train = f'{len(amplitudes)}d_train'
+plot_sinusoids_plotly(s_train.values, time_step, name_train)
+
+s_test = DirectSinusoid(amplitudes, frequencies, phases, time_step)
+s_test.generate(n_steps//10)
+name_test = f'{len(amplitudes)}d_test'
+plot_sinusoids_plotly(s_test.values, time_step, name_test)
+
+
 
 #%%
 # To save the generated data
@@ -50,6 +61,7 @@ def save_pickle(data, path):
     with open(path, 'wb') as f:
         pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-save_pickle(s.values, 'dataset_1d.pkl')
+save_pickle(s_train.values, f'temp_save/sinusoid/dataset_{name_train}.pkl')
+save_pickle(s_test.values, f'temp_save/sinusoid/dataset_{name_test}.pkl')
 
 # %%
