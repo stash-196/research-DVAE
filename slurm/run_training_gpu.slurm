@@ -1,18 +1,18 @@
 #!/bin/bash
 
-#SBATCH --job-name=vrnn_training     # Job name
+#SBATCH --job-name=gpu_dvae_training # Job name
 #SBATCH --nodes=1                    # Use one node
 #SBATCH --ntasks=1                   # Run a single task
-#SBATCH --cpus-per-task=4            # Number of CPU cores per task
-#SBATCH --mem=16G                    # Total memory limit
-#SBATCH --time=5:00:00               # Time limit hrs:min:sec
-#SBATCH --output=training_%j.log     # Standard output and error log
+#SBATCH --cpus-per-task=1            # Number of CPU cores per task
+#SBATCH --time=10:00:00               # Time limit hrs:min:sec
+#SBATCH --output=./logs/gpu_training_%j.log     # Standard output and error log
+#SBATCH --error=./logs/training_%j.err      # Standard output and error log
 #SBATCH --partition=gpu              # Specify the GPU partition
 #SBATCH --gres=gpu:1                 # Number of GPUs
 
 # Print the time, hostname, and job ID
 echo "Time: `date`"
-echo "Running on host: `hostname`"
+echo "Running on host: `hostname`"sru
 echo "Under SLURM JobID: $SLURM_JOBID"
 
 # Activate  environment, if there is one (e.g., conda or virtualenv)
