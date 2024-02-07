@@ -84,6 +84,10 @@ class Lorenz63(Dataset):
 
         with open(filename, 'rb') as f:
             the_sequence = np.array(pickle.load(f))
+
+        # Store the full sequence before applying any observation process
+        self.full_sequence = the_sequence
+
         
         if self.observation_process == '3dto3d':
             pass
@@ -99,9 +103,9 @@ class Lorenz63(Dataset):
             the_sequence = the_sequence @ v + np.random.normal(0, 5.7, the_sequence.shape[0])  # Add Gaussian noise
             the_sequence = np.array([the_sequence[i:i+x_dim] for i in range(0, len(the_sequence), x_dim) if i+x_dim <= len(the_sequence)])
 
-            
         # Process the sequence based on the observation process
         the_sequence = self.apply_observation_process(the_sequence)
+
 
         # Generate sequences with or without overlap
         if self.overlap:
@@ -172,7 +176,22 @@ class Lorenz63(Dataset):
         return len(self.data_idx)
     
     def __getitem__(self, index):
+
         start_frame = self.data_idx[index]
         end_frame = min(start_frame + self.seq_len, len(self.seq))
         return self.seq[start_frame:end_frame]
 
+
+    def get_full_xyz(self, index):
+        """
+        Retrieves the full xyz variables for the given index.
+
+        Args:
+            index (int): Index of the desired data sequence.
+
+        Returns:
+            torch.Tensor: The full xyz sequence data for the given index.
+        """
+        start_frame = self.data_idx[index]
+        end_frame = min(start_frame + self.seq_len, len(self.full_sequence))
+        return self.full_sequence[start_frame:end_frame]  # Return the full (x, y, z) data
