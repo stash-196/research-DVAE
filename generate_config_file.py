@@ -50,6 +50,7 @@ if __name__ == "__main__":
     early_stop_patience = [30]
     alphas = [[1/75, 1/900, 1/21600]]
     gradient_clip = [1]
+    observation_process = ['only_x']
 
     model_params = {
         "RNN": {
@@ -62,7 +63,7 @@ if __name__ == "__main__":
             "early_stop_patience": early_stop_patience,
             "gradient_clip": gradient_clip,
             "sequence_len": sequence_len,
-            "observation_process": ['3dto1d', '3dto1d_w_noise'],
+            "observation_process": observation_process,
         },
         "VRNN": {
             "name": ["VRNN"],
