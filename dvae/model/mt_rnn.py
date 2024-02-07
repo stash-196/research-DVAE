@@ -29,7 +29,8 @@ def build_MT_RNN(cfg, device='cpu'):
 
     ### Load parameters for VRNN
     # General
-    alphas = [float(i) for i in cfg.get('Network', 'alphas').split(',')]
+    # slit the alphas string if it contains , if not, just use the value
+    alphas = [float(i) for i in cfg.get('Network', 'alphas').split(',') if i != '']
 
     x_dim = cfg.getint('Network', 'x_dim')
     activation = cfg.get('Network', 'activation')

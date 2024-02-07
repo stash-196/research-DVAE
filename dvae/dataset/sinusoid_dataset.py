@@ -104,10 +104,10 @@ class Sinusoid(Dataset):
             pass  # For a 3D to 3D observation process
         elif self.observation_process == '3dto3d_w_noise':
             pass  # For a 3D to 3D observation process with noise
-        elif self.observation_process == '3dto1d':
+        elif self.observation_process == 'mix1d':
             v = np.ones(sequence.shape[-1])
             sequence = sequence @ v  # Vector product to convert 3D to 1D
-        elif self.observation_process == '3dto1d_w_noise':
+        elif self.observation_process == 'mix1dnoise':
             v = np.ones(sequence.shape[-1])
             sequence = sequence @ v + np.random.normal(0, 0.3, sequence.shape[0])  # Add Gaussian noise
         else:

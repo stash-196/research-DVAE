@@ -196,8 +196,10 @@ class LearningAlgorithm():
             best_optim_dict = optimizer.state_dict()
             start_epoch = -1
             if self.optimize_alphas:
-                alphas_init = [float(i) for i in self.cfg.get('Network', 'alphas').split(',')]
+                alphas_init = [float(i) for i in self.cfg.get('Network', 'alphas').split(',') if i != '']
                 sigmas_history = np.zeros((len(alphas_init), epochs))
+                # set initial values of sigmas_history with alphas_init
+                sigmas_history[:, 0] = sigmoid_reverse(alphas_init)
         else:
             cp_file = os.path.join(save_dir, '{}_checkpoint.pt'.format(self.model_name))
             checkpoint = torch.load(cp_file)
@@ -218,8 +220,10 @@ class LearningAlgorithm():
             best_state_dict = self.model.state_dict()
             best_optim_dict = optimizer.state_dict()
             if self.optimize_alphas:
-                alphas_init = [float(i) for i in self.cfg.get('Network', 'alphas').split(',')]
+                alphas_init = [float(i) for i in self.cfg.get('Network', 'alphas').split(',') if i != '']
                 sigmas_history = np.zeros((len(alphas_init), epochs))
+                # set initial values of sigmas_history with alphas_init
+                sigmas_history[:, 0] = sigmoid_reverse(alphas_init)
 
         kl_warm_epochs = [0]
         kl_warm_values = [0]
@@ -560,4 +564,10 @@ class LearningAlgorithm():
         
 # sigmoid function for arrays
 def sigmoid(x):
+    x = np.array(x)
     return 1 / (1 + np.exp(-x))
+
+# reverse of sigmoid function for arrays
+def sigmoid_reverse(x):
+    x = np.array(x)
+    return np.log(x / (1 - x))
