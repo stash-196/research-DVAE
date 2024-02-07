@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=vrnn_training     # Job name
+#SBATCH --job-name=dvae_eval     # Job name
 #SBATCH --nodes=1                    # Use one node
 #SBATCH --ntasks=1                   # Run a single task
 #SBATCH --cpus-per-task=8            # Number of CPU cores per task

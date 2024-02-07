@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=vrnn_training     # Job name
+#SBATCH --job-name=dvae_training     # Job name
 #SBATCH --nodes=1                    # Use one node
 #SBATCH --ntasks=1                   # Run a single task
 #SBATCH --cpus-per-task=8            # Number of CPU cores per task
@@ -23,7 +23,7 @@ conda activate research-DVAE
 
 cd ~/workspace/research-DVAE
 # Run the command
-~/miniconda3/envs/research-DVAE/bin/python train_model.py --cfg ./config/sinusoid/cfg_mt_rnn.ini
+~/miniconda3/envs/research-DVAE/bin/python train_model.py --cfg ./config/sinusoid/cfg_mt_vrnn.ini
 
 # Print the time again
 echo "Time END: `date`"
