@@ -221,8 +221,8 @@ class LearningAlgorithm():
                 alphas_init = [float(i) for i in self.cfg.get('Network', 'alphas').split(',')]
                 sigmas_history = np.zeros((len(alphas_init), epochs))
 
-        kl_warm_epochs = []
-        kl_warm_values = []
+        kl_warm_epochs = [0]
+        kl_warm_values = [0]
         best_state_epochs = []
         cpt_patience_epochs = []
         delta_per_epoch = []
@@ -355,11 +355,11 @@ class LearningAlgorithm():
                 best_state_dict = self.model.state_dict()
                 best_optim_dict = optimizer.state_dict()
                 cur_best_epoch = epoch
-                best_state_epochs.append(epoch)
             else:
                 cpt_patience += 1
 
             cpt_patience_epochs.append(cpt_patience)
+            best_state_epochs.append(epoch)
 
             # KL warm-up
             if epoch % early_stop_patience == 0 and kl_warm < 1 and epoch > 0:
@@ -373,7 +373,6 @@ class LearningAlgorithm():
                 best_state_dict = self.model.state_dict()
                 best_optim_dict = optimizer.state_dict()
                 cur_best_epoch = epoch
-                best_state_epochs.append(epoch)
 
             # Stop traning if early-stop triggers
             if cpt_patience == early_stop_patience:
@@ -391,7 +390,6 @@ class LearningAlgorithm():
                     best_state_dict = self.model.state_dict()
                     best_optim_dict = optimizer.state_dict()
                     cur_best_epoch = epoch
-                    best_state_epochs.append(epoch)
             
             
 
@@ -466,7 +464,7 @@ class LearningAlgorithm():
                 axs[0].legend(fontsize=16, title='delta', title_fontsize=20)
                 axs[0].set_xlabel('epochs', fontdict={'size':16})
                 axs[0].set_ylabel('delta', fontdict={'size':16})
-                axs[1].plot(kl_warm_values[:epoch+1], label='kl_warm')
+                axs[1].step(kl_warm_epochs[:epoch+1], kl_warm_values[:epoch+1], label='kl_warm')
                 axs[1].legend(fontsize=16, title='kl_warm', title_fontsize=20)
                 axs[1].set_xlabel('epochs', fontdict={'size':16})
                 axs[1].set_ylabel('kl_warm', fontdict={'size':16})
@@ -474,7 +472,7 @@ class LearningAlgorithm():
                 axs[2].legend(fontsize=16, title='cpt_patience', title_fontsize=20)
                 axs[2].set_xlabel('epochs', fontdict={'size':16})
                 axs[2].set_ylabel('cpt_patience', fontdict={'size':16})
-                axs[3].plot(best_state_epochs, np.zeros_like(best_state_epochs), 'ro', label='best_state')
+                axs[3].step(range(epoch+1), best_state_epochs, label='best_state')
                 axs[3].legend(fontsize=16, title='best_state', title_fontsize=20)
                 axs[3].set_xlabel('epochs', fontdict={'size':16})
                 axs[3].set_ylabel('best_state', fontdict={'size':16})
@@ -517,7 +515,7 @@ class LearningAlgorithm():
 
                 visualize_combined_parameters(self.model, explain='epoch_{}'.format(epoch), save_path=save_dir)
 
-                visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector, save_path=save_dir, explain='epoch_{}'.format(epoch))
+                visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector, save_path=save_dir, explain='epoch:{}_klwarm:{}'.format(epoch, kl_warm), inference_mode=True)
 
                 if self.optimize_alphas:
                     alphas = 1 / (1 + np.exp(-sigmas_history[:, epoch]))
