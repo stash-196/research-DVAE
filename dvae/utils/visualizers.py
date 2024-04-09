@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 import numpy as np
-from dvae.utils import create_autonomous_mode_selector
+from dvae.utils import create_autonomous_mode_selector, power_spectrum_error
 import torch
 
 import time
@@ -575,3 +575,19 @@ def visualize_alpha_history(sigmas_history, power_spectrum_lst, spectrum_color_l
     plt.savefig(fig_file, bbox_inches='tight')
     plt.close()
     print(f"Alpha vs Power Spectrum plot saved at: {fig_file}")
+
+
+# Visualize the errors from an error list of any error, using a bar graph. x-axis is the subjects of the error (name_lst), y-axis is the error value. 
+# true_signal_index is the index of the true signal in the error_lst.
+def visualize_errors_from_lst(error_lst, name_lst, true_signal_index, error_unit, colors, save_dir, explain):
+    plt.figure(figsize=(12, 6))
+    plt.bar(name_lst, error_lst, color=colors)
+    plt.xlabel('Signals')
+    plt.ylabel(f'{error_unit}')
+    plt.title(f'{explain} Error against True Signal')
+    plt.grid(True)
+    fig_file = os.path.join(save_dir, f'vis_errors_{explain}.png')
+    plt.savefig(fig_file)
+    plt.close()
+    print(f"Errors plot saved at: {fig_file}")
+    

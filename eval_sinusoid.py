@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 from dvae.learning_algo import LearningAlgorithm
 from dvae.learning_algo_ss import LearningAlgorithm_ss
 from dvae.dataset import sinusoid_dataset, lorenz63_dataset
-from dvae.utils import EvalMetrics, loss_MSE, create_autonomous_mode_selector, visualize_variable_evolution, visualize_sequences, visualize_spectral_analysis, visualize_teacherforcing_2_autonomous, visualize_embedding_space, visualize_accuracy_over_time, visualize_delay_embedding, visualize_alpha_history, run_parallel_visualizations
+from dvae.utils import EvalMetrics, loss_MSE, create_autonomous_mode_selector, visualize_variable_evolution, visualize_sequences, visualize_spectral_analysis, visualize_teacherforcing_2_autonomous, visualize_embedding_space, visualize_accuracy_over_time, visualize_delay_embedding, visualize_alpha_history, run_parallel_visualizations, power_spectrum_error, visualize_errors_from_lst
 from torch.nn.functional import mse_loss
 import plotly.graph_objects as go
 import plotly.express as px
@@ -174,16 +174,6 @@ if __name__ == '__main__':
 
 
     def rmse(true_data, pred_data):
-        """
-        Root Mean Squared Error (RMSE) calculation.
-
-        Args:
-        - true_data: True data tensor.
-        - pred_data: Predicted data tensor.
-
-        Returns:
-        - RMSE value.
-        """
         return torch.sqrt(torch.mean((true_data - pred_data) ** 2, dim=-1))  # RMSE per batch item
 
     def r_squared(true_data, pred_data, epsilon=1e-8):
@@ -211,7 +201,26 @@ if __name__ == '__main__':
     def expand_autonomous_mode_selector(selector, x_dim):
         return np.repeat(selector, x_dim)
 
+    def calculate_power_spectrum_error(power_spectrum_lst, true_signal_index, filter_std):
+        """
+        Calculate the power spectrum error for each signal in the list.
 
+        Args:
+        - power_spectrum_lst: A list of power spectra.
+        - true_signal_index: The index of the true signal in the list.
+
+        Returns:
+        - A list of power spectrum errors.
+        """
+        true_power_spectrum = power_spectrum_lst[true_signal_index]
+        power_spectrum_errors = []
+        for power_spectrum in power_spectrum_lst:
+            power_spectrum_errors.append(power_spectrum_error(power_spectrum, true_power_spectrum, filter_std=filter_std))
+
+        return power_spectrum_errors
+
+
+    VISUALIZE_3D = False
 
     with torch.no_grad():
 
@@ -239,11 +248,16 @@ if __name__ == '__main__':
             # Visualize the spectral analysis
             long_data_lst = [full_xyz_data[:,1], full_xyz_data[:,2], batch_data_long[:,0,:].reshape(-1), recon_data_long[~autonomous_mode_selector_long,0,:].reshape(-1), recon_data_long[autonomous_mode_selector_long,0,:].reshape(-1)]
             name_lst = ['y', 'z', 'observed_x', 'teacher-forced', 'autonomous'] 
+            true_signal_index = 2
             colors_lst = ['orange', 'magenta', 'blue', 'green', 'red']
 
             dt = 1e-2
             sampling_rate = 1 / dt
-            power_spectrum_lst, frequencies, periods = visualize_spectral_analysis(data_lst=long_data_lst, name_lst=name_lst, colors_lst=colors_lst, save_dir=save_dir, sampling_rate=sampling_rate, max_sequences=5000)
+            power_spectrum_lst, frequencies, periods = visualize_spectral_analysis(data_lst=long_data_lst, name_lst=name_lst, colors_lst=colors_lst, save_dir=save_dir, sampling_rate=sampling_rate, max_sequences=50000)
+
+            power_spectrum_error_lst = calculate_power_spectrum_error(power_spectrum_lst, true_signal_index, filter_std=3)
+            visualize_errors_from_lst(power_spectrum_error_lst, name_lst=name_lst, save_dir=save_dir, explain='power_spectrum_error', error_unit='dB', colors=colors_lst)
+
 
             # Visualize the alphas against the power spectral density
             if 'Network' in cfg and 'alphas' in cfg['Network']:
@@ -271,9 +285,10 @@ if __name__ == '__main__':
 
             time_delay = 10
             delay_emedding_dimensions = 3
-            visualize_delay_embedding(observation=batch_data_long[:,0,:].reshape(-1), delay=time_delay, dimensions=delay_emedding_dimensions, save_dir=save_dir, variable_name='true_signal_inference_mode', base_color='Blues')
-            visualize_delay_embedding(observation=recon_data_long[~autonomous_mode_selector_long,0,:].reshape(-1), delay=time_delay, dimensions=delay_emedding_dimensions, save_dir=save_dir, variable_name='teacher-forced_reconstruction_inference_mode', base_color='Greens')
-            visualize_delay_embedding(observation=recon_data_long[autonomous_mode_selector_long,0,:].reshape(-1), delay=time_delay, dimensions=delay_emedding_dimensions, save_dir=save_dir, variable_name='autonomous_reconstruction_inference_mode', base_color='Reds')
+            if VISUALIZE_3D:
+                visualize_delay_embedding(observation=batch_data_long[:,0,:].reshape(-1), delay=time_delay, dimensions=delay_emedding_dimensions, save_dir=save_dir, variable_name='true_signal_inference_mode', base_color='Blues')
+                visualize_delay_embedding(observation=recon_data_long[~autonomous_mode_selector_long,0,:].reshape(-1), delay=time_delay, dimensions=delay_emedding_dimensions, save_dir=save_dir, variable_name='teacher-forced_reconstruction_inference_mode', base_color='Greens')
+                visualize_delay_embedding(observation=recon_data_long[autonomous_mode_selector_long,0,:].reshape(-1), delay=time_delay, dimensions=delay_emedding_dimensions, save_dir=save_dir, variable_name='autonomous_reconstruction_inference_mode', base_color='Reds')
 
             teacherforced_states = dvae.h[~autonomous_mode_selector_long,0,:]
             autonomous_states = dvae.h[autonomous_mode_selector_long,0,:]
@@ -281,30 +296,32 @@ if __name__ == '__main__':
             embedding_states_conditions = ['teacher-forced', 'autonomous']
             embedding_states_colors = ['Greens', 'Reds']
 
-            # visualize the hidden states 3d
-            # vis_embedding_space_params = [
-            #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'nmf'},
-            #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'kernel_pca'},
-            #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'isomap'},
-            #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'lle'},
-            #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'umap'},
-            #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'ica'},
-            #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'mds'},
-            #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors},
-            #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'tsne'},
-            # ]
-            # run_parallel_visualizations(visualize_embedding_space, vis_embedding_space_params)
+            # # visualize the hidden states 3d
+            # # vis_embedding_space_params = [
+            # #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'nmf'},
+            # #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'kernel_pca'},
+            # #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'isomap'},
+            # #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'lle'},
+            # #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'umap'},
+            # #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'ica'},
+            # #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'mds'},
+            # #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors},
+            # #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'tsne'},
+            # # ]
+            # # run_parallel_visualizations(visualize_embedding_space, vis_embedding_space_params)
+            # 
         
             # visualize the hidden states 3d in different techniques
-            visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='nmf')
-            visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='kernel_pca')
-            visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='isomap')
-            visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='lle')
-            visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='umap')
-            visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='ica')
-            visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='mds')
-            visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'])
-            visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='tsne')
+            if VISUALIZE_3D:
+                visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='nmf')
+                visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='kernel_pca')
+                visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='isomap')
+                visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='lle')
+                visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='umap')
+                visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='ica')
+                visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='mds')
+                visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'])
+                visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_dir, variable_name='hidden', condition_names=[f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='tsne')
 
             # break after the first batch
             break
