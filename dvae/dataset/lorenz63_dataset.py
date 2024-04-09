@@ -113,7 +113,7 @@ class Lorenz63(Dataset):
         else: # Remove the last sequence if it is not the correct length
             the_sequence = np.array([the_sequence[i:i+x_dim] for i in range(0, len(the_sequence), x_dim) if i+x_dim <= len(the_sequence)])
         
-        self.seq = torch.from_numpy(the_sequence).float().to(device)
+        self.seq = torch.from_numpy(the_sequence).float()
         
         # Use entire sequence if seq_len is None
         if seq_len is None:

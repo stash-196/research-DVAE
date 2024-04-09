@@ -231,17 +231,20 @@ class LearningAlgorithm():
         cpt_patience_epochs = []
         delta_per_epoch = []
 
+        self.model.to(self.device)
+
         # Train with mini-batch SGD
         for epoch in range(start_epoch+1, epochs):
             
             start_time = datetime.datetime.now()
             
-            model_mode_selector = create_autonomous_mode_selector(self.sequence_len, mode='bernoulli_sampling', autonomous_ratio=kl_warm*0.9)  
+            model_mode_selector = create_autonomous_mode_selector(self.sequence_len, mode='bernoulli_sampling', autonomous_ratio=kl_warm*0.8)  
 
 
             # Batch training
             for _, batch_data in enumerate(train_dataloader):
                 batch_data = batch_data.to(self.device)
+                print(f'sent to device: {self.device}')
                 autonomous_ratio = kl_warm * 0.8
                 
                 if self.dataset_name == 'WSJ0':
@@ -269,11 +272,13 @@ class LearningAlgorithm():
                     loss_kl_v = loss_KLD(self.model.v_mean, self.model.v_logvar, self.model.v_mean_p, self.model.v_logvar_p)
                     loss_kl = loss_kl_z + loss_kl_v
                 elif self.model_name == 'RNN' or self.model_name == 'MT_RNN':
-                    loss_kl = torch.zeros(1)
+                    loss_kl = torch.zeros(1).to(self.device)
                 else:
                     loss_kl = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
                 loss_kl_avg = kl_warm * beta * loss_kl / (seq_len * bs) # Average KL Divergence
-
+                
+                # Print device of loss
+                print(f'loss_recon.device: {loss_recon.device}, loss_kl.device: {loss_kl.device}')
                 loss_tot_avg = loss_recon_avg + loss_kl_avg
                 optimizer.zero_grad()
                 loss_tot_avg.backward()
@@ -323,11 +328,12 @@ class LearningAlgorithm():
                     loss_kl_v = loss_KLD(self.model.v_mean, self.model.v_logvar, self.model.v_mean_p, self.model.v_logvar_p)
                     loss_kl = loss_kl_z + loss_kl_v
                 elif self.model_name == 'RNN' or self.model_name == 'MT_RNN':
-                    loss_kl = torch.zeros(1)
+                    loss_kl = torch.zeros(1).to(self.device)
                 else:
                     loss_kl = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
                 loss_kl_avg = kl_warm * beta * loss_kl / (seq_len * bs)
 
+                print(f'loss_recon.device: {loss_recon.device}, loss_kl.device: {loss_kl.device}')
                 loss_tot_avg = loss_recon_avg + loss_kl_avg
 
                 val_loss[epoch] += loss_tot_avg.item() * bs

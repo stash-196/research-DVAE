@@ -23,7 +23,7 @@ conda activate research-DVAE
 
 cd ~/workspace/research-DVAE
 # Run the command
-~/miniconda3/envs/research-DVAE/bin/python train_model.py --cfg ./config/sinusoid/cfg_mt_vrnn.ini
+~/miniconda3/envs/research-DVAE/bin/python train_model.py --cfg ./config/sinusoid/cfg_mt_rnn.ini
 
 # Print the time again
 echo "Time END: `date`"
