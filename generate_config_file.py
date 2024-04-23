@@ -7,7 +7,7 @@ class DefaultDict(defaultdict):
         return self.default_factory()
 
 
-def generate_config_file(base_template, output_dir, **kwargs):
+def generate_config_file(base_template, output_dir, experiment_name, testing_keys, **kwargs):
     # Ensure the output directory exists
     os.makedirs(output_dir, exist_ok=True)
 
@@ -23,8 +23,11 @@ def generate_config_file(base_template, output_dir, **kwargs):
     content = content.format_map(DefaultDict(lambda: '', **kwargs))
 
     # Generating a unique name for the config file based on parameters
-    output_file_name = '_'.join([f"{key}_{value}" for key, value in kwargs.items()]).replace(', ', '_')
-    output_file = f"{output_dir}/cfg_{output_file_name}.ini"
+    # get key-value pairs for the keys in testing_keys. 
+    label_keys = [f"{key}-{kwargs[f'{key}_id']}" for key in kwargs if key in testing_keys]
+
+    output_file_name = '_'.join([experiment_name, kwargs['tag'], *label_keys]).replace(' ', '')
+    output_file = os.path.join(output_dir, f"cfg_{output_file_name}.ini")
     
     with open(output_file, 'w') as file:
         file.write(content)
@@ -37,82 +40,159 @@ def get_configurations_for_model(params):
     return [dict(zip(param_names, values)) for values in combinations]
 
 if __name__ == "__main__":
-    base_template = "config/sinusoid/cfg_base_template.ini"
-    output_dir = "config/sinusoid/generated4"
+    experiment_name = "compare_alphas"
 
+    models = [
+        "RNN", 
+        "VRNN", 
+        "MT_RNN", 
+        "MT_VRNN"
+        ]
+
+    # Network
     x_dim = [1]
-    z_dim = [3]
-    dense_x = [128]  
+    dense_x = [100]
+    z_dim = [9]
     dense_z = [[16, 32]]
-    dim_RNN = [3]
-    sequence_len = [3750, 7500, 15000]
-    epochs = [300]
-    early_stop_patience = [30]
-    alphas = [[1/75, 1/900, 1/21600]]
+    dim_RNN = [9]
+    alphas = [[0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.001]]
+
+    # Training
+    lr = [0.001]
+    alpha_lr = [0.01]
+    epochs = [600]
+    early_stop_patience = [100]
+    save_frequency = [100]
     gradient_clip = [1]
+    optimize_alphas = [True]
+
+    # DataFrame
+    dataset_name = ['Lorenz63']
+    s_dim = [1]
+    shuffle = [True]
+    batch_size = [128]
+    num_workers = [8]
+    sequence_len = [1000]
+    val_indices = [0.8]
     observation_process = ['only_x']
 
     model_params = {
         "RNN": {
+            # User
+            "save_dir_name": [experiment_name],
+            # Network
             "name": ["RNN"],
             "tag": ["RNN"],
             "x_dim": x_dim,
             "dense_x": dense_x,
             "dim_RNN": dim_RNN,
+            # Training
+            "lr": lr,
+            "alpha_lr": alpha_lr,
             "epochs": epochs,
             "early_stop_patience": early_stop_patience,
+            "save_frequency": save_frequency,
             "gradient_clip": gradient_clip,
+            # DataFrame
+            "dataset_name": dataset_name,
+            "s_dim": s_dim,
+            "shuffle": shuffle,
+            "batch_size": batch_size,
+            "num_workers": num_workers,
             "sequence_len": sequence_len,
+            "val_indices": val_indices,
             "observation_process": observation_process,
         },
         "VRNN": {
+            # Network
             "name": ["VRNN"],
             "tag": ["VRNN"],
-            "x_dim": x_dim,
             "z_dim": z_dim,
-            "dense_x": dense_x,
             "dense_z": dense_z,
-            "dim_RNN": dim_RNN,
-            "epochs": epochs,
-            "early_stop_patience": early_stop_patience,
-            "gradient_clip": gradient_clip,
-            "sequence_len": sequence_len,
-            "observation_process": ['3dto1d', '3dto1d_w_noise'],
         },
         "MT_RNN": {
+            # Network
             "name": ["MT_RNN"],
             "tag": ["MT_RNN"],
-            "x_dim": x_dim,
-            "dense_x": dense_x,
-            "dim_RNN": dim_RNN,
-            "epochs": epochs,
-            "early_stop_patience": early_stop_patience,
-            "gradient_clip": gradient_clip,
             "alphas": alphas,
-            "sequence_len": sequence_len,
-            "observation_process": ['3dto1d', '3dto1d_w_noise'],
+            # Training
+            "alpha_lr": alpha_lr,
+            "optimize_alphas": optimize_alphas,
         },
         "MT_VRNN": {
+            # Network
             "name": ["MT_VRNN"],
             "tag": ["MT_VRNN"],
-            "x_dim": x_dim,
-            "z_dim": z_dim,
-            "dense_x": dense_x,
-            "dense_z": dense_z,
-            "dim_RNN": dim_RNN,
-            "epochs": epochs,
-            "early_stop_patience": early_stop_patience,
-            "alphas": alphas,
-            "sequence_len": sequence_len,
-            "observation_process": ['3dto1d', '3dto1d_w_noise'],
         },
     }
+
+
+    # Copy all components of "RNN" to "VRNN", "MT_RNN", and "MT_VRNN"
+    # except for the ones that are specific to each model
+    for model_name, params in model_params.items():
+        if model_name != "RNN":
+            for key, value in model_params["RNN"].items():
+                if key not in params:
+                    model_params[model_name][key] = value
+    # Copy all components of "VRNN" to "MT_VRNN"
+    # except for the ones that are specific to each model
+    for key, value in model_params["VRNN"].items():
+        if key not in model_params["MT_VRNN"]:
+            model_params["MT_VRNN"][key] = value
+    # Copy all components of "MT_RNN" to "MT_VRNN"
+    # except for the ones that are specific to each model
+    for key, value in model_params["MT_RNN"].items():
+        if key not in model_params["MT_VRNN"]:
+            model_params["MT_VRNN"][key] = value
+    
+    # Get all the parameters
+    all_params = model_params["MT_VRNN"]
+
+    # Get keys for whih the len of the values is greater than 1 in "MT_VRNN"
+    params_being_compared = [key for key, value in model_params["MT_VRNN"].items() if len(value) > 1]
+
+    # exclude models that are not in models. Don't run this before the getting `params_being`
+    model_params = {key: value for key, value in model_params.items() if key in models}
+
+
+    base_template = "config/sinusoid/cfg_base_template.ini"
+    output_dir = os.path.join("config/sinusoid/generated/", experiment_name)
+    
 
     all_configs = {
         model_name: get_configurations_for_model(params) 
         for model_name, params in model_params.items()
     }
 
+    # for each model, give an id to each configuration for the parameter keys that are being compared (`params_being_compared`), 
+    # with the index of the value in the list of values for that key
+    # eg. if x_dim = [1, 2, 3], params_being_compared = ['x_dim'], then the id for x_dim = 1 is 0, for x_dim = 2 is 1, and for x_dim = 3 is 2
+    # do this for all `params_being_compared` keys.
     for model_name, configs in all_configs.items():
         for config in configs:
-            generate_config_file(base_template, output_dir, **config)
+            for key in params_being_compared:
+                # if key is in the config, then add the id to the config. otherwise id=0
+                if key in config:
+                    config[f"{key}_id"] = all_params[key].index(config[key])
+                else:
+                    config[f"{key}_id"] = 0
+                
+
+
+    for model_name, configs in all_configs.items():
+        for config in configs:
+            generate_config_file(base_template, output_dir, experiment_name, params_being_compared, **config)
+
+    # Make a list of all the parameters with multiple keys (which are stored in `params_being_compared``
+    #  and all the values for each key_id
+    # for each model, and save it in a file
+    with open(os.path.join(output_dir, "params_being_compared.txt"), "w") as file:
+        for model_name, configs in all_configs.items():
+            file.write(f"{model_name}\n")
+            for config in configs:
+                # get the values and ids for the keys in `params_being_compared` from config
+                if key in config:
+                    values = {key: f"{config[f'{key}_id']}-{config[key]}" for key in params_being_compared}
+                else:
+                    values = {key: f"0-null" for key in params_being_compared}
+                file.write(f"{values}\n")
