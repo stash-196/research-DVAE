@@ -579,7 +579,7 @@ def visualize_alpha_history(sigmas_history, power_spectrum_lst, spectrum_color_l
 
 # Visualize the errors from an error list of any error, using a bar graph. x-axis is the subjects of the error (name_lst), y-axis is the error value. 
 # true_signal_index is the index of the true signal in the error_lst.
-def visualize_errors_from_lst(error_lst, name_lst, true_signal_index, error_unit, colors, save_dir, explain):
+def visualize_errors_from_lst(error_lst, name_lst, error_unit, colors, save_dir, explain, true_signal_index=None):
     plt.figure(figsize=(12, 6))
     plt.bar(name_lst, error_lst, color=colors)
     plt.xlabel('Signals')
