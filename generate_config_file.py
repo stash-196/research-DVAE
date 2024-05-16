@@ -7,26 +7,28 @@ class DefaultDict(defaultdict):
         return self.default_factory()
 
 
-def generate_config_file(base_template, output_dir, experiment_name, testing_keys, **kwargs):
+def generate_config_file(base_template, output_dir, experiment_name, testing_keys, config):
+    config['test_keys'] = keys_being_compared
+
     # Ensure the output directory exists
     os.makedirs(output_dir, exist_ok=True)
 
     # Convert list values to comma-separated strings
-    for key, value in kwargs.items():
+    for key, value in config.items():
         if isinstance(value, list):
-            kwargs[key] = ', '.join(map(str, value))
+            config[key] = ', '.join(map(str, value))
 
     with open(base_template, 'r') as file:
         content = file.read()
 
     # Replace the placeholders with the actual values
-    content = content.format_map(DefaultDict(lambda: '', **kwargs))
+    content = content.format_map(DefaultDict(lambda: '', **config))
 
     # Generating a unique name for the config file based on parameters
     # get key-value pairs for the keys in testing_keys. 
-    label_keys = [f"{key}-{kwargs[f'{key}_id']}" for key in kwargs if key in testing_keys]
+    label_keys = [f"{key}-{config[f'{key}_id']}" for key in config if key in testing_keys]
 
-    output_file_name = '_'.join([experiment_name, kwargs['tag'], *label_keys]).replace(' ', '')
+    output_file_name = '_'.join([experiment_name, config['tag'], *label_keys]).replace(' ', '')
     output_file = os.path.join(output_dir, f"cfg_{output_file_name}.ini")
     
     with open(output_file, 'w') as file:
@@ -40,7 +42,7 @@ def get_configurations_for_model(params):
     return [dict(zip(param_names, values)) for values in combinations]
 
 if __name__ == "__main__":
-    experiment_name = "compare_alphas"
+    experiment_name = "h180_ep500_SampMeths_αs_0"
 
     models = [
         "RNN", 
@@ -49,22 +51,25 @@ if __name__ == "__main__":
         "MT_VRNN"
         ]
 
+    # Change to dicsionary of lists
     # Network
     x_dim = [1]
     dense_x = [100]
     z_dim = [9]
     dense_z = [[16, 32]]
-    dim_RNN = [9]
-    alphas = [[0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.001]]
+    dim_RNN = [180]
+    alphas = [[0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267]]
 
     # Training
     lr = [0.001]
     alpha_lr = [0.01]
-    epochs = [600]
+    epochs = [500]
     early_stop_patience = [100]
     save_frequency = [100]
     gradient_clip = [1]
     optimize_alphas = [True]
+    sampling_method = ['ss', 'ptf', 'mtf']
+    sampling_ratio = [0.8]
 
     # DataFrame
     dataset_name = ['Lorenz63']
@@ -79,7 +84,7 @@ if __name__ == "__main__":
     model_params = {
         "RNN": {
             # User
-            "save_dir_name": [experiment_name],
+            "experiment_name": [experiment_name],
             # Network
             "name": ["RNN"],
             "tag": ["RNN"],
@@ -93,6 +98,8 @@ if __name__ == "__main__":
             "early_stop_patience": early_stop_patience,
             "save_frequency": save_frequency,
             "gradient_clip": gradient_clip,
+            "sampling_method": sampling_method,
+            "sampling_ratio": sampling_ratio,
             # DataFrame
             "dataset_name": dataset_name,
             "s_dim": s_dim,
@@ -149,7 +156,7 @@ if __name__ == "__main__":
     all_params = model_params["MT_VRNN"]
 
     # Get keys for whih the len of the values is greater than 1 in "MT_VRNN"
-    params_being_compared = [key for key, value in model_params["MT_VRNN"].items() if len(value) > 1]
+    keys_being_compared = [key for key, value in model_params["MT_VRNN"].items() if len(value) > 1]
 
     # exclude models that are not in models. Don't run this before the getting `params_being`
     model_params = {key: value for key, value in model_params.items() if key in models}
@@ -170,7 +177,7 @@ if __name__ == "__main__":
     # do this for all `params_being_compared` keys.
     for model_name, configs in all_configs.items():
         for config in configs:
-            for key in params_being_compared:
+            for key in keys_being_compared:
                 # if key is in the config, then add the id to the config. otherwise id=0
                 if key in config:
                     config[f"{key}_id"] = all_params[key].index(config[key])
@@ -181,7 +188,7 @@ if __name__ == "__main__":
 
     for model_name, configs in all_configs.items():
         for config in configs:
-            generate_config_file(base_template, output_dir, experiment_name, params_being_compared, **config)
+            generate_config_file(base_template, output_dir, experiment_name, keys_being_compared, config)
 
     # Make a list of all the parameters with multiple keys (which are stored in `params_being_compared``
     #  and all the values for each key_id
@@ -192,7 +199,7 @@ if __name__ == "__main__":
             for config in configs:
                 # get the values and ids for the keys in `params_being_compared` from config
                 if key in config:
-                    values = {key: f"{config[f'{key}_id']}-{config[key]}" for key in params_being_compared}
+                    values = {key: f"{config[f'{key}_id']}-{config[key]}" for key in keys_being_compared}
                 else:
-                    values = {key: f"0-null" for key in params_being_compared}
+                    values = {key: f"0-null" for key in keys_being_compared}
                 file.write(f"{values}\n")

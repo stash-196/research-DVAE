@@ -40,9 +40,13 @@ class LearningAlgorithm():
             raise ValueError('Invalid config file path')    
         self.cfg = myconf()
         self.cfg.read(self.config_file)
+        self.experiment_name = self.cfg.get('User', 'experiment_name')
         self.model_name = self.cfg.get('Network', 'name')
         self.dataset_name = self.cfg.get('DataFrame', 'dataset_name')
         self.sequence_len = self.cfg.getint('DataFrame', 'sequence_len')
+
+        self.sampling_method = self.cfg.get('Training', 'sampling_method')
+        self.sampling_ratio = self.cfg.getfloat('Training', 'sampling_ratio')
 
         # Get host name and date
         self.hostname = socket.gethostname()
@@ -53,6 +57,18 @@ class LearningAlgorithm():
         # Load model parameters
         self.use_cuda = self.cfg.getboolean('Training', 'use_cuda')
         self.device = 'cuda' if torch.cuda.is_available() and self.use_cuda else 'cpu'
+
+
+        # if optimize_alphas is not '', turn into boolian
+        try:
+            # Try to fetch the boolean value from the configuration.
+            self.optimize_alphas = self.cfg.getboolean('Training', 'optimize_alphas')
+        except ValueError:
+            # If there is a ValueError, likely because the value is empty or invalid,
+            # set self.optimize_alphas to False.
+            self.optimize_alphas = False
+
+        self.alphas = [float(i) for i in self.cfg.get('Network', 'alphas').split(',') if i != '']
 
 
 
@@ -119,13 +135,14 @@ class LearningAlgorithm():
         if not self.params['reload']:
             saved_root = self.cfg.get('User', 'saved_root')
             tag = self.cfg.get('Network', 'tag')
-            h_dim = self.cfg.getint('Network','dim_RNN')
-            if self.model_name == 'RNN' or self.model_name == 'MT_RNN':
-                filename = "{}_{}_{}_h_dim={}".format(self.dataset_name, self.datetime_str, tag, h_dim)
+
+            if self.optimize_alphas:
+                filename = "{}_{}_{}_SM-{}_α-{}".format(self.dataset_name, self.datetime_str, tag, self.sampling_method, self.alphas)
             else:
-                z_dim = self.cfg.getint('Network','z_dim')
-                filename = "{}_{}_{}_z_dim={}_h_dim={}".format(self.dataset_name, self.datetime_str, tag, z_dim, h_dim)
-            save_dir = os.path.join(saved_root, self.date_str, filename)
+                filename = "{}_{}_{}_SM-{}".format(self.dataset_name, self.datetime_str, tag, self.sampling_method)
+
+            save_dir = os.path.join(saved_root, self.date_str, self.experiment_name, filename)
+            print(f"Saving to: {save_dir}")
             try:
                 os.makedirs(save_dir)
             except FileExistsError:
@@ -155,8 +172,7 @@ class LearningAlgorithm():
             for log in self.model.get_info():
                 logger.info(log)
 
-        self.optimize_alphas = self.cfg.getboolean('Training', 'optimize_alphas', fallback=False)  # defaults to False if not present
-
+            
         # Init optimizer
         optimizer = self.init_optimizer()
 
@@ -238,8 +254,17 @@ class LearningAlgorithm():
             
             start_time = datetime.datetime.now()
             
-            model_mode_selector = create_autonomous_mode_selector(self.sequence_len, mode='bernoulli_sampling', autonomous_ratio=kl_warm*0.7)
-            # model_mode_selector = create_autonomous_mode_selector(self.sequence_len, mode='mix_sampling', autonomous_ratio=0.7)
+            if self.sampling_method == 'ss':
+                model_mode_selector = create_autonomous_mode_selector(self.sequence_len, mode='bernoulli_sampling', autonomous_ratio=kl_warm*self.sampling_ratio)
+            elif self.sampling_method == 'ptf':
+                model_mode_selector = create_autonomous_mode_selector(self.sequence_len, mode='bernoulli_sampling', autonomous_ratio=self.sampling_ratio)
+            elif self.sampling_method == 'mtf':
+                model_mode_selector = create_autonomous_mode_selector(self.sequence_len, mode='mix_sampling', autonomous_ratio=self.sampling_ratio)
+            else:  # error
+                logger.error('Unknown sampling method')
+                break
+
+
 
 
             # Batch training
