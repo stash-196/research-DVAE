@@ -27,18 +27,18 @@ def build_DSAE(cfg, device='cpu'):
     dropout_p = cfg.getfloat('Network', 'dropout_p')
     # Inference
     dense_x = [] if cfg.get('Network', 'dense_x') == '' else [int(i) for i in cfg.get('Network', 'dense_x').split(',')]
-    dim_RNN_gv = cfg.getint('Network', 'dim_RNN_gv')
-    num_RNN_gv = cfg.getint("Network", 'num_RNN_gv')
+    dim_rnn_gv = cfg.getint('Network', 'dim_rnn_gv')
+    num_rnn_gv = cfg.getint("Network", 'num_rnn_gv')
     dense_gv_v = [] if cfg.get('Network', 'dense_gv_v') == '' else [int(i) for i in cfg.get('Network', 'dense_gv_v').split(',')]
     dense_xv_gxv = [] if cfg.get('Network', 'dense_xv_gxv') == '' else [int(i) for i in cfg.get('Network', 'dense_xv_gxv').split(',')]
-    dim_RNN_gxv = cfg.getint('Network', 'dim_RNN_gxv')
-    num_RNN_gxv = cfg.getint('Network', 'num_RNN_gxv')
+    dim_rnn_gxv = cfg.getint('Network', 'dim_rnn_gxv')
+    num_rnn_gxv = cfg.getint('Network', 'num_rnn_gxv')
     dense_gxv_gz = [] if cfg.get('Network', 'dense_gxv_gz') == '' else [int(i) for i in cfg.get('Network', 'dense_gxv_gz').split(',')]
-    dim_RNN_gz = cfg.getint('Network', 'dim_RNN_gz')
-    num_RNN_gz = cfg.getint('Network', 'num_RNN_gz')
+    dim_rnn_gz = cfg.getint('Network', 'dim_rnn_gz')
+    num_rnn_gz = cfg.getint('Network', 'num_rnn_gz')
     # Prior
-    dim_RNN_prior = cfg.getint('Network', 'dim_RNN_prior')
-    num_RNN_prior = cfg.getint('Network', 'num_RNN_prior')
+    dim_rnn_prior = cfg.getint('Network', 'dim_rnn_prior')
+    num_rnn_prior = cfg.getint('Network', 'num_rnn_prior')
     # Generation
     dense_vz_x = [] if cfg.get('Network', 'dense_vz_x') == '' else [int(i) for i in cfg.get('Network', 'dense_vz_x').split(',')]
 
@@ -48,12 +48,12 @@ def build_DSAE(cfg, device='cpu'):
     # Build model
     model = DSAE(x_dim=x_dim, z_dim=z_dim, v_dim=v_dim, activation=activation,
                  dense_x=dense_x,
-                 dim_RNN_gv=dim_RNN_gv, num_RNN_gv=num_RNN_gv,
+                 dim_rnn_gv=dim_rnn_gv, num_rnn_gv=num_rnn_gv,
                  dense_gv_v=dense_gv_v, dense_xv_gxv=dense_xv_gxv,
-                 dim_RNN_gxv=dim_RNN_gxv, num_RNN_gxv=num_RNN_gxv,
+                 dim_rnn_gxv=dim_rnn_gxv, num_rnn_gxv=num_rnn_gxv,
                  dense_gxv_gz=dense_gxv_gz,
-                 dim_RNN_gz=dim_RNN_gz, num_RNN_gz=num_RNN_gz,
-                 dim_RNN_prior=dim_RNN_prior, num_RNN_prior=num_RNN_prior,
+                 dim_rnn_gz=dim_rnn_gz, num_rnn_gz=num_rnn_gz,
+                 dim_rnn_prior=dim_rnn_prior, num_rnn_prior=num_rnn_prior,
                  dense_vz_x=dense_vz_x,
                  dropout_p=dropout_p, beta=beta, device=device).to(device)
 
@@ -65,12 +65,12 @@ class DSAE(nn.Module):
 
     def __init__(self, x_dim, z_dim=16, v_dim=16,activation='tanh',
                  dense_x=[],
-                 dim_RNN_gv=128, num_RNN_gv=1,
+                 dim_rnn_gv=128, num_rnn_gv=1,
                  dense_gv_v=[], dense_xv_gxv=[],
-                 dim_RNN_gxv=128, num_RNN_gxv=1,
+                 dim_rnn_gxv=128, num_rnn_gxv=1,
                  dense_gxv_gz=[],
-                 dim_RNN_gz=128, num_RNN_gz=1,
-                 dim_RNN_prior=16, num_RNN_prior=1,
+                 dim_rnn_gz=128, num_rnn_gz=1,
+                 dim_rnn_prior=16, num_rnn_prior=1,
                  dense_vz_x=[128,128],
                  dropout_p=0, beta=1, device='cpu'):
 
@@ -90,18 +90,18 @@ class DSAE(nn.Module):
         self.device = device
         # Inference
         self.dense_x = dense_x
-        self.dim_RNN_gv = dim_RNN_gv
-        self.num_RNN_gv = num_RNN_gv
+        self.dim_rnn_gv = dim_rnn_gv
+        self.num_rnn_gv = num_rnn_gv
         self.dense_gv_v = dense_gv_v
         self.dense_xv_gxv = dense_xv_gxv
-        self.dim_RNN_gxv = dim_RNN_gxv
-        self.num_RNN_gxv = num_RNN_gxv
+        self.dim_rnn_gxv = dim_rnn_gxv
+        self.num_rnn_gxv = num_rnn_gxv
         self.dense_gxv_gz = dense_gxv_gz
-        self.dim_RNN_gz = dim_RNN_gz
-        self.num_RNN_gz = num_RNN_gz
+        self.dim_rnn_gz = dim_rnn_gz
+        self.num_rnn_gz = num_rnn_gz
         #### Generation z
-        self.dim_RNN_prior = dim_RNN_prior
-        self.num_RNN_prior = num_RNN_prior
+        self.dim_rnn_prior = dim_rnn_prior
+        self.num_rnn_prior = num_rnn_prior
         # Generation x
         self.dense_vz_x = dense_vz_x
         ### Beta-loss
@@ -133,17 +133,17 @@ class DSAE(nn.Module):
         self.mlp_x = nn.Sequential(dic_layers)
         ### content v
         # 1. g_t^v, bi-directional recurrencce
-        self.rnn_g_v = nn.LSTM(dim_x, self.dim_RNN_gv, self.num_RNN_gv, bidirectional=True)
+        self.rnn_g_v = nn.LSTM(dim_x, self.dim_rnn_gv, self.num_rnn_gv, bidirectional=True)
         # 2. g_t^v -> v
         dic_layers = OrderedDict()
         if len(self.dense_gv_v) == 0:
-            dim_gv_v = 2*self.dim_RNN_gv
+            dim_gv_v = 2*self.dim_rnn_gv
             dic_layers['Identity'] = nn.Identity()
         else:
             dim_gv_v = self.dense_gv_v[-1]
             for n in range(len(self.dense_gv_v)):
                 if n == 0:
-                    dic_layers['linear'+str(n)] = nn.Linear(2*self.dim_RNN_gv, self.dense_gv_v[n])
+                    dic_layers['linear'+str(n)] = nn.Linear(2*self.dim_rnn_gv, self.dense_gv_v[n])
                 else:
                     dic_layers['linear'+str(n)] = nn.Linear(self.dense_gv_v[n-1], self.dense_gv_v[n])
                 dic_layers['activation'+str(n)] = self.activation
@@ -168,34 +168,34 @@ class DSAE(nn.Module):
                 dic_layers['dropout'+str(n)] = nn.Dropout(p=self.dropout_p)
         self.mlp_xv_gxv = nn.Sequential(dic_layers)
         # 2. g_t^xv, bidirectional recurrence
-        self.rnn_g_xv = nn.LSTM(dim_xv_gxv, self.dim_RNN_gxv, self.num_RNN_gxv, bidirectional=True)
+        self.rnn_g_xv = nn.LSTM(dim_xv_gxv, self.dim_rnn_gxv, self.num_rnn_gxv, bidirectional=True)
         # 3. g_t^xv -> g_t^z
         dic_layers = OrderedDict()
         if len(self.dense_gxv_gz) == 0:
-            dim_gxv_gz = 2*self.dim_RNN_gxv
+            dim_gxv_gz = 2*self.dim_rnn_gxv
             dic_layers['Identity'] = nn.Identity()
         else:
             dim_gxv_gz = self.dense_gxv_gz[-1]
             for n in range(len(self.dense_gxv_gz)):
                 if n == 0:
-                    dic_layers['linear'+str(n)] = nn.Linear(2*self.dim_RNN_gxv, self.dense_gxv_gz[n])
+                    dic_layers['linear'+str(n)] = nn.Linear(2*self.dim_rnn_gxv, self.dense_gxv_gz[n])
                 else:
                     dic_layers['linear'+str(n)] = nn.Linear(self.dense_gxv_gz[n-1], self.dense_gxv_gz[n])
                 dic_layers['activation'+str(n)] = self.activation
                 dic_layers['dropout'+str(n)] = nn.Dropout(p=self.dropout_p)
         self.mlp_gxv_gz = nn.Sequential(dic_layers)
         # 4. g_t^z, forward recurrence
-        self.rnn_g_z = nn.RNN(dim_gxv_gz, self.dim_RNN_gz, self.num_RNN_gz, bidirectional=False)
+        self.rnn_g_z = nn.RNN(dim_gxv_gz, self.dim_rnn_gz, self.num_rnn_gz, bidirectional=False)
         # 5. g_t^z -> z_t
-        self.inf_z_mean = nn.Linear(self.dim_RNN_gz, self.z_dim)
-        self.inf_z_logvar = nn.Linear(self.dim_RNN_gz, self.z_dim)
+        self.inf_z_mean = nn.Linear(self.dim_rnn_gz, self.z_dim)
+        self.inf_z_logvar = nn.Linear(self.dim_rnn_gz, self.z_dim)
 
         ######################
         #### generation z ####
         ######################
-        self.rnn_prior = nn.LSTM(self.z_dim, self.dim_RNN_prior, self.num_RNN_prior, bidirectional=False)
-        self.prior_mean = nn.Linear(self.dim_RNN_prior, self.z_dim)
-        self.prior_logvar = nn.Linear(self.dim_RNN_prior, self.z_dim)
+        self.rnn_prior = nn.LSTM(self.z_dim, self.dim_rnn_prior, self.num_rnn_prior, bidirectional=False)
+        self.prior_mean = nn.Linear(self.dim_rnn_prior, self.z_dim)
+        self.prior_logvar = nn.Linear(self.dim_rnn_prior, self.z_dim)
 
         ######################
         #### Generation x ####
@@ -229,7 +229,7 @@ class DSAE(nn.Module):
 
         # 2. Infer content v
         _, (_v, _) = self.rnn_g_v(feature_x)
-        _v = _v.view(self.num_RNN_gv, 2, batch_size, self.dim_RNN_gv)[-1,:,:,:]
+        _v = _v.view(self.num_rnn_gv, 2, batch_size, self.dim_rnn_gv)[-1,:,:,:]
         _v = torch.cat((_v[0,:,:], _v[1,:,:]), -1)
         _v = self.mlp_gv_v(_v)
         v_mean = self.inf_v_mean(_v)

@@ -32,9 +32,9 @@ def build_VRNN(cfg, device='cpu'):
     dense_hz_x = [] if cfg.get('Network', 'dense_hz_x') == '' else [int(i) for i in cfg.get('Network', 'dense_hz_x').split(',')]
     dense_h_z = [] if cfg.get('Network', 'dense_h_z') == '' else [int(i) for i in cfg.get('Network', 'dense_h_z').split(',')]
     # RNN
-    dim_RNN = cfg.getint('Network', 'dim_RNN')
-    num_RNN = cfg.getint('Network', 'num_RNN')
-    type_RNN = cfg.get('Network', 'type_RNN')
+    dim_rnn = cfg.getint('Network', 'dim_rnn')
+    num_rnn = cfg.getint('Network', 'num_rnn')
+    type_rnn = cfg.get('Network', 'type_rnn')
 
     # Beta-vae
     beta = cfg.getfloat('Training', 'beta')
@@ -44,7 +44,7 @@ def build_VRNN(cfg, device='cpu'):
                  dense_x=dense_x, dense_z=dense_z,
                  dense_hx_z=dense_hx_z, dense_hz_x=dense_hz_x, 
                  dense_h_z=dense_h_z,
-                 dim_RNN=dim_RNN, num_RNN=num_RNN, type_RNN=type_RNN,
+                 dim_rnn=dim_rnn, num_rnn=num_rnn, type_rnn=type_rnn,
                  dropout_p= dropout_p, beta=beta, device=device).to(device)
 
     return model
@@ -56,7 +56,7 @@ class VRNN(nn.Module):
     def __init__(self, x_dim, z_dim, activation,
                  dense_x, dense_z,
                  dense_hx_z, dense_hz_x, dense_h_z,
-                 dim_RNN, num_RNN=1, type_RNN='RNN',
+                 dim_rnn, num_rnn=1, type_rnn='RNN',
                  dropout_p = 0, beta=1, device='cpu'):
 
         super().__init__()
@@ -80,9 +80,9 @@ class VRNN(nn.Module):
         self.dense_hz_x = dense_hz_x
         self.dense_h_z = dense_h_z
         ### RNN
-        self.dim_RNN = dim_RNN
-        self.num_RNN = num_RNN
-        self.type_RNN = type_RNN
+        self.dim_rnn = dim_rnn
+        self.num_rnn = num_rnn
+        self.type_rnn = type_rnn
         ### Beta-loss
         self.beta = beta
 
@@ -130,13 +130,13 @@ class VRNN(nn.Module):
         # 1. h_t, x_t to z_t (Inference)
         dic_layers = OrderedDict()
         if len(self.dense_hx_z) == 0:
-            dim_hx_z = self.dim_RNN + dim_feature_x
+            dim_hx_z = self.dim_rnn + dim_feature_x
             dic_layers['Identity'] = nn.Identity()
         else:
             dim_hx_z = self.dense_hx_z[-1]
             for n in range(len(self.dense_hx_z)):
                 if n == 0:
-                    dic_layers['linear'+str(n)] = nn.Linear(self.dense_x[-1] + self.dim_RNN, self.dense_hx_z[n])
+                    dic_layers['linear'+str(n)] = nn.Linear(self.dense_x[-1] + self.dim_rnn, self.dense_hx_z[n])
                 else:
                     dic_layers['linear'+str(n)] = nn.Linear(self.dense_hx_z[n-1], self.dense_hx_z[n])
                 dic_layers['activation'+str(n)] = self.activation
@@ -148,13 +148,13 @@ class VRNN(nn.Module):
         # 2. h_t to z_t (Generation z)
         dic_layers = OrderedDict()
         if len(self.dense_h_z) == 0:
-            dim_h_z = self.dim_RNN
+            dim_h_z = self.dim_rnn
             dic_layers['Identity'] = nn.Identity()
         else:
             dim_h_z = self.dense_h_z[-1]
             for n in range(len(self.dense_h_z)):
                 if n == 0:
-                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_RNN, self.dense_h_z[n])
+                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_rnn, self.dense_h_z[n])
                 else:
                     dic_layers['linear'+str(n)] = nn.Linear(self.dense_h_z[n-1], self.dense_h_z[n])
                 dic_layers['activation'+str(n)] = self.activation
@@ -166,13 +166,13 @@ class VRNN(nn.Module):
         # 3. h_t, z_t to x_t (Generation x)
         dic_layers = OrderedDict()
         if len(self.dense_hz_x) == 0:
-            dim_hz_x = self.dim_RNN + dim_feature_z
+            dim_hz_x = self.dim_rnn + dim_feature_z
             dic_layers['Identity'] = nn.Identity()
         else:
             dim_hz_x = self.dense_hz_x[-1]
             for n in range(len(self.dense_hz_x)):
                 if n == 0:
-                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_RNN + dim_feature_z, self.dense_hz_x[n])
+                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_rnn + dim_feature_z, self.dense_hz_x[n])
                 else:
                     dic_layers['linear'+str(n)] = nn.Linear(self.dense_hz_x[n-1], self.dense_hz_x[n])
                 dic_layers['activation'+str(n)] = self.activation
@@ -183,10 +183,10 @@ class VRNN(nn.Module):
         ####################
         #### Recurrence ####
         ####################
-        if self.type_RNN == 'LSTM':
-            self.rnn = nn.LSTM(dim_feature_x+dim_feature_z, self.dim_RNN, self.num_RNN)
-        elif self.type_RNN == 'RNN':
-            self.rnn = nn.RNN(dim_feature_x+dim_feature_z, self.dim_RNN, self.num_RNN)
+        if self.type_rnn == 'LSTM':
+            self.rnn = nn.LSTM(dim_feature_x+dim_feature_z, self.dim_rnn, self.num_rnn)
+        elif self.type_rnn == 'RNN':
+            self.rnn = nn.RNN(dim_feature_x+dim_feature_z, self.dim_rnn, self.num_rnn)
 
 
     def reparameterization(self, mean, logvar):
@@ -229,9 +229,9 @@ class VRNN(nn.Module):
 
         rnn_input = torch.cat((feature_xt, feature_zt), -1)
 
-        if self.type_RNN == 'LSTM':
+        if self.type_rnn == 'LSTM':
             _, (h_tp1, c_tp1) = self.rnn(rnn_input, (h_t, c_t))
-        elif self.type_RNN == 'RNN':
+        elif self.type_rnn == 'RNN':
             _, h_tp1 = self.rnn(rnn_input, h_t)
             c_tp1 = None
 
@@ -249,11 +249,11 @@ class VRNN(nn.Module):
             z_logvar = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
             y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
             z = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
-            h = torch.zeros((seq_len, batch_size, self.dim_RNN)).to(self.device)
+            h = torch.zeros((seq_len, batch_size, self.dim_rnn)).to(self.device)
             z_t = torch.zeros(batch_size, self.z_dim).to(self.device)
-            h_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
-            if self.type_RNN == 'LSTM':
-                c_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
+            h_t = torch.zeros(self.num_rnn, batch_size, self.dim_rnn).to(self.device)
+            if self.type_rnn == 'LSTM':
+                c_t = torch.zeros(self.num_rnn, batch_size, self.dim_rnn).to(self.device)
         else:
             z_mean = self.z_mean
             z_logvar = self.z_logvar
@@ -262,7 +262,7 @@ class VRNN(nn.Module):
             h = self.h
             z_t = self.z_t
             h_t = self.h_t
-            if self.type_RNN == 'LSTM':
+            if self.type_rnn == 'LSTM':
                 c_t = self.c_t
 
         # main part
@@ -283,7 +283,7 @@ class VRNN(nn.Module):
             feature_xt = mix_ratio * feature_auto + (1 - mix_ratio) * feature_tf
 
 
-            h_t_last = h_t.view(self.num_RNN, 1, batch_size, self.dim_RNN)[-1,:,:,:]
+            h_t_last = h_t.view(self.num_rnn, 1, batch_size, self.dim_rnn)[-1,:,:,:]
             mean_zt, logvar_zt = self.inference(feature_xt, h_t_last)
 
             if inference_mode:
@@ -299,9 +299,9 @@ class VRNN(nn.Module):
             y[t,:,:] = torch.squeeze(y_t, 0)
             h[t,:,:] = torch.squeeze(h_t_last, 0)
 
-            if self.type_RNN == 'LSTM':
+            if self.type_rnn == 'LSTM':
                 h_t, c_t = self.recurrence(feature_xt, feature_zt, h_t, c_t) # recurrence for t+1 
-            elif self.type_RNN == 'RNN':
+            elif self.type_rnn == 'RNN':
                 h_t, _ = self.recurrence(feature_xt, feature_zt, h_t)
 
         z_mean_p, z_logvar_p  = self.generation_z(h)
@@ -315,7 +315,7 @@ class VRNN(nn.Module):
         self.feature_x = feature_x
         self.z_t = z_t
         self.h_t = h_t
-        if self.type_RNN == 'LSTM':
+        if self.type_rnn == 'LSTM':
             self.c_t = c_t
         self.z_mean_p = z_mean_p
         self.z_logvar_p = z_logvar_p

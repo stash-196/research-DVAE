@@ -27,17 +27,17 @@ def build_RVAE(cfg, device='cpu'):
     dropout_p = cfg.getfloat('Network', 'dropout_p')
     # Inference
     dense_x_gx = [] if cfg.get('Network', 'dense_x_gx') == '' else [int(i) for i in cfg.get('Network', 'dense_x_gx').split(',')]
-    dim_RNN_g_x = cfg.getint('Network', 'dim_RNN_g_x')
-    num_RNN_g_x = cfg.getint('Network', 'num_RNN_g_x')
+    dim_rnn_g_x = cfg.getint('Network', 'dim_rnn_g_x')
+    num_rnn_g_x = cfg.getint('Network', 'num_rnn_g_x')
     bidir_g_x = cfg.getboolean('Network', 'bidir_g_x')
     dense_z_gz = [] if cfg.get('Network', 'dense_z_gz') == '' else [int(i) for i in cfg.get('Network', 'dense_z_gz').split(',')]
-    dim_RNN_g_z = cfg.getint('Network', 'dim_RNN_g_z')
-    num_RNN_g_z = cfg.getint('Network', 'num_RNN_g_z')
+    dim_rnn_g_z = cfg.getint('Network', 'dim_rnn_g_z')
+    num_rnn_g_z = cfg.getint('Network', 'num_rnn_g_z')
     dense_g_z = [] if cfg.get('Network', 'dense_g_z') == '' else [int(i) for i in cfg.get('Network', 'dense_g_z').split(',')]
     # Generation
     dense_z_h = [] if cfg.get('Network', 'dense_z_h') == '' else [int(i) for i in cfg.get('Network', 'dense_z_h').split(',')]
-    dim_RNN_h = cfg.getint('Network', 'dim_RNN_h')
-    num_RNN_h = cfg.getint('Network', 'num_RNN_h')
+    dim_rnn_h = cfg.getint('Network', 'dim_rnn_h')
+    num_rnn_h = cfg.getint('Network', 'num_rnn_h')
     bidir_h = cfg.getboolean('Network', 'bidir_h')
     dense_h_x = [] if cfg.get('Network', 'dense_h_x') == '' else [int(i) for i in cfg.get('Network', 'dense_h_x').split(',')]
 
@@ -47,13 +47,13 @@ def build_RVAE(cfg, device='cpu'):
     # Build model
     model = RVAE(x_dim=x_dim, z_dim=z_dim, activation=activation,
                  dense_x_gx=dense_x_gx,
-                 dim_RNN_g_x=dim_RNN_g_x, num_RNN_g_x=num_RNN_g_x,
+                 dim_rnn_g_x=dim_rnn_g_x, num_rnn_g_x=num_rnn_g_x,
                  bidir_g_x=bidir_g_x, 
                  dense_z_gz=dense_z_gz,
-                 dim_RNN_g_z=dim_RNN_g_z, num_RNN_g_z=num_RNN_g_z,
+                 dim_rnn_g_z=dim_rnn_g_z, num_rnn_g_z=num_rnn_g_z,
                  dense_g_z=dense_g_z,
                  dense_z_h=dense_z_h,
-                 dim_RNN_h=dim_RNN_h, num_RNN_h=num_RNN_h,
+                 dim_rnn_h=dim_rnn_h, num_rnn_h=num_rnn_h,
                  bidir_h=bidir_h,
                  dense_h_x=dense_h_x,
                  dropout_p=dropout_p, beta=beta, device=device).to(device)
@@ -65,10 +65,10 @@ def build_RVAE(cfg, device='cpu'):
 class RVAE(nn.Module):
 
     def __init__(self, x_dim, z_dim=16, activation = 'tanh',
-                 dense_x_gx=[], dim_RNN_g_x=128, num_RNN_g_x=1, bidir_g_x=False,
-                 dense_z_gz=[], dim_RNN_g_z=128, num_RNN_g_z=1,
+                 dense_x_gx=[], dim_rnn_g_x=128, num_rnn_g_x=1, bidir_g_x=False,
+                 dense_z_gz=[], dim_rnn_g_z=128, num_rnn_g_z=1,
                  dense_g_z=[128],
-                 dense_z_h=[], dim_RNN_h=128, num_RNN_h=1, bidir_h=False, dense_h_x=[],
+                 dense_z_h=[], dim_rnn_h=128, num_rnn_h=1, bidir_h=False, dense_h_x=[],
                  dropout_p = 0, beta=1, device='cpu'):
                  
         super().__init__()
@@ -87,17 +87,17 @@ class RVAE(nn.Module):
         self.device = device
         ### Inference
         self.dense_x_gx = dense_x_gx
-        self.dim_RNN_g_x = dim_RNN_g_x
-        self.num_RNN_g_x = num_RNN_g_x
+        self.dim_rnn_g_x = dim_rnn_g_x
+        self.num_rnn_g_x = num_rnn_g_x
         self.bidir_g_x = bidir_g_x
         self.dense_z_gz = dense_z_gz
-        self.dim_RNN_g_z = dim_RNN_g_z
-        self.num_RNN_g_z = num_RNN_g_z
+        self.dim_rnn_g_z = dim_rnn_g_z
+        self.num_rnn_g_z = num_rnn_g_z
         self.dense_g_z = dense_g_z
         ### Generation
         self.dense_z_h = dense_z_h
-        self.dim_RNN_h = dim_RNN_h
-        self.num_RNN_h = num_RNN_h
+        self.dim_rnn_h = dim_rnn_h
+        self.num_rnn_h = num_rnn_h
         self.bidir_h = bidir_h
         self.dense_h_x = dense_h_x
         ### Beta-loss
@@ -126,7 +126,7 @@ class RVAE(nn.Module):
                 dic_layers['activation'+str(n)] = self.activation
                 dic_layers['dropout'+str(n)] = nn.Dropout(p=self.dropout_p)
         self.mlp_x_gx = nn.Sequential(dic_layers)
-        self.rnn_g_x = nn.LSTM(dim_x_gx, self.dim_RNN_g_x, self.num_RNN_g_x,
+        self.rnn_g_x = nn.LSTM(dim_x_gx, self.dim_rnn_g_x, self.num_rnn_g_x,
                                bidirectional=self.bidir_g_x)
         # 2. z_tm1 to g_t^z
         dic_layers = OrderedDict()
@@ -143,19 +143,19 @@ class RVAE(nn.Module):
                 dic_layers['activation'+str(n)] = self.activation
                 dic_layers['dropout'+str(n)] = nn.Dropout(p=self.dropout_p)
         self.mlp_z_gz = nn.Sequential(dic_layers)
-        self.rnn_g_z  = nn.LSTM(dim_z_gz, self.dim_RNN_g_z, self.num_RNN_g_z)
+        self.rnn_g_z  = nn.LSTM(dim_z_gz, self.dim_rnn_g_z, self.num_rnn_g_z)
 
         # 3. g_t^x and g_t^z to z
         num_dir_x = 2 if self.bidir_g_x else 1
         dic_layers = OrderedDict()
         if len(self.dense_g_z) == 0:
-            dim_g_z = self.dim_RNN_g_z + num_dir_x * self.dim_RNN_g_x
+            dim_g_z = self.dim_rnn_g_z + num_dir_x * self.dim_rnn_g_x
             dic_layers['Identity'] = nn.Identity()
         else:
             dim_g_z = self.dense_g_z[-1]
             for n in range(len(self.dense_g_z)):
                 if n == 0: 
-                    dic_layers['linear'+str(n)] = nn.Linear(num_dir_x * self.dim_RNN_g_x + self.dim_RNN_g_z, self.dense_g_z[n])
+                    dic_layers['linear'+str(n)] = nn.Linear(num_dir_x * self.dim_rnn_g_x + self.dim_rnn_g_z, self.dense_g_z[n])
                 else:
                     dic_layers['linear'+str(n)] = nn.Linear(self.dense_g_z[n-1], self.dense_g_z[n])
                 dic_layers['activation'+str(n)] = self.activation
@@ -183,20 +183,20 @@ class RVAE(nn.Module):
                 dic_layers['dropout'+str(n)] = nn.Dropout(p=self.dropout_p)
         self.mlp_z_h = nn.Sequential(dic_layers)
         # 2. h_t, recurrence
-        self.rnn_h = nn.LSTM(dim_z_h, self.dim_RNN_h, self.num_RNN_h,
+        self.rnn_h = nn.LSTM(dim_z_h, self.dim_rnn_h, self.num_rnn_h,
                              bidirectional=self.bidir_h)
 
         # 3. h_t to x_t
         num_dir_h = 2 if self.bidir_h else 1
         dic_layers = OrderedDict()
         if len(self.dense_h_x) == 0:
-            dim_h_x = num_dir_h * self.dim_RNN_h
+            dim_h_x = num_dir_h * self.dim_rnn_h
             dic_layers['Identity'] = nn.Identity()
         else:
             dim_h_x = self.dense_h_x[-1]
             for n in range(len(self.dense_h_x)):
                 if n == 0:
-                    dic_layers['linear'+str(n)] = nn.Linear(num_dir_h * self.dim_RNN_h, self.dense_h_x[n])
+                    dic_layers['linear'+str(n)] = nn.Linear(num_dir_h * self.dim_rnn_h, self.dense_h_x[n])
                 else:
                     dic_layers['linear'+str(n)] = nn.Linear(self.dense_h_x[n-1], self.dense_h_x[n])
                 dic_layers['activation'+str(n)] = self.activation
@@ -223,8 +223,8 @@ class RVAE(nn.Module):
         z_logvar = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
         z = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
         z_t = torch.zeros(batch_size, self.z_dim).to(self.device)
-        g_z_t = torch.zeros(self.num_RNN_g_z, batch_size, self.dim_RNN_g_z).to(self.device)
-        c_z_t = torch.zeros(self.num_RNN_g_z, batch_size, self.dim_RNN_g_z).to(self.device)
+        g_z_t = torch.zeros(self.num_rnn_g_z, batch_size, self.dim_rnn_g_z).to(self.device)
+        c_z_t = torch.zeros(self.num_rnn_g_z, batch_size, self.dim_rnn_g_z).to(self.device)
         
         # 1. x_t to g_t^x
         x_gx = self.mlp_x_gx(x)
@@ -238,9 +238,9 @@ class RVAE(nn.Module):
             _, (g_z_t, c_z_t) = self.rnn_g_z(z_gz, (g_z_t, c_z_t))
             # Get output of the last layer
             # g_z_t.view(num_layers, num_directions, batch, hidden_size)
-            g_z_t_last = g_z_t.view(self.num_RNN_g_z, 1, batch_size, self.dim_RNN_g_z)[-1,:,:,:]
+            g_z_t_last = g_z_t.view(self.num_rnn_g_z, 1, batch_size, self.dim_rnn_g_z)[-1,:,:,:]
             # delete the first two dimension (both are 1)
-            g_z_t_last = g_z_t_last.view(batch_size, self.dim_RNN_g_z)
+            g_z_t_last = g_z_t_last.view(batch_size, self.dim_rnn_g_z)
             # concatenate g_x and g_z for time step n
             concat_xz = torch.cat([g_x[t, :,:], g_z_t_last], -1)
             # From x_t and g_z_t to z_t

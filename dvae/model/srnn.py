@@ -28,12 +28,12 @@ def build_SRNN(cfg, device='cpu'):
     dropout_p = cfg.getfloat('Network', 'dropout_p')
     # Deterministic
     dense_x_h = [] if cfg.get('Network', 'dense_x_h') == '' else [int(i) for i in cfg.get('Network', 'dense_x_h').split(',')]
-    dim_RNN_h = cfg.getint('Network', 'dim_RNN_h')
-    num_RNN_h = cfg.getint('Network', 'num_RNN_h')
+    dim_rnn_h = cfg.getint('Network', 'dim_rnn_h')
+    num_rnn_h = cfg.getint('Network', 'num_rnn_h')
     # Inference
     dense_hx_g = [] if cfg.get('Network', 'dense_hx_g') == '' else [int(i) for i in cfg.get('Network', 'dense_hx_g').split(',')]
-    dim_RNN_g = cfg.getint('Network', 'dim_RNN_g')
-    num_RNN_g = cfg.getint('Network', 'num_RNN_g')
+    dim_rnn_g = cfg.getint('Network', 'dim_rnn_g')
+    num_rnn_g = cfg.getint('Network', 'num_rnn_g')
     dense_gz_z = [] if cfg.get('Network', 'dense_gz_z') == '' else [int(i) for i in cfg.get('Network', 'dense_gz_z').split(',')]
     # Prior
     dense_hz_z = [] if cfg.get('Network', 'dense_hz_z') == '' else [int(i) for i in cfg.get('Network', 'dense_hz_z').split(',')]
@@ -46,9 +46,9 @@ def build_SRNN(cfg, device='cpu'):
     # Build model
     model = SRNN(x_dim=x_dim, z_dim=z_dim, activation=activation,
                  dense_x_h=dense_x_h,
-                 dim_RNN_h=dim_RNN_h, num_RNN_h=num_RNN_h,
+                 dim_rnn_h=dim_rnn_h, num_rnn_h=num_rnn_h,
                  dense_hx_g=dense_hx_g,
-                 dim_RNN_g=dim_RNN_g, num_RNN_g=num_RNN_g,
+                 dim_rnn_g=dim_rnn_g, num_rnn_g=num_rnn_g,
                  dense_gz_z=dense_gz_z,
                  dense_hz_x=dense_hz_x,
                  dense_hz_z=dense_hz_z,
@@ -61,8 +61,8 @@ def build_SRNN(cfg, device='cpu'):
 class SRNN(nn.Module):
 
     def __init__(self, x_dim, z_dim=16, activation = 'tanh',
-                 dense_x_h=[], dim_RNN_h=128, num_RNN_h=1,
-                 dense_hx_g=[], dim_RNN_g=128, num_RNN_g=1,
+                 dense_x_h=[], dim_rnn_h=128, num_rnn_h=1,
+                 dense_hx_g=[], dim_rnn_g=128, num_rnn_g=1,
                  dense_gz_z=[128,128],
                  dense_hz_z=[128,128],
                  dense_hz_x=[128,128],
@@ -83,12 +83,12 @@ class SRNN(nn.Module):
         self.device = device
         ### Deterministic RNN (forward)
         self.dense_x_h = dense_x_h
-        self.dim_RNN_h = dim_RNN_h
-        self.num_RNN_h = num_RNN_h
+        self.dim_rnn_h = dim_rnn_h
+        self.num_rnn_h = num_rnn_h
         ### Inference
         self.dense_hx_g = dense_hx_g
-        self.dim_RNN_g = dim_RNN_g
-        self.num_RNN_g = num_RNN_g
+        self.dim_rnn_g = dim_rnn_g
+        self.num_rnn_g = num_rnn_g
         self.dense_gz_z = dense_gz_z
         ### Generation z
         self.dense_hz_z = dense_hz_z
@@ -122,7 +122,7 @@ class SRNN(nn.Module):
         self.mlp_x_h = nn.Sequential(dic_layers)
 
         # 2. h_t, forward recurrence
-        self.rnn_h = nn.LSTM(dim_x_h, self.dim_RNN_h, self.num_RNN_h)
+        self.rnn_h = nn.LSTM(dim_x_h, self.dim_rnn_h, self.num_rnn_h)
 
         ###################
         #### Inference ####
@@ -130,13 +130,13 @@ class SRNN(nn.Module):
         # 1. h_t x_t -> g_t
         dic_layers = OrderedDict()
         if len(self.dense_hx_g) == 0:
-            dim_hx_g = self.dim_RNN_h + self.x_dim
+            dim_hx_g = self.dim_rnn_h + self.x_dim
             dic_layers['Identity'] = nn.Identity()
         else:
             dim_hx_g = self.dense_hx_g[-1]
             for n in range(len(self.dense_hx_g)):
                 if n == 0:
-                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_RNN_h+self.x_dim, self.dense_hx_g[n])
+                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_rnn_h+self.x_dim, self.dense_hx_g[n])
                 else:
                     dic_layers['linear'+str(n)] = nn.Linear(self.dense_hx_g[n-1], self.dense_hx_g[n])
                 dic_layers['activation'+str(n)] = self.activation
@@ -144,18 +144,18 @@ class SRNN(nn.Module):
         self.mlp_hx_g = nn.Sequential(dic_layers)
 
         # 2. g_t, backward recurrence
-        self.rnn_g = nn.LSTM(dim_hx_g, self.dim_RNN_g, self.num_RNN_g)
+        self.rnn_g = nn.LSTM(dim_hx_g, self.dim_rnn_g, self.num_rnn_g)
 
         # 3. g_t z_tm1 -> z_t, inference
         dic_layers = OrderedDict()
         if len(self.dense_gz_z) == 0:
-            dim_gz_z = self.dim_RNN_g + self.z_dim
+            dim_gz_z = self.dim_rnn_g + self.z_dim
             dic_layers['Identity'] = nn.Identity()
         else:
             dim_gz_z = self.dense_gz_z[-1]
             for n in range(len(self.dense_gz_z)):
                 if n == 0:
-                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_RNN_g+self.z_dim, self.dense_gz_z[n])
+                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_rnn_g+self.z_dim, self.dense_gz_z[n])
                 else:
                     dic_layers['linear'+str(n)] = nn.Linear(self.dense_gz_z[n-1], self.dense_gz_z[n])
                 dic_layers['activation'+str(n)] = self.activation
@@ -171,13 +171,13 @@ class SRNN(nn.Module):
         # 1. h_t z_tm1 -> z_t
         dic_layers = OrderedDict()
         if len(self.dense_hz_z) == 0:
-            dim_hz_z = self.dim_RNN_h + self.z_dim
+            dim_hz_z = self.dim_rnn_h + self.z_dim
             dic_layers['Identity'] = nn.Identity()
         else:
             dim_hz_z = self.dense_hz_z[-1]
             for n in range(len(self.dense_hz_z)):
                 if n == 0:
-                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_RNN_h+self.z_dim, self.dense_hz_z[n])
+                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_rnn_h+self.z_dim, self.dense_hz_z[n])
                 else:
                     dic_layers['linear'+str(n)] = nn.Linear(self.dense_hz_z[n-1], self.dense_hz_z[n])
                 dic_layers['activation'+str(n)] = self.activation
@@ -193,13 +193,13 @@ class SRNN(nn.Module):
         # 1. h_t z_t -> x_t
         dic_layers = OrderedDict()
         if len(self.dense_hz_x) == 0:
-            dim_hz_x = self.dim_RNN_h + self.z_dim
+            dim_hz_x = self.dim_rnn_h + self.z_dim
             dic_layers['Identity'] = nn.Identity()
         else:
             dim_hz_x = self.dense_hz_x[-1]
             for n in range(len(self.dense_hz_x)):
                 if n == 0:
-                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_RNN_h+self.z_dim, self.dense_hz_x[n])
+                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_rnn_h+self.z_dim, self.dense_hz_x[n])
                 else:
                     dic_layers['linear'+str(n)] = nn.Linear(self.dense_hz_x[n-1], self.dense_hz_x[n])
                 dic_layers['activation'+str(n)] = self.activation

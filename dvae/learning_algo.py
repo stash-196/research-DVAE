@@ -66,9 +66,10 @@ class LearningAlgorithm():
         except ValueError:
             # If there is a ValueError, likely because the value is empty or invalid,
             # set self.optimize_alphas to False.
-            self.optimize_alphas = False
-
-        self.alphas = [float(i) for i in self.cfg.get('Network', 'alphas').split(',') if i != '']
+            self.optimize_alphas = None
+        
+        if self.optimize_alphas is not None:
+            self.alphas = [float(i) for i in self.cfg.get('Network', 'alphas').split(',') if i != '']
 
 
 
@@ -310,9 +311,9 @@ class LearningAlgorithm():
                 loss_tot_avg.backward()
 
                 # Gradient clipping
-                # check if model has model.type_RNN, if True, and if type_RNN=='RNN', then clip the gradient
-                if hasattr(self.model, 'type_RNN'):
-                    if self.model.type_RNN == 'RNN':
+                # check if model has model.type_rnn, if True, and if type_rnn=='RNN', then clip the gradient
+                if hasattr(self.model, 'type_rnn'):
+                    if self.model.type_rnn == 'RNN':
                         self.gradient_clip = self.cfg.getfloat('Training', 'gradient_clip')
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.gradient_clip)
 

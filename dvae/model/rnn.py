@@ -28,9 +28,9 @@ def build_RNN(cfg, device='cpu'):
     # Dense layers
     dense_h_x = [] if cfg.get('Network', 'dense_h_x') == '' else [int(i) for i in cfg.get('Network', 'dense_h_x').split(',')]
     # RNN
-    dim_RNN = cfg.getint('Network', 'dim_RNN')
-    num_RNN = cfg.getint('Network', 'num_RNN')
-    type_RNN = cfg.get('Network', 'type_RNN')
+    dim_rnn = cfg.getint('Network', 'dim_rnn')
+    num_rnn = cfg.getint('Network', 'num_rnn')
+    type_rnn = cfg.get('Network', 'type_rnn')
 
     # Beta-vae
     beta = cfg.getfloat('Training', 'beta')
@@ -39,7 +39,7 @@ def build_RNN(cfg, device='cpu'):
     model = RNN(x_dim=x_dim, activation=activation,
                 dense_x=dense_x,
                 dense_h_x=dense_h_x, 
-                dim_RNN=dim_RNN, num_RNN=num_RNN, type_RNN=type_RNN,
+                dim_rnn=dim_rnn, num_rnn=num_rnn, type_rnn=type_rnn,
                 dropout_p= dropout_p, beta=beta, device=device).to(device)
 
     return model
@@ -51,7 +51,7 @@ class RNN(nn.Module):
     def __init__(self, x_dim, activation,
                  dense_x,
                  dense_h_x,
-                 dim_RNN, num_RNN, type_RNN,
+                 dim_rnn, num_rnn, type_rnn,
                  dropout_p = 0, beta=1, device='cpu'):
 
         super().__init__()
@@ -71,9 +71,9 @@ class RNN(nn.Module):
         ### Dense layers
         self.dense_h_x = dense_h_x
         ### RNN
-        self.dim_RNN = dim_RNN
-        self.num_RNN = num_RNN
-        self.type_RNN = type_RNN
+        self.dim_rnn = dim_rnn
+        self.num_rnn = num_rnn
+        self.type_rnn = type_rnn
         ### Beta-loss
         self.beta = beta
 
@@ -106,13 +106,13 @@ class RNN(nn.Module):
         # h_t to x_t (Generation x)
         dic_layers = OrderedDict()
         if len(self.dense_h_x) == 0:
-            dim_h_x = self.dim_RNN
+            dim_h_x = self.dim_rnn
             dic_layers['Identity'] = nn.Identity()
         else:
             dim_h_x = self.dense_h_x[-1]
             for n in range(len(self.dense_h_x)):
                 if n == 0:
-                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_RNN, self.dense_h_x[n])
+                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_rnn, self.dense_h_x[n])
                 else:
                     dic_layers['linear'+str(n)] = nn.Linear(self.dense_h_x[n-1], self.dense_h_x[n])
                 dic_layers['activation'+str(n)] = self.activation
@@ -123,10 +123,10 @@ class RNN(nn.Module):
         ####################
         #### Recurrence ####
         ####################
-        if self.type_RNN == 'LSTM':
-            self.rnn = nn.LSTM(dim_feature_x, self.dim_RNN, self.num_RNN)
-        elif self.type_RNN == 'RNN':
-            self.rnn = nn.RNN(dim_feature_x, self.dim_RNN, self.num_RNN)
+        if self.type_rnn == 'LSTM':
+            self.rnn = nn.LSTM(dim_feature_x, self.dim_rnn, self.num_rnn)
+        elif self.type_rnn == 'RNN':
+            self.rnn = nn.RNN(dim_feature_x, self.dim_rnn, self.num_rnn)
         else:
             raise SystemExit('Wrong RNN type!')
 
@@ -143,9 +143,9 @@ class RNN(nn.Module):
 
         rnn_input = feature_xt
 
-        if self.type_RNN == 'LSTM':
+        if self.type_rnn == 'LSTM':
             _, (h_tp1, c_tp1) = self.rnn(rnn_input, (h_t, c_t))
-        elif self.type_RNN == 'RNN':
+        elif self.type_rnn == 'RNN':
             _, h_tp1 = self.rnn(rnn_input, h_t)
             c_tp1 = None
 
@@ -161,15 +161,15 @@ class RNN(nn.Module):
         if initialize_states: 
             # create variable holder and send to GPU if needed
             y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
-            h = torch.zeros((seq_len, batch_size, self.dim_RNN)).to(self.device)
-            h_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
-            if self.type_RNN == 'LSTM':
-                c_t = torch.zeros(self.num_RNN, batch_size, self.dim_RNN).to(self.device)
+            h = torch.zeros((seq_len, batch_size, self.dim_rnn)).to(self.device)
+            h_t = torch.zeros(self.num_rnn, batch_size, self.dim_rnn).to(self.device)
+            if self.type_rnn == 'LSTM':
+                c_t = torch.zeros(self.num_rnn, batch_size, self.dim_rnn).to(self.device)
         else:
             y = self.y
             h = self.h
             h_t = self.h_t
-            if self.type_RNN == 'LSTM':
+            if self.type_rnn == 'LSTM':
                 c_t = self.c_t
 
         # main part
@@ -189,21 +189,21 @@ class RNN(nn.Module):
             # Mix the features based on the ratio
             feature_xt = mix_ratio * feature_auto + (1 - mix_ratio) * feature_tf
 
-            h_t_last = h_t.view(self.num_RNN, 1, batch_size, self.dim_RNN)[-1,:,:,:]
+            h_t_last = h_t.view(self.num_rnn, 1, batch_size, self.dim_rnn)[-1,:,:,:]
             y_t = self.generation_x(h_t_last)
             y[t,:,:] = torch.squeeze(y_t, 0)
             h[t,:,:] = torch.squeeze(h_t_last, 0)
 
-            if self.type_RNN == 'LSTM':
+            if self.type_rnn == 'LSTM':
                 h_t, c_t = self.recurrence(feature_xt, h_t, c_t) # recurrence for t+1 
-            elif self.type_RNN == 'RNN':
+            elif self.type_rnn == 'RNN':
                 h_t, _ = self.recurrence(feature_xt, h_t) # recurrence for t+1
 
         self.y = y
         self.h = h
         self.feature_x = feature_x
         self.h_t = h_t
-        if self.type_RNN == 'LSTM':
+        if self.type_rnn == 'LSTM':
             self.c_t = c_t
 
         return y

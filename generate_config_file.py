@@ -57,7 +57,7 @@ if __name__ == "__main__":
     dense_x = [100]
     z_dim = [9]
     dense_z = [[16, 32]]
-    dim_RNN = [180]
+    dim_rnn = [180]
     alphas = [[0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267]]
 
     # Training
@@ -90,10 +90,9 @@ if __name__ == "__main__":
             "tag": ["RNN"],
             "x_dim": x_dim,
             "dense_x": dense_x,
-            "dim_RNN": dim_RNN,
+            "dim_rnn": dim_rnn,
             # Training
             "lr": lr,
-            "alpha_lr": alpha_lr,
             "epochs": epochs,
             "early_stop_patience": early_stop_patience,
             "save_frequency": save_frequency,

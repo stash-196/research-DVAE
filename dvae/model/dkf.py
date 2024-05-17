@@ -36,8 +36,8 @@ def build_DKF(cfg, device='cpu'):
     dropout_p = cfg.getfloat('Network', 'dropout_p')
     # Inference
     dense_x_gx = [] if cfg.get('Network', 'dense_x_gx') == '' else [int(i) for i in cfg.get('Network', 'dense_x_gx').split(',')]
-    dim_RNN_gx = cfg.getint('Network', 'dim_RNN_gx')
-    num_RNN_gx = cfg.getint('Network', 'num_RNN_gx')
+    dim_rnn_gx = cfg.getint('Network', 'dim_rnn_gx')
+    num_rnn_gx = cfg.getint('Network', 'num_rnn_gx')
     bidir_gx = cfg.getboolean('Network', 'bidir_gx')
     dense_ztm1_g = [] if cfg.get('Network', 'dense_ztm1_g') == '' else [int(i) for i in cfg.get('Network', 'dense_ztm1_g').split(',')]
     dense_g_z = [] if cfg.get('Network', 'dense_g_z') == '' else [int(i) for i in cfg.get('Network', 'dense_g_z').split(',')]
@@ -49,8 +49,8 @@ def build_DKF(cfg, device='cpu'):
 
     # Build model
     model = DKF(x_dim=x_dim, z_dim=z_dim, activation=activation,
-                dense_x_gx=dense_x_gx, dim_RNN_gx=dim_RNN_gx, 
-                num_RNN_gx=num_RNN_gx, bidir_gx=bidir_gx,
+                dense_x_gx=dense_x_gx, dim_rnn_gx=dim_rnn_gx, 
+                num_rnn_gx=num_rnn_gx, bidir_gx=bidir_gx,
                 dense_ztm1_g=dense_ztm1_g, dense_g_z=dense_g_z,
                 dense_z_x=dense_z_x,
                 dropout_p=dropout_p, beta=beta, device=device).to(device)
@@ -62,7 +62,7 @@ def build_DKF(cfg, device='cpu'):
 class DKF(nn.Module):
 
     def __init__(self, x_dim, z_dim=16, activation='tanh',
-                 dense_x_gx=[], dim_RNN_gx=128, num_RNN_gx=1, bidir_gx=False,
+                 dense_x_gx=[], dim_rnn_gx=128, num_rnn_gx=1, bidir_gx=False,
                  dense_ztm1_g=[], dense_g_z=[],
                  dense_z_x=[128,128],
                  dropout_p = 0, beta=1, device='cpu'):
@@ -82,8 +82,8 @@ class DKF(nn.Module):
         self.device = device
         ### Inference
         self.dense_x_gx = dense_x_gx
-        self.dim_RNN_gx = dim_RNN_gx
-        self.num_RNN_gx = num_RNN_gx
+        self.dim_rnn_gx = dim_rnn_gx
+        self.num_rnn_gx = num_rnn_gx
         self.bidir_gx = bidir_gx
         self.dense_ztm1_g = dense_ztm1_g
         self.dense_g_z = dense_g_z
@@ -115,11 +115,11 @@ class DKF(nn.Module):
                 dic_layers['activation'+str(n)] = self.activation
                 dic_layers['dropout'+str(n)] = nn.Dropout(p=self.dropout_p)
         self.mlp_x_gx = nn.Sequential(dic_layers)
-        self.rnn_gx = nn.LSTM(dim_x_gx, self.dim_RNN_gx, self.num_RNN_gx, bidirectional=self.bidir_gx)
+        self.rnn_gx = nn.LSTM(dim_x_gx, self.dim_rnn_gx, self.num_rnn_gx, bidirectional=self.bidir_gx)
         # 2. g_tˆx and z_tm1 to g_t
         dic_layers = OrderedDict()
         if len(self.dense_ztm1_g) == 0:
-            dic_layers['linear_last'] = nn.Linear(self.z_dim, self.dim_RNN_gx)
+            dic_layers['linear_last'] = nn.Linear(self.z_dim, self.dim_rnn_gx)
             dic_layers['activation_last'] = self.activation
             dic_layers['dropout_last'+str(n)] = nn.Dropout(p=self.dropout_p)
         else:
@@ -130,20 +130,20 @@ class DKF(nn.Module):
                     dic_layers['linear'+str(n)] = nn.Linear(self.dense_ztm1_g[n-1], self.dense_ztm1_g[n])
                 dic_layers['activation'+str(n)] = self.activation
                 dic_layers['dropout'+str(n)] = nn.Dropout(p=self.dropout_p)
-            dic_layers['linear_last'] = nn.Linear(self.dense_ztm1_g[-1], self.dim_RNN_gx)
+            dic_layers['linear_last'] = nn.Linear(self.dense_ztm1_g[-1], self.dim_rnn_gx)
             dic_layers['activation_last'] = self.activation
             dic_layers['dropout_last'+str(n)] = nn.Dropout(p=self.dropout_p)
         self.mlp_ztm1_g = nn.Sequential(dic_layers)
         # 3. g_t to z_t
         dic_layers = OrderedDict()
         if len(self.dense_g_z) == 0:
-            dim_g_z = self.dim_RNN_gx
+            dim_g_z = self.dim_rnn_gx
             dic_layers['Identity'] = nn.Identity()
         else:
             dim_g_z = self.dense_g_z[-1]
             for n in range(len(self.dense_g_z)):
                 if n == 0:
-                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_RNN_gx, self.dense_g_z[n])
+                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_rnn_gx, self.dense_g_z[n])
                 else:
                     dic_layers['linear'+str(n)] = nn.Linear(self.dense_g_z[n-1], self.dense_g_z[n])
                 dic_layers['activation'+str(n)] = self.activation
@@ -217,7 +217,7 @@ class DKF(nn.Module):
         x_g = self.mlp_x_gx(x)
         if self.bidir_gx:
             g, _ = self.rnn_gx(x_g)
-            g = g.view(seq_len, batch_size, 2, self.dim_RNN_gx)
+            g = g.view(seq_len, batch_size, 2, self.dim_rnn_gx)
             g_forward = g[:,:,0,:]
             g_backward = g[:,:,1,:]
             for t in range(seq_len):

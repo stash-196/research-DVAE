@@ -40,8 +40,8 @@ def build_KVAE(cfg, device='cpu'):
     init_cov = cfg.getfloat('Network', 'init_cov')
     # Dynamics
     K = cfg.getint('Network', 'K')
-    dim_RNN_alpha = cfg.getint('Network', 'dim_RNN_alpha')
-    num_RNN_alpha = cfg.getint('Network', 'num_RNN_alpha')
+    dim_rnn_alpha = cfg.getint('Network', 'dim_rnn_alpha')
+    num_rnn_alpha = cfg.getint('Network', 'num_rnn_alpha')
     # Training set
     scheduler_training = cfg.getboolean('Training', 'scheduler_training')
     only_vae_epochs = cfg.getint('Training', 'only_vae_epochs')
@@ -52,7 +52,7 @@ def build_KVAE(cfg, device='cpu'):
                  dense_x_a=dense_x_a, dense_a_x=dense_a_x,
                  init_kf_mat=init_kf_mat, noise_transition=noise_transition,
                  noise_emission=noise_emission, init_cov=init_cov,
-                 K=K, dim_RNN_alpha=dim_RNN_alpha, num_RNN_alpha=num_RNN_alpha,
+                 K=K, dim_rnn_alpha=dim_rnn_alpha, num_rnn_alpha=num_rnn_alpha,
                  dropout_p=dropout_p, scale_reconstruction = scale_reconstruction,
                  device=device).to(device)
 
@@ -66,7 +66,7 @@ class KVAE(nn.Module):
     def __init__(self, x_dim, a_dim = 8, z_dim=4, activation='tanh',
                  dense_x_a=[128,128], dense_a_x=[128,128],
                  init_kf_mat=0.05, noise_transition=0.08, noise_emission=0.03, init_cov=20,
-                 K=3, dim_RNN_alpha=50, num_RNN_alpha=1,
+                 K=3, dim_rnn_alpha=50, num_rnn_alpha=1,
                  dropout_p=0, scale_reconstruction=1, device='cpu'):
 
         super().__init__()
@@ -95,8 +95,8 @@ class KVAE(nn.Module):
         self.init_cov = init_cov
         # Dynamics params (alpha)
         self.K = K
-        self.dim_RNN_alpha = dim_RNN_alpha
-        self.num_RNN_alpha = num_RNN_alpha
+        self.dim_rnn_alpha = dim_rnn_alpha
+        self.num_rnn_alpha = num_rnn_alpha
 
         self.build()
 
@@ -159,8 +159,8 @@ class KVAE(nn.Module):
         #### Alpha ####
         ###############
         self.a_init = torch.zeros((1, self.a_dim), requires_grad=True, device=self.device) # (bs, a_dim)
-        self.rnn_alpha = nn.LSTM(self.a_dim, self.dim_RNN_alpha, self.num_RNN_alpha, bidirectional=False)
-        self.mlp_alpha = nn.Sequential(nn.Linear(self.dim_RNN_alpha, self.K),
+        self.rnn_alpha = nn.LSTM(self.a_dim, self.dim_rnn_alpha, self.num_rnn_alpha, bidirectional=False)
+        self.mlp_alpha = nn.Sequential(nn.Linear(self.dim_rnn_alpha, self.K),
                                        nn.Softmax(dim=-1))
 
         ############################

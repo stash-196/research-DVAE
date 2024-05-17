@@ -32,14 +32,14 @@ def build_STORN(cfg, device='cpu'):
     dropout_p = cfg.getfloat('Network', 'dropout_p')
     # Inference
     dense_x_g = [] if cfg.get('Network', 'dense_x_g') == '' else [int(i) for i in cfg.get('Network', 'dense_x_g').split(',')]
-    dim_RNN_g = cfg.getint('Network', 'dim_RNN_g')
-    num_RNN_g = cfg.getint('Network', 'num_RNN_g')
+    dim_rnn_g = cfg.getint('Network', 'dim_rnn_g')
+    num_rnn_g = cfg.getint('Network', 'num_rnn_g')
     dense_g_z = [] if cfg.get('Network', 'dense_g_z') == '' else [int(i) for i in cfg.get('Network', 'dense_g_z').split(',')]
     # Generation
     dense_z_h = [] if cfg.get('Network', 'dense_z_h') == '' else [int(i) for i in cfg.get('Network', 'dense_z_h').split(',')]
     dense_xtm1_h = [] if cfg.get('Network', 'dense_xtm1_h') == '' else [int(i) for i in cfg.get('Network', 'dense_xtm1_h').split(',')]
-    dim_RNN_h = cfg.getint('Network', 'dim_RNN_h')
-    num_RNN_h = cfg.getint('Network', 'num_RNN_h')
+    dim_rnn_h = cfg.getint('Network', 'dim_rnn_h')
+    num_rnn_h = cfg.getint('Network', 'num_rnn_h')
     dense_h_x = [] if cfg.get('Network', 'dense_h_x') == '' else [int(i) for i in cfg.get('Network', 'dense_h_x').split(',')]
     
     # Beta-vae
@@ -48,10 +48,10 @@ def build_STORN(cfg, device='cpu'):
     # Build model
     model = STORN(x_dim=x_dim, z_dim=z_dim, activation=activation,
                  dense_x_g=dense_x_g, dense_g_z=dense_g_z,
-                 dim_RNN_g=dim_RNN_g, num_RNN_g=num_RNN_g,
+                 dim_rnn_g=dim_rnn_g, num_rnn_g=num_rnn_g,
                  dense_z_h=dense_z_h, dense_xtm1_h=dense_xtm1_h,
                  dense_h_x=dense_h_x,
-                 dim_RNN_h=dim_RNN_h, num_RNN_h=num_RNN_h,
+                 dim_rnn_h=dim_rnn_h, num_rnn_h=num_rnn_h,
                  dropout_p=dropout_p, beta=beta, device=device).to(device)
 
     return model
@@ -62,9 +62,9 @@ class STORN(nn.Module):
 
     def __init__(self, x_dim, z_dim=16, activation = 'tanh',
                  dense_x_g=[128], dense_g_z=[128],
-                 dim_RNN_g=128, num_RNN_g=1,
+                 dim_rnn_g=128, num_rnn_g=1,
                  dense_z_h=[128], dense_xtm1_h=[128], dense_h_x=[128],
-                 dim_RNN_h=128, num_RNN_h=1,
+                 dim_rnn_h=128, num_rnn_h=1,
                  dropout_p = 0, beta=1, device='cpu'):
 
         super().__init__()
@@ -83,14 +83,14 @@ class STORN(nn.Module):
         ### Inference
         self.dense_x_g = dense_x_g
         self.dense_g_z = dense_g_z
-        self.dim_RNN_g = dim_RNN_g
-        self.num_RNN_g = num_RNN_g
+        self.dim_rnn_g = dim_rnn_g
+        self.num_rnn_g = num_rnn_g
         ### Generation x
         self.dense_z_h = dense_z_h
         self.dense_xtm1_h = dense_xtm1_h
         self.dense_h_x = dense_h_x
-        self.dim_RNN_h = dim_RNN_h
-        self.num_RNN_h = num_RNN_h
+        self.dim_rnn_h = dim_rnn_h
+        self.num_rnn_h = num_rnn_h
         ### Beta-loss
         self.beta = beta
 
@@ -118,17 +118,17 @@ class STORN(nn.Module):
                 dic_layers['dropout'+str(n)] = nn.Dropout(p=self.dropout_p)
         self.mlp_x_g = nn.Sequential(dic_layers)
         # 2. g_t, forward recurrence
-        self.rnn_g = nn.LSTM(dim_x_g, self.dim_RNN_g, self.num_RNN_g)
+        self.rnn_g = nn.LSTM(dim_x_g, self.dim_rnn_g, self.num_rnn_g)
         # 3. g_t to z_t
         dic_layers = OrderedDict()
         if (len(self.dense_g_z)) == 0:
-            dim_g_z = self.dim_RNN_g
+            dim_g_z = self.dim_rnn_g
             dic_layers['Identity'] = nn.Identity()
         else:
             dim_g_z = self.dense_g_z[-1]
             for n in range(len(self.dense_g_z)):
                 if n == 0:
-                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_RNN_g, self.dense_g_z[n])
+                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_rnn_g, self.dense_g_z[n])
                 else:
                     dic_layers['linear'+str(n)] = nn.Linear(self.dense_g_z[n-1], self.dense_g_z[n])
                 dic_layers['activation'+str(n)] = self.activation
@@ -171,17 +171,17 @@ class STORN(nn.Module):
                 dic_layers['dropout'+str(n)] = nn.Dropout(p=self.dropout_p)
         self.mlp_xtm1_h = nn.Sequential(dic_layers)
         # 3. h_t, forward recurrence
-        self.rnn_h = nn.LSTM(dim_z_h+dim_xtm1_h, self.dim_RNN_h, self.num_RNN_h)
+        self.rnn_h = nn.LSTM(dim_z_h+dim_xtm1_h, self.dim_rnn_h, self.num_rnn_h)
         # 4. h_t to x_t
         dic_layers = OrderedDict()
         if len(self.dense_h_x) == 0:
-            dim_h_x = self.dim_RNN_h
+            dim_h_x = self.dim_rnn_h
             dic_layers['Identity'] = nn.Identity()
         else:
             dim_h_x = self.dense_h_x[-1]
             for n in range(len(self.dense_h_x)):
                 if n == 0:
-                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_RNN_h, self.dense_h_x[n])
+                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_rnn_h, self.dense_h_x[n])
                 else:
                     dic_layers['linear'+str(n)] = nn.Linear(self.dense_h_x[n-1], self.dense_h_x[n])
                 dic_layers['activation'+str(n)] = self.activation
