@@ -1,3 +1,31 @@
+
+## Setup Instructions
+### 1. Clone the Repository
+
+```sh
+git clone https://github.com/yourusername/your-repository.git
+cd your-repository
+```
+
+### 2. Create and Activate Virtual Environment
+```sh
+python3 -m venv research-DVAE
+source research-DVAE/bin/activate  # On Windows use `research-DVAE\Scripts\activate`
+```
+
+### 3. Install Dependencies
+```sh
+pip install -r requirements.txt
+```
+
+### 4. Activate Environment
+```sh
+  source research-DVAE/bin/activate
+```
+
+
+
+
 # Dynamical Variational Autoencoders A Comprehensive Review
 
 This repository contains the code for:  
