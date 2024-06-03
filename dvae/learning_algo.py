@@ -17,21 +17,19 @@ import pickle
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-from .utils import myconf, get_logger, loss_ISD, loss_KLD, loss_MPJPE, loss_MSE, create_autonomous_mode_selector, visualize_model_parameters, visualize_combined_parameters, visualize_teacherforcing_2_autonomous
+from .utils import myconf, get_logger, loss_ISD, loss_KLD, loss_MPJPE, loss_MSE, create_autonomous_mode_selector, visualize_model_parameters, visualize_combined_parameters, visualize_teacherforcing_2_autonomous, profile_execution
 from .dataset import h36m_dataset, speech_dataset, lorenz63_dataset, sinusoid_dataset
 from .model import build_VAE, build_DKF, build_STORN, build_VRNN, build_SRNN, build_RVAE, build_DSAE, build_RNN, build_MT_RNN, build_MT_VRNN_pp
 import subprocess
 
 
 class LearningAlgorithm():
-
     """
     Basical class for model building, including:
     - read common paramters for different models
     - define data loader
     - define loss function as a class member
     """
-
     def __init__(self, params):
         # Load config parser
         self.params = params
@@ -119,8 +117,8 @@ class LearningAlgorithm():
         
         return basic_info
 
-
-    def train(self):
+    @profile_execution
+    def train(self, profiler=None):
         ############
         ### Init ###
         ############
@@ -318,6 +316,7 @@ class LearningAlgorithm():
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.gradient_clip)
 
                 optimizer.step()
+                profiler.step()
 
                 train_loss[epoch] += loss_tot_avg.item() * bs
                 train_recon[epoch] += loss_recon_avg.item() * bs
