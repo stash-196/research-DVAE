@@ -448,6 +448,10 @@ class LearningAlgorithm():
                 logger.info('Epoch: {} ===> checkpoint stored with current best epoch: {}'.format(epoch, cur_best_epoch))
 
                 # Save the loss figure
+                save_figures_dir = os.path.join(save_dir, 'vis_during_training')
+                if not os.path.exists(save_figures_dir):
+                    os.makedirs(save_figures_dir)
+
                 plt.clf()
                 fig = plt.figure(figsize=(8,6))
                 plt.rcParams['font.size'] = 12
@@ -459,7 +463,7 @@ class LearningAlgorithm():
                 plt.legend(fontsize=16, title=self.model_name, title_fontsize=20)
                 plt.xlabel('epochs', fontdict={'size':16})
                 plt.ylabel('loss', fontdict={'size':16})
-                fig_file = os.path.join(save_dir, 'vis_training_loss_{}.png'.format(tag))
+                fig_file = os.path.join(save_figures_dir, 'vis_training_loss_{}.png'.format(tag))
                 plt.savefig(fig_file)
                 plt.close(fig)
 
@@ -473,7 +477,7 @@ class LearningAlgorithm():
                 plt.legend(fontsize=16, title='{}: Recon. Loss'.format(self.model_name), title_fontsize=20)
                 plt.xlabel('epochs', fontdict={'size':16})
                 plt.ylabel('loss', fontdict={'size':16})
-                fig_file = os.path.join(save_dir, 'vis_training_loss_recon_{}.png'.format(tag))
+                fig_file = os.path.join(save_figures_dir, 'vis_training_loss_recon_{}.png'.format(tag))
                 plt.savefig(fig_file) 
                 plt.close(fig)
 
@@ -487,7 +491,7 @@ class LearningAlgorithm():
                 plt.legend(fontsize=16, title='{}: KL Divergence'.format(self.model_name), title_fontsize=20)
                 plt.xlabel('epochs', fontdict={'size':16})
                 plt.ylabel('loss', fontdict={'size':16})
-                fig_file = os.path.join(save_dir, 'vis_training_loss_KLD_{}.png'.format(tag))
+                fig_file = os.path.join(save_figures_dir, 'vis_training_loss_KLD_{}.png'.format(tag))
                 plt.savefig(fig_file)
                 plt.close(fig)
 
@@ -512,7 +516,7 @@ class LearningAlgorithm():
                 axs[3].legend(fontsize=16, title='best_state', title_fontsize=20)
                 axs[3].set_xlabel('epochs', fontdict={'size':16})
                 axs[3].set_ylabel('best_state', fontdict={'size':16})
-                fig_file = os.path.join(save_dir, 'vis_training_delta_kl_cpt_best_state_{}.png'.format(tag))
+                fig_file = os.path.join(save_figures_dir, 'vis_training_delta_kl_cpt_best_state_{}.png'.format(tag))
                 plt.savefig(fig_file)
                 plt.close(fig)
 
@@ -529,7 +533,7 @@ class LearningAlgorithm():
                     plt.legend(fontsize=16, title='Sigma values', title_fontsize=20)
                     plt.xlabel('epochs', fontdict={'size':16})
                     plt.ylabel('sigma', fontdict={'size':16})
-                    fig_file = os.path.join(save_dir, 'vis_training_history_of_sigma_{}.png'.format(tag))
+                    fig_file = os.path.join(save_figures_dir, 'vis_training_history_of_sigma_{}.png'.format(tag))
                     plt.savefig(fig_file)
                     plt.close(fig)
 
@@ -545,13 +549,13 @@ class LearningAlgorithm():
                     plt.xlabel('epochs', fontdict={'size':16})
                     plt.ylabel('alpha', fontdict={'size':16})
                     plt.yscale('log')  # Set y-axis to logarithmic scale
-                    fig_file = os.path.join(save_dir, 'vis_training_history_of_alpha_{}.png'.format(tag))
+                    fig_file = os.path.join(save_figures_dir, 'vis_training_history_of_alpha_{}.png'.format(tag))
                     plt.savefig(fig_file)
                     plt.close(fig)
 
-                visualize_combined_parameters(self.model, explain='epoch_{}'.format(epoch), save_path=save_dir)
+                visualize_combined_parameters(self.model, explain='epoch_{}'.format(epoch), save_path=save_figures_dir)
 
-                visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector, save_path=save_dir, explain='epoch:{}_klwarm:{}'.format(epoch, kl_warm), inference_mode=True)
+                visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector, save_path=save_figures_dir, explain='epoch:{}_klwarm:{}'.format(epoch, kl_warm), inference_mode=True)
 
                 if self.optimize_alphas:
                     alphas = 1 / (1 + np.exp(-sigmas_history[:, epoch]))

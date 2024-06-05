@@ -1,5 +1,3 @@
-# profiler_utils.py
-
 import torch.profiler
 import os
 
@@ -16,7 +14,6 @@ def profile_execution(func):
         with torch.profiler.profile(
             activities=[
                 torch.profiler.ProfilerActivity.CPU,
-                # Exclude CUDA if it's not available
             ],
             schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
             on_trace_ready=torch.profiler.tensorboard_trace_handler(log_dir),
@@ -27,7 +24,8 @@ def profile_execution(func):
             print("Starting profiler...")
             result = func(*args, profiler=prof, **kwargs)
             print("Profiling completed")
-            prof.export_stacks("/tmp/profiler_stacks.txt", "self_cpu_time_total")
             print(f"Profiler logs have been written to: {log_dir}")
+            print("Contents of logs directory after profiling:")
+            print(os.listdir(log_dir))  # Added to check the contents of the log directory after profiling
         return result
     return wrapper
