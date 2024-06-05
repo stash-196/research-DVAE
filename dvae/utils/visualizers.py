@@ -108,6 +108,7 @@ def visualize_sequences(true_data, recon_data, mode_selector, save_dir, explain=
     plt.grid(True)
     
     fig_file = os.path.join(save_dir, f'vis_pred_true_series_{explain}.png')
+    plt.legend(loc='upper right')
     plt.savefig(fig_file)
     plt.close()
 
