@@ -32,3 +32,4 @@ venv.bak/
 *.swp
 research-DVAE/**/*
 pyenv-research-DVAE/**/*
+logs
