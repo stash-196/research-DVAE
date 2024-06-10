@@ -8,6 +8,7 @@ notes/*
 *.sh 
 data/*
 saved_model/*
+slurm/temp/*
 pretrained_models/*
 slurm/logs/*
 config/**/generated/*
@@ -15,8 +16,6 @@ config/**/generated2/*
 config/**/generated3/*
 config/**/generated22/*
 config/**/generated4/*
-slurm/logs/*research-DVAE/
-
 
 __pycache__/
 *.pyc
@@ -32,3 +31,4 @@ venv.bak/
 .vscode/
 *.swp
 research-DVAE/**/*
+pyenv-research-DVAE/**/*

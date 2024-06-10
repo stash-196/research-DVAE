@@ -18,6 +18,9 @@ class Options:
         self.parser.add_argument('--model_dir', type=str, default=None, help='model directory')
         # Device-specific config
         self.parser.add_argument('--device_cfg', type=str, default='config/cfg_device.ini', help='device config path')
+        # Job ID if on Slurm
+        self.parser.add_argument('--job_id', type=str, default=None, help='job ID')
+
 
     def get_params(self):
         self._initial()

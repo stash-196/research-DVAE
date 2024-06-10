@@ -33,6 +33,7 @@ class LearningAlgorithm():
     def __init__(self, params):
         # Load config parser
         self.params = params
+        self.job_id = self.params['job_id']
         self.config_file = self.params['cfg']
         if not os.path.isfile(self.config_file):
             raise ValueError('Invalid config file path')    
@@ -51,6 +52,7 @@ class LearningAlgorithm():
         # Get current date
         self.datetime_str = datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
         self.date_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        self.time_str = datetime.datetime.now().strftime("%H:%M:%S")
         
         # Load model parameters
         self.use_cuda = self.cfg.getboolean('Training', 'use_cuda')
@@ -87,8 +89,8 @@ class LearningAlgorithm():
     def init_optimizer(self):
         optimization = self.cfg.get('Training', 'optimization')
         self.lr = self.cfg.getfloat('Training', 'lr')
-        self.alpha_lr = self.cfg.getfloat('Training', 'alpha_lr', fallback=self.lr)  # defaults to the same as lr if not present
         if self.optimize_alphas:
+            self.alpha_lr = self.cfg.getfloat('Training', 'alpha_lr', fallback=self.lr)  # defaults to the same as lr if not present
             params = [
                 {'params': self.model.base_parameters(), 'lr': self.lr},
                 {'params': [self.model.sigmas], 'lr': self.alpha_lr}  # include sigma values
@@ -117,7 +119,7 @@ class LearningAlgorithm():
         
         return basic_info
 
-    @profile_execution
+    # @profile_execution
     def train(self, profiler=None):
         ############
         ### Init ###
@@ -136,11 +138,15 @@ class LearningAlgorithm():
             tag = self.cfg.get('Network', 'tag')
 
             if self.optimize_alphas:
-                filename = "{}_{}_{}_SM-{}_α-{}".format(self.dataset_name, self.datetime_str, tag, self.sampling_method, self.alphas)
+                filename = "{}_{}_{}_{}_SM-{}_α-{}".format(self.job_id, self.dataset_name, self.datetime_str, tag, self.sampling_method, self.alphas)
             else:
-                filename = "{}_{}_{}_SM-{}".format(self.dataset_name, self.datetime_str, tag, self.sampling_method)
+                filename = "{}_{}_{}_{}_SM-{}".format(self.job_id, self.dataset_name, self.datetime_str, tag, self.sampling_method)
 
-            save_dir = os.path.join(saved_root, self.date_str, self.experiment_name, filename)
+            if self.job_id is not None:
+                save_dir = os.path.join(saved_root, self.date_str, f"{self.experiment_name}", filename)
+            else:
+                save_dir = os.path.join(saved_root, self.date_str, f"{self.experiment_name}", filename)
+                
             print(f"Saving to: {save_dir}")
             try:
                 os.makedirs(save_dir)
@@ -316,7 +322,7 @@ class LearningAlgorithm():
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.gradient_clip)
 
                 optimizer.step()
-                profiler.step()
+                # profiler.step()
 
                 train_loss[epoch] += loss_tot_avg.item() * bs
                 train_recon[epoch] += loss_recon_avg.item() * bs
