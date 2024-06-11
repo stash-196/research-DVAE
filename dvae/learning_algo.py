@@ -33,13 +33,14 @@ class LearningAlgorithm():
     def __init__(self, params):
         # Load config parser
         self.params = params
-        self.job_id = self.params['job_id']
         self.config_file = self.params['cfg']
         if not os.path.isfile(self.config_file):
             raise ValueError('Invalid config file path')    
         self.cfg = myconf()
         self.cfg.read(self.config_file)
         self.experiment_name = self.cfg.get('User', 'experiment_name')
+        self.job_id = self.cfg.get('User', 'slurm_job_id')
+        print(f"[Learning Algo] Job ID: {self.job_id}")
         self.model_name = self.cfg.get('Network', 'name')
         self.dataset_name = self.cfg.get('DataFrame', 'dataset_name')
         self.sequence_len = self.cfg.getint('DataFrame', 'sequence_len')
@@ -147,12 +148,12 @@ class LearningAlgorithm():
             else:
                 save_dir = os.path.join(saved_root, self.date_str, f"{self.experiment_name}", filename)
                 
-            print(f"Saving to: {save_dir}")
+            print(f"[Learning Algo] Saving to: {save_dir}")
             try:
                 os.makedirs(save_dir)
             except FileExistsError:
                 # The directory already exists, so you can either pass or handle it as needed
-                print(f"Directory already exists: {save_dir}")
+                print(f"[Learning Algo] Directory already exists: {save_dir}")
         else:
             tag = self.cfg.get('Network', 'tag')
             save_dir = self.params['model_dir']
@@ -275,20 +276,10 @@ class LearningAlgorithm():
             # Batch training
             for _, batch_data in enumerate(train_dataloader):
                 batch_data = batch_data.to(self.device)
-                print(f'sent to device: {self.device}')
+                print(f'[Learning Algo] sent to device: {self.device}')
                 autonomous_ratio = kl_warm * 0.8
                 
-                if self.dataset_name == 'WSJ0':
-                    # (batch_size, x_dim, seq_len) -> (seq_len, batch_size, x_dim)
-                    batch_data = batch_data.permute(2, 0, 1)
-                    recon_batch_data = torch.exp(self.model(batch_data, mode_selector=model_mode_selector)) # output log-variance
-                    loss_recon = loss_ISD(batch_data, recon_batch_data)
-                elif self.dataset_name == 'H36M':
-                    # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
-                    batch_data = batch_data.permute(1, 0, 2) / 1000 # normalize to meters
-                    recon_batch_data = self.model(batch_data, mode_selector=model_mode_selector)
-                    loss_recon = loss_MPJPE(batch_data*1000, recon_batch_data*1000)
-                elif self.dataset_name == 'Lorenz63' or self.dataset_name == 'Sinusoid':
+                if self.dataset_name == 'Lorenz63' or self.dataset_name == 'Sinusoid':
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
                     batch_data = batch_data.permute(1, 0, 2)
                     recon_batch_data = self.model(batch_data, mode_selector=model_mode_selector)
@@ -299,17 +290,17 @@ class LearningAlgorithm():
                 loss_recon_avg = loss_recon / (seq_len * bs) # Average Reconstruction Loss
 
                 if self.model_name == 'DSAE':
-                    loss_kl_z = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
-                    loss_kl_v = loss_KLD(self.model.v_mean, self.model.v_logvar, self.model.v_mean_p, self.model.v_logvar_p)
+                    loss_kl_z = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p, logger=logger, from_instance=f"[Learning Algo][epoch{epoch}][train]")
+                    loss_kl_v = loss_KLD(self.model.v_mean, self.model.v_logvar, self.model.v_mean_p, self.model.v_logvar_p, logger=logger, from_instance=f"[Learning Algo][epoch{epoch}][train]")
                     loss_kl = loss_kl_z + loss_kl_v
                 elif self.model_name == 'RNN' or self.model_name == 'MT_RNN':
                     loss_kl = torch.zeros(1).to(self.device)
                 else:
-                    loss_kl = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
+                    loss_kl = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p, logger=logger, from_instance=f"[Learning Algo][epoch{epoch}][train]")
                 loss_kl_avg = kl_warm * beta * loss_kl / (seq_len * bs) # Average KL Divergence
                 
                 # Print device of loss
-                print(f'loss_recon.device: {loss_recon.device}, loss_kl.device: {loss_kl.device}')
+                print(f'[Learning Algo] loss_recon.device: {loss_recon.device}, loss_kl.device: {loss_kl.device}')
                 loss_tot_avg = loss_recon_avg + loss_kl_avg
                 optimizer.zero_grad()
                 loss_tot_avg.backward()
@@ -337,17 +328,7 @@ class LearningAlgorithm():
 
                 batch_data = batch_data.to(self.device)             
 
-                if self.dataset_name == 'WSJ0':
-                    # (batch_size, x_dim, seq_len) -> (seq_len, batch_size, x_dim)
-                    batch_data = batch_data.permute(2, 0, 1)
-                    recon_batch_data = torch.exp(self.model(batch_data, mode_selector=model_mode_selector)) # output log-variance
-                    loss_recon = loss_ISD(batch_data, recon_batch_data)
-                elif self.dataset_name == 'H36M':
-                    # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
-                    batch_data = batch_data.permute(1, 0, 2) / 1000 # normalize to meters
-                    recon_batch_data = self.model(batch_data, mode_selector=model_mode_selector)
-                    loss_recon = loss_MPJPE(batch_data*1000, recon_batch_data*1000)
-                elif self.dataset_name == 'Lorenz63' or self.dataset_name == 'Sinusoid':
+                if self.dataset_name == 'Lorenz63' or self.dataset_name == 'Sinusoid':
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
                     batch_data = batch_data.permute(1, 0, 2)
                     recon_batch_data = self.model(batch_data, mode_selector=model_mode_selector)
@@ -356,16 +337,16 @@ class LearningAlgorithm():
                 loss_recon_avg = loss_recon / (seq_len * bs)
                 
                 if self.model_name == 'DSAE':
-                    loss_kl_z = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
-                    loss_kl_v = loss_KLD(self.model.v_mean, self.model.v_logvar, self.model.v_mean_p, self.model.v_logvar_p)
+                    loss_kl_z = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p, logger=logger, from_instance=f"[Learning Algo][epoch{epoch}][val]")
+                    loss_kl_v = loss_KLD(self.model.v_mean, self.model.v_logvar, self.model.v_mean_p, self.model.v_logvar_p, logger=logger, from_instance=f"[Learning Algo][epoch{epoch}][val]")
                     loss_kl = loss_kl_z + loss_kl_v
                 elif self.model_name == 'RNN' or self.model_name == 'MT_RNN':
                     loss_kl = torch.zeros(1).to(self.device)
                 else:
-                    loss_kl = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p)
+                    loss_kl = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p, logger=logger, from_instance=f"[Learning Algo][epoch{epoch}][val]")
                 loss_kl_avg = kl_warm * beta * loss_kl / (seq_len * bs)
 
-                print(f'loss_recon.device: {loss_recon.device}, loss_kl.device: {loss_kl.device}')
+                print(f'[Learning Algo] loss_recon.device: {loss_recon.device}, loss_kl.device: {loss_kl.device}')
                 loss_tot_avg = loss_recon_avg + loss_kl_avg
 
                 val_loss[epoch] += loss_tot_avg.item() * bs
@@ -594,8 +575,7 @@ class LearningAlgorithm():
             # else:
             #     pickle.dump([train_loss, val_loss, train_recon, train_kl, val_recon, val_kl], f)
             pickle.dump(pickle_dict, f)
-
-            print('Loss saved in: {}'.format(loss_file))
+            logger.info('Loss saved in: {}'.format(loss_file))
             
 
 

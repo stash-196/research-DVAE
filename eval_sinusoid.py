@@ -97,7 +97,7 @@ if __name__ == '__main__':
     eval_metrics = EvalMetrics(metric='all')
     dvae.eval()
     cfg = learning_algo.cfg
-    print('Total params: %.2fM' % (sum(p.numel() for p in dvae.parameters()) / 1000000.0))
+    print("[Eval] Total params: %.2fM" % (sum(p.numel() for p in dvae.parameters()) / 1000000.0))
 
 
     data_dir = cfg.get('Paths', 'data_dir')
@@ -140,7 +140,7 @@ if __name__ == '__main__':
     test_num = len(test_dataloader.dataset)
     test_num_long = len(test_dataloader_long.dataset)
 
-    print('Test samples: {}, {}'.format(test_num, test_num_long))
+    print("[Eval] Test samples: {}, {}".format(test_num, test_num_long))
 
     # Check if "alpha" exists in the config.ini under the [Network] section
     alphas_per_unit = None
@@ -155,13 +155,13 @@ if __name__ == '__main__':
 
     # Check if the loss_model.pckl file exists
     if os.path.isfile(loss_file):
-        print(f"Loading loss data from {loss_file}")
+        print(f"[Eval] Loading loss data from {loss_file}")
         with open(loss_file, 'rb') as f:
             # Load the data
             loaded_data = pickle.load(f)
             
     else:
-        print(f"No loss data file found at {loss_file}")
+        print(f"[Eval] No loss data file found at {loss_file}")
 
     ############################################################################
         

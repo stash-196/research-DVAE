@@ -33,3 +33,4 @@ venv.bak/
 research-DVAE/**/*
 pyenv-research-DVAE/**/*
 logs
+config/temp/*

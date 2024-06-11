@@ -16,12 +16,32 @@ def loss_ISD(x, y):
     ret = torch.sum( x/y - torch.log(x/y) - 1)
     return ret
 
-def loss_KLD(z_mean, z_logvar, z_mean_p=0, z_logvar_p=0):
-    # This loss is used when you want to encourage the encoded distribution to match a prior distribution.
+def loss_KLD(z_mean, z_logvar, z_mean_p=0, z_logvar_p=0, clamp_min=1e-6, clamp_max=1e6, logger=None, from_instance=None):
+    # Ensure z_logvar_p is within a reasonable range
+    z_logvar_p_exp = z_logvar_p.exp()
+    
+    # Check if any values need to be clamped
+    clamped_min = (z_logvar_p_exp < clamp_min).any().item()
+    clamped_max = (z_logvar_p_exp > clamp_max).any().item()
+    
+    # Clamp the values to avoid zero or near-zero and very large values
+    z_logvar_p_exp = z_logvar_p_exp.clamp(min=clamp_min, max=clamp_max)
+    
+    # Print warning if clamping occurred
+    if clamped_min or clamped_max:
+        print_or_log(f"[KLD] Warning: Clamping applied to avoid numerical instability.", logger=logger, from_instance=from_instance)
+        print_or_log(f"[KLD] z_logvar_p_exp Min Values: {torch.sum(z_logvar_p_exp < clamp_min)}, z_logvar_p_exp Max Values: {torch.sum(z_logvar_p_exp > clamp_max)}", logger=logger, from_instance=from_instance)
 
-    ret = -0.5 * torch.sum(z_logvar - z_logvar_p 
-                - torch.div(z_logvar.exp() + (z_mean - z_mean_p).pow(2), z_logvar_p.exp()+1e-10))
+    
+    # Compute the KL divergence loss
+    ret = -0.5 * torch.sum(z_logvar - z_logvar_p - torch.div(z_logvar.exp() + (z_mean - z_mean_p).pow(2), z_logvar_p_exp))
+    
+    # Print ret to see if it's NaN
+    if torch.isnan(ret).any().item():
+        print_or_log(f"[KLD] Warning: KL divergence loss is NaN. z_logvar: {torch.sum(torch.isnan(z_logvar))}, z_logvar_p: {torch.sum(torch.isnan(z_logvar_p))}, z_mean: {torch.sum(torch.isnan(z_mean))}, z_mean_p: {torch.sum(torch.isnan(z_mean_p))}", logger, from_instance)
+    
     return ret
+
 
 def loss_JointNorm(x, y, nfeats=3):
     #  This loss is useful when you want to penalize differences between corresponding elements in two sequences, often used in sequence-to-sequence tasks or alignment problems.
@@ -76,3 +96,13 @@ def loss_MSE(x, y):
 
 
 
+def print_or_log(str, logger=None, from_instance=None):
+    if from_instance:
+        prefix = f"[{from_instance}] "
+    else:
+        prefix = ""
+
+    if logger:
+        logger.info(prefix + str)
+    else:
+        print(prefix + str)

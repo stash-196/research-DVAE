@@ -5,11 +5,12 @@ Copyright (c) 2020 by Inria
 Authoried by Xiaoyu BIE (xiaoyu.bie@inria.fr)
 License agreement in LICENSE.txt
 """
+import os
 import sys
+import uuid
 from dvae.utils import Options, merge_configs
 from dvae.learning_algo import LearningAlgorithm
 import configparser
-
 
 if __name__ == '__main__':
     params = Options().get_params()
@@ -19,8 +20,19 @@ if __name__ == '__main__':
     merged_config['User']['data_dir'] = merged_config['Paths']['data_dir']
     merged_config['User']['saved_root'] = merged_config['Paths']['saved_root']
 
+    # Use SLURM job ID for the temporary config file name if available, otherwise use a UUID
+    if 'job_id' in params:
+        print(f"[Train] Using SLURM job ID: {params['job_id']}")
+        slurm_job_id = params['job_id']
+    else:
+        slurm_job_id = str(uuid.uuid4())
+        print(f"[Train] Using UUID: {slurm_job_id}")
+
+    merged_config['User']['slurm_job_id'] = slurm_job_id
+
+    merged_config_path = f'config/temp/merged_config_{slurm_job_id}.ini'
+
     # Save the merged configuration temporarily
-    merged_config_path = 'merged_config.ini'
     with open(merged_config_path, 'w') as configfile:
         config = configparser.ConfigParser()
         for section, section_values in merged_config.items():
@@ -31,8 +43,12 @@ if __name__ == '__main__':
     params['cfg'] = merged_config_path
     
     if not params['ss']:
-        print(params['cfg'])
+        print(f"[Train] Config File: {params['cfg']}")
         learning_algo = LearningAlgorithm(params=params)
         learning_algo.train()
     else:
-        print('sorry ss is gone')
+        print('[Train] sorry ss is gone')
+
+    # Clean up the temporary config file
+    if os.path.exists(merged_config_path):
+        os.remove(merged_config_path)

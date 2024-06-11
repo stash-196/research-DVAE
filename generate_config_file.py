@@ -42,12 +42,12 @@ def get_configurations_for_model(params):
     return [dict(zip(param_names, values)) for values in combinations]
 
 if __name__ == "__main__":
-    experiment_name = "h180_ep500_SampMeths_αs_0"
+    experiment_name = "h180_ep500_SampMeths_Vrnns_1"
 
     models = [
-        "RNN", 
+        # "RNN", 
         "VRNN", 
-        "MT_RNN", 
+        # "MT_RNN", 
         "MT_VRNN"
         ]
 
@@ -58,7 +58,7 @@ if __name__ == "__main__":
     z_dim = [9]
     dense_z = [[16, 32]]
     dim_rnn = [180]
-    alphas = [[0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267]]
+    alphas = [[0.00490695, 0.02916397, 0.01453569]]#, [0.1, 0.01, 0.00267]]
 
     # Training
     lr = [0.001]
@@ -66,7 +66,7 @@ if __name__ == "__main__":
     epochs = [500]
     early_stop_patience = [100]
     save_frequency = [100]
-    gradient_clip = [1]
+    gradient_clip = [100]
     optimize_alphas = [True]
     sampling_method = ['ss', 'ptf', 'mtf']
     sampling_ratio = [0.8]
