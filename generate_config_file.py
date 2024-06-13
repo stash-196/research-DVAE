@@ -1,11 +1,11 @@
 from collections import defaultdict
 import itertools
 import os
+import json
 
 class DefaultDict(defaultdict):
     def __missing__(self, key):
         return self.default_factory()
-
 
 def generate_config_file(base_template, output_dir, experiment_name, testing_keys, config):
     config['test_keys'] = keys_being_compared
@@ -25,7 +25,6 @@ def generate_config_file(base_template, output_dir, experiment_name, testing_key
     content = content.format_map(DefaultDict(lambda: '', **config))
 
     # Generating a unique name for the config file based on parameters
-    # get key-value pairs for the keys in testing_keys. 
     label_keys = [f"{key}-{config[f'{key}_id']}" for key in config if key in testing_keys]
 
     output_file_name = '_'.join([experiment_name, config['tag'], *label_keys]).replace(' ', '')
@@ -132,7 +131,6 @@ if __name__ == "__main__":
         },
     }
 
-
     # Copy all components of "RNN" to "VRNN", "MT_RNN", and "MT_VRNN"
     # except for the ones that are specific to each model
     for model_name, params in model_params.items():
@@ -164,7 +162,6 @@ if __name__ == "__main__":
     base_template = "config/sinusoid/cfg_base_template.ini"
     output_dir = os.path.join("config/sinusoid/generated/", experiment_name)
     
-
     all_configs = {
         model_name: get_configurations_for_model(params) 
         for model_name, params in model_params.items()
@@ -182,23 +179,19 @@ if __name__ == "__main__":
                     config[f"{key}_id"] = all_params[key].index(config[key])
                 else:
                     config[f"{key}_id"] = 0
-                
-
 
     for model_name, configs in all_configs.items():
         for config in configs:
             generate_config_file(base_template, output_dir, experiment_name, keys_being_compared, config)
 
-    # Make a list of all the parameters with multiple keys (which are stored in `params_being_compared``
-    #  and all the values for each key_id
-    # for each model, and save it in a file
-    with open(os.path.join(output_dir, "params_being_compared.txt"), "w") as file:
-        for model_name, configs in all_configs.items():
-            file.write(f"{model_name}\n")
-            for config in configs:
-                # get the values and ids for the keys in `params_being_compared` from config
-                if key in config:
-                    values = {key: f"{config[f'{key}_id']}-{config[key]}" for key in keys_being_compared}
-                else:
-                    values = {key: f"0-null" for key in keys_being_compared}
-                file.write(f"{values}\n")
+    # Save parameters in JSON format
+    json_params = []
+    for model_name, configs in all_configs.items():
+        for config in configs:
+            json_params.append({
+                "model": model_name,
+                **{key: f"{config[f'{key}_id']}-{config[key]}" for key in keys_being_compared}
+            })
+
+    with open(os.path.join(output_dir, "parameters_being_compared.json"), "w") as file:
+        json.dump(json_params, file, indent=4)
