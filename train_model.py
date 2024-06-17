@@ -21,11 +21,12 @@ if __name__ == '__main__':
     merged_config['User']['saved_root'] = merged_config['Paths']['saved_root']
 
     # Use SLURM job ID for the temporary config file name if available, otherwise use a UUID
-    if 'job_id' in params:
+    if params['job_id'] is not None:
         print(f"[Train] Using SLURM job ID: {params['job_id']}")
         slurm_job_id = params['job_id']
     else:
-        slurm_job_id = str(uuid.uuid4())
+        # use short random numeric id
+        slurm_job_id = str(uuid.uuid4())[:8]
         print(f"[Train] Using UUID: {slurm_job_id}")
 
     merged_config['User']['slurm_job_id'] = slurm_job_id

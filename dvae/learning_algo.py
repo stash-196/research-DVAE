@@ -17,7 +17,8 @@ import pickle
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-from .utils import myconf, get_logger, loss_ISD, loss_KLD, loss_MPJPE, loss_MSE, create_autonomous_mode_selector, visualize_model_parameters, visualize_combined_parameters, visualize_teacherforcing_2_autonomous, profile_execution
+from .utils import myconf, get_logger, loss_ISD, loss_KLD, loss_MPJPE, loss_MSE, create_autonomous_mode_selector, profile_execution
+from visualizers import visualize_model_parameters, visualize_combined_parameters, visualize_teacherforcing_2_autonomous
 from .dataset import h36m_dataset, speech_dataset, lorenz63_dataset, sinusoid_dataset
 from .model import build_VAE, build_DKF, build_STORN, build_VRNN, build_SRNN, build_RVAE, build_DSAE, build_RNN, build_MT_RNN, build_MT_VRNN_pp
 import subprocess
@@ -57,8 +58,12 @@ class LearningAlgorithm():
         
         # Load model parameters
         self.use_cuda = self.cfg.getboolean('Training', 'use_cuda')
-        self.device = 'cuda' if torch.cuda.is_available() and self.use_cuda else 'cpu'
-
+        if torch.cuda.is_available() and self.use_cuda:
+            self.device = 'cuda'
+        elif torch.backends.mps.is_available():
+            self.device = 'mps'
+        else:
+            self.device = 'cpu'
 
         # if optimize_alphas is not '', turn into boolian
         try:
@@ -276,7 +281,7 @@ class LearningAlgorithm():
             # Batch training
             for _, batch_data in enumerate(train_dataloader):
                 batch_data = batch_data.to(self.device)
-                print(f'[Learning Algo] sent to device: {self.device}')
+                print(f'[Learning Algo][epoch{epoch}] sent to device: {self.device}')
                 autonomous_ratio = kl_warm * 0.8
                 
                 if self.dataset_name == 'Lorenz63' or self.dataset_name == 'Sinusoid':
@@ -300,7 +305,7 @@ class LearningAlgorithm():
                 loss_kl_avg = kl_warm * beta * loss_kl / (seq_len * bs) # Average KL Divergence
                 
                 # Print device of loss
-                print(f'[Learning Algo] loss_recon.device: {loss_recon.device}, loss_kl.device: {loss_kl.device}')
+                print(f'[Learning Algo][epoch{epoch}] loss_recon.device: {loss_recon.device}, loss_kl.device: {loss_kl.device}')
                 loss_tot_avg = loss_recon_avg + loss_kl_avg
                 optimizer.zero_grad()
                 loss_tot_avg.backward()
@@ -346,7 +351,7 @@ class LearningAlgorithm():
                     loss_kl = loss_KLD(self.model.z_mean, self.model.z_logvar, self.model.z_mean_p, self.model.z_logvar_p, logger=logger, from_instance=f"[Learning Algo][epoch{epoch}][val]")
                 loss_kl_avg = kl_warm * beta * loss_kl / (seq_len * bs)
 
-                print(f'[Learning Algo] loss_recon.device: {loss_recon.device}, loss_kl.device: {loss_kl.device}')
+                print(f'[Learning Algo][epoch{epoch}] loss_recon.device: {loss_recon.device}, loss_kl.device: {loss_kl.device}')
                 loss_tot_avg = loss_recon_avg + loss_kl_avg
 
                 val_loss[epoch] += loss_tot_avg.item() * bs
