@@ -14,6 +14,7 @@ The code in this file is based on:
 from torch import nn
 import torch
 from collections import OrderedDict
+from dvae.utils.logger import print_or_log
 
 
 def build_VRNN(cfg, device='cpu'):
@@ -238,7 +239,7 @@ class VRNN(nn.Module):
         return h_tp1, c_tp1
 
 
-    def forward(self, x, initialize_states=True, update_states=True, mode_selector=None, inference_mode=False):
+    def forward(self, x, initialize_states=True, update_states=True, mode_selector=None, inference_mode=False, logger=None, from_instance=None):
 
         # need input:  (seq_len, batch_size, x_dim)
         seq_len, batch_size, _ = x.shape
@@ -285,6 +286,11 @@ class VRNN(nn.Module):
 
             h_t_last = h_t.view(self.num_rnn, 1, batch_size, self.dim_rnn)[-1,:,:,:]
             mean_zt, logvar_zt = self.inference(feature_xt, h_t_last)
+
+            # Add logging for debugging
+            print_or_log(f"[Forward Pass][t={t}] mean_zt: min={mean_zt.min()}, max={mean_zt.max()}", logger=logger, from_instance=from_instance)
+            print_or_log(f"[Forward Pass][t={t}] logvar_zt: min={logvar_zt.min()}, max={logvar_zt.max()}", logger=logger, from_instance=from_instance)
+
 
             if inference_mode:
                 z_t = mean_zt

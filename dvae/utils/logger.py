@@ -35,6 +35,22 @@ def get_logger(file_path = 'log.txt', handle = 1):
     logger.addHandler(log_handler)
 
     return logger
+
+
+def print_or_log(str, logger=None, from_instance=None, log_type="info"):
+    if from_instance:
+        prefix = f"{from_instance} "
+    else:
+        prefix = ""
+
+    if logger:
+        if log_type == "info":
+            logger.info(prefix + str)
+        elif log_type == "warning":
+            logger.warning(prefix + str)
+    else:
+        print(prefix + str)
+
     
 
 if __name__ == '__main__':

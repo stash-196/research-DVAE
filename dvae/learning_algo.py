@@ -282,7 +282,7 @@ class LearningAlgorithm():
                 if self.dataset_name == 'Lorenz63' or self.dataset_name == 'Sinusoid':
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
                     batch_data = batch_data.permute(1, 0, 2)
-                    recon_batch_data = self.model(batch_data, mode_selector=model_mode_selector)
+                    recon_batch_data = self.model(batch_data, mode_selector=model_mode_selector, logger=logger, from_instance=f"[Learning Algo][epoch{epoch}][train]")
                     loss_recon = loss_MSE(batch_data, recon_batch_data)
                 else:
                     logger.error('Unknown datset')
@@ -331,7 +331,7 @@ class LearningAlgorithm():
                 if self.dataset_name == 'Lorenz63' or self.dataset_name == 'Sinusoid':
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
                     batch_data = batch_data.permute(1, 0, 2)
-                    recon_batch_data = self.model(batch_data, mode_selector=model_mode_selector)
+                    recon_batch_data = self.model(batch_data, mode_selector=model_mode_selector, logger=logger, from_instance=f"[Learning Algo][epoch{epoch}][val]")
                     loss_recon = loss_MSE(batch_data, recon_batch_data)
                 seq_len, bs, _ = self.model.y.shape
                 loss_recon_avg = loss_recon / (seq_len * bs)

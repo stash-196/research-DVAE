@@ -18,27 +18,41 @@ def loss_ISD(x, y):
 
 def loss_KLD(z_mean, z_logvar, z_mean_p=0, z_logvar_p=0, clamp_min=1e-6, clamp_max=1e6, logger=None, from_instance=None):
     # Ensure z_logvar_p is within a reasonable range
-    z_logvar_p_exp = z_logvar_p.exp()
-    
+    z_logvar_p_exp = z_logvar_p.exp().clamp(min=clamp_min, max=clamp_max)
+    z_logvar_exp = z_logvar.exp().clamp(min=clamp_min, max=clamp_max)
+
+    # Logging values for debugging
+    print_or_log(f"[KLD] z_logvar: min={z_logvar.min()}, max={z_logvar.max()}", logger=logger, from_instance=from_instance)
+    print_or_log(f"[KLD] z_logvar_p: min={z_logvar_p.min()}, max={z_logvar_p.max()}", logger=logger, from_instance=from_instance)
+    print_or_log(f"[KLD] z_mean: min={z_mean.min()}, max={z_mean.max()}", logger=logger, from_instance=from_instance)
+    print_or_log(f"[KLD] z_mean_p: min={z_mean_p.min()}, max={z_mean_p.max()}", logger=logger, from_instance=from_instance)
+
+    # Print warning if any values are NaN
+    if torch.isnan(z_logvar).any().item() or torch.isnan(z_logvar_p).any().item() or torch.isnan(z_mean).any().item() or torch.isnan(z_mean_p).any().item():
+        print_or_log(f"[KLD] Warning: NaN values...> z_logvar: {torch.sum(torch.isnan(z_logvar))}, z_logvar_p: {torch.sum(torch.isnan(z_logvar_p))}, z_mean: {torch.sum(torch.isnan(z_mean))}, z_mean_p: {torch.sum(torch.isnan(z_mean_p))}", logger=logger, from_instance=from_instance, log_type="warning")
+
     # Check if any values need to be clamped
-    clamped_min = (z_logvar_p_exp < clamp_min).any().item()
-    clamped_max = (z_logvar_p_exp > clamp_max).any().item()
-    
-    # Clamp the values to avoid zero or near-zero and very large values
-    z_logvar_p_exp = z_logvar_p_exp.clamp(min=clamp_min, max=clamp_max)
+    clamped_min = (z_logvar_p_exp < clamp_min).any().item() or (z_logvar_exp < clamp_min).any().item()
+    clamped_max = (z_logvar_p_exp > clamp_max).any().item() or (z_logvar_exp > clamp_max).any().item()
     
     # Print warning if clamping occurred
     if clamped_min or clamped_max:
-        print_or_log(f"[KLD] Warning: Clamping applied to avoid numerical instability.", logger=logger, from_instance=from_instance)
-        print_or_log(f"[KLD] z_logvar_p_exp Min Values: {torch.sum(z_logvar_p_exp < clamp_min)}, z_logvar_p_exp Max Values: {torch.sum(z_logvar_p_exp > clamp_max)}", logger=logger, from_instance=from_instance)
+        print_or_log(f"[KLD] Warning: Clamping applied to avoid numerical instability.", logger=logger, from_instance=from_instance, log_type="warning")
+        print_or_log(f"[KLD] |-> z_logvar_p_exp Min Values: {torch.sum(z_logvar_p_exp < clamp_min)}, z_logvar_p_exp Max Values: {torch.sum(z_logvar_p_exp > clamp_max)}", logger=logger, from_instance=from_instance, log_type="warning")
+        print_or_log(f"[KLD] |-> z_logvar_exp Min Values: {torch.sum(z_logvar_exp < clamp_min)}, z_logvar_exp Max Values: {torch.sum(z_logvar_exp > clamp_max)}", logger=logger, from_instance=from_instance, log_type="warning")
 
-    
     # Compute the KL divergence loss
-    ret = -0.5 * torch.sum(z_logvar - z_logvar_p - torch.div(z_logvar.exp() + (z_mean - z_mean_p).pow(2), z_logvar_p_exp))
+    ret = -0.5 * torch.sum(z_logvar - z_logvar_p - torch.div(z_logvar_exp + (z_mean - z_mean_p).pow(2), z_logvar_p_exp))
     
     # Print ret to see if it's NaN
     if torch.isnan(ret).any().item():
-        print_or_log(f"[KLD] Warning: KL divergence loss is NaN. z_logvar: {torch.sum(torch.isnan(z_logvar))}, z_logvar_p: {torch.sum(torch.isnan(z_logvar_p))}, z_mean: {torch.sum(torch.isnan(z_mean))}, z_mean_p: {torch.sum(torch.isnan(z_mean_p))}", logger, from_instance)
+        print_or_log(f"[KLD] Warning: KL divergence loss is NaN. NaN values...> z_logvar: {torch.sum(torch.isnan(z_logvar))}, z_logvar_p: {torch.sum(torch.isnan(z_logvar_p))}, z_mean: {torch.sum(torch.isnan(z_mean))}, z_mean_p: {torch.sum(torch.isnan(z_mean_p))}", logger, from_instance, log_type="warning")
+        print_or_log(f"[KLD] |-> z_logvar_p_exp NaN Values: {torch.sum(torch.isnan(z_logvar_p_exp))}, z_logvar_exp NaN Values: {torch.sum(torch.isnan(z_logvar_exp))}", logger=logger, from_instance=from_instance, log_type="warning")
+        print_or_log(f"[KLD] |-> z_logvar_p_exp <{clamp_min} Values: {torch.sum(z_logvar_p_exp < clamp_min)}, z_logvar_p_exp >{clamp_max} Values: {torch.sum(z_logvar_p_exp > clamp_max)}", logger=logger, from_instance=from_instance, log_type="warning")
+        print_or_log(f"[KLD] |-> z_logvar_p_exp Min Values: {torch.min(z_logvar_p_exp)}, z_logvar_p_exp Max Values: {torch.max(z_logvar_p_exp)}", logger=logger, from_instance=from_instance, log_type="warning")
+        print_or_log(f"[KLD] |-> z_logvar_exp NaN Values: {torch.sum(torch.isnan(z_logvar_exp))}", logger=logger, from_instance=from_instance, log_type="warning")
+        print_or_log(f"[KLD] |-> z_logvar_exp <{clamp_min} Values: {torch.sum(z_logvar_exp < clamp_min)}, z_logvar_exp >{clamp_max} Values: {torch.sum(z_logvar_exp > clamp_max)}", logger=logger, from_instance=from_instance, log_type="warning")
+        print_or_log(f"[KLD] |-> z_logvar_exp Min Values: {torch.min(z_logvar_exp)}, z_logvar_exp Max Values: {torch.max(z_logvar_exp)}", logger=logger, from_instance=from_instance, log_type="warning")
     
     return ret
 
@@ -96,13 +110,16 @@ def loss_MSE(x, y):
 
 
 
-def print_or_log(str, logger=None, from_instance=None):
+def print_or_log(str, logger=None, from_instance=None, log_type="info"):
     if from_instance:
-        prefix = f"[{from_instance}] "
+        prefix = f"{from_instance} "
     else:
         prefix = ""
 
     if logger:
-        logger.info(prefix + str)
+        if log_type == "info":
+            logger.info(prefix + str)
+        elif log_type == "warning":
+            logger.warning(prefix + str)
     else:
         print(prefix + str)
