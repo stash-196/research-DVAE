@@ -1,0 +1,4 @@
+export S9Y_CONTAINER="my-container.sif"  # Path to your singularity container.
+export S9Y_VENV=".my-venv"  # Path to your Python virtualenv.
+export S9Y_EXEC_OPTIONS=(--nv)  # CLI options for singularity exec.
+export S9Y_PYTHON="python3"  # Name of Python executable used by s9y. Set "python" by default.

@@ -34,3 +34,4 @@ research-DVAE/**/*
 pyenv-research-DVAE/**/*
 logs
 config/temp/*
+*.sif
