@@ -42,13 +42,13 @@ def get_configurations_for_model(params):
     return [dict(zip(param_names, values)) for values in combinations]
 
 if __name__ == "__main__":
-    experiment_name = "h180_ep500_SampMeths_Vrnns_1"
+    experiment_name = "h27_ep500_SampMeths_RNNs_0"
 
     models = [
-        # "RNN", 
-        "VRNN", 
-        # "MT_RNN", 
-        "MT_VRNN"
+        "RNN", 
+        # "VRNN", 
+        "MT_RNN", 
+        # "MT_VRNN"
         ]
 
     # Change to dicsionary of lists
@@ -57,7 +57,7 @@ if __name__ == "__main__":
     dense_x = [100]
     z_dim = [9]
     dense_z = [[16, 32]]
-    dim_rnn = [180]
+    dim_rnn = [27]
     alphas = [[0.00490695, 0.02916397, 0.01453569]]#, [0.1, 0.01, 0.00267]]
 
     # Training
