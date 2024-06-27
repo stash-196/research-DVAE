@@ -25,7 +25,7 @@ def generate_config_file(base_template, output_dir, experiment_name, testing_key
     content = content.format_map(DefaultDict(lambda: '', **config))
 
     # Generating a unique name for the config file based on parameters
-    label_keys = [f"{key}-{config[f'{key}_id']}" for key in config if key in testing_keys]
+    label_keys = [f"{key}-{config[key]}" for key in config if key in testing_keys]
 
     output_file_name = '_'.join([experiment_name, config['tag'], *label_keys]).replace(' ', '')
     output_file = os.path.join(output_dir, f"cfg_{output_file_name}.ini")
@@ -41,6 +41,7 @@ def get_configurations_for_model(params):
     return [dict(zip(param_names, values)) for values in combinations]
 
 if __name__ == "__main__":
+
     experiment_name = "h27_ep500_SampMeths_RNNs_0"
 
     models = [
@@ -50,12 +51,14 @@ if __name__ == "__main__":
         # "MT_VRNN"
         ]
 
-    # Change to dicsionary of lists
+
+    # Change to dictionary of lists
     # Network
     x_dim = [1]
     dense_x = [100]
     z_dim = [9]
     dense_z = [[16, 32]]
+
     dim_rnn = [27]
     alphas = [[0.00490695, 0.02916397, 0.01453569]]#, [0.1, 0.01, 0.00267]]
 
@@ -152,12 +155,11 @@ if __name__ == "__main__":
     # Get all the parameters
     all_params = model_params["MT_VRNN"]
 
-    # Get keys for whih the len of the values is greater than 1 in "MT_VRNN"
+    # Get keys for which the len of the values is greater than 1 in "MT_VRNN"
     keys_being_compared = [key for key, value in model_params["MT_VRNN"].items() if len(value) > 1]
 
-    # exclude models that are not in models. Don't run this before the getting `params_being`
+    # exclude models that are not in models. Don't run this before getting `params_being`
     model_params = {key: value for key, value in model_params.items() if key in models}
-
 
     base_template = "config/sinusoid/cfg_base_template.ini"
     output_dir = os.path.join("config/sinusoid/generated/", experiment_name)
@@ -166,19 +168,6 @@ if __name__ == "__main__":
         model_name: get_configurations_for_model(params) 
         for model_name, params in model_params.items()
     }
-
-    # for each model, give an id to each configuration for the parameter keys that are being compared (`params_being_compared`), 
-    # with the index of the value in the list of values for that key
-    # eg. if x_dim = [1, 2, 3], params_being_compared = ['x_dim'], then the id for x_dim = 1 is 0, for x_dim = 2 is 1, and for x_dim = 3 is 2
-    # do this for all `params_being_compared` keys.
-    for model_name, configs in all_configs.items():
-        for config in configs:
-            for key in keys_being_compared:
-                # if key is in the config, then add the id to the config. otherwise id=0
-                if key in config:
-                    config[f"{key}_id"] = all_params[key].index(config[key])
-                else:
-                    config[f"{key}_id"] = 0
 
     for model_name, configs in all_configs.items():
         for config in configs:
@@ -190,8 +179,8 @@ if __name__ == "__main__":
         for config in configs:
             json_params.append({
                 "model": model_name,
-                **{key: f"{config[f'{key}_id']}-{config[key]}" for key in keys_being_compared}
+                **{key: config.get(key, None) for key in keys_being_compared}
             })
 
-    with open(os.path.join(output_dir, "parameters_being_compared.json"), "w") as file:
+    with open(os.path.join(output_dir, "params_being_compared.json"), "w") as file:
         json.dump(json_params, file, indent=4)

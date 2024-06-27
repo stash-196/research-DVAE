@@ -40,10 +40,9 @@ def aggregate_metrics(params, metrics):
             }
     return aggregated_metrics
 
-def save_aggregated_metrics(aggregated_metrics, output_file, param_names):
+def save_aggregated_metrics(aggregated_metrics, output_file):
     # Convert tuple keys to string
     aggregated_metrics_str_keys = {str(key): value for key, value in aggregated_metrics.items()}
-    aggregated_metrics_str_keys['param_names'] = param_names
     with open(output_file, 'w') as f:
         json.dump(aggregated_metrics_str_keys, f, indent=4)
 
@@ -56,7 +55,8 @@ if __name__ == "__main__":
     metrics = load_evaluation_metrics(experiment_dir)
     param_names = list(params[0].keys())
     aggregated_metrics = aggregate_metrics(params, metrics)
-    save_aggregated_metrics(aggregated_metrics, output_file, param_names)
+    aggregated_metrics['param_names'] = param_names  # Add param_names to aggregated_metrics
+    save_aggregated_metrics(aggregated_metrics, output_file)
     
     print(f"Aggregated metrics saved to {output_file}")
 
