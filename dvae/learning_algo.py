@@ -18,7 +18,16 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from .utils import myconf, get_logger, loss_ISD, loss_KLD, loss_MPJPE, loss_MSE, create_autonomous_mode_selector, profile_execution
-from visualizers import visualize_model_parameters, visualize_combined_parameters, visualize_teacherforcing_2_autonomous
+from visualizers import (visualize_model_parameters, 
+                        visualize_combined_parameters, 
+                        visualize_teacherforcing_2_autonomous,
+                        visualize_total_loss,
+                        visualize_recon_loss,
+                        visualize_kld_loss,
+                        visualize_combined_metrics,
+                        visualize_sigma_history,
+                        visualize_alpha_history
+)
 from .dataset import h36m_dataset, speech_dataset, lorenz63_dataset, sinusoid_dataset
 from .model import build_VAE, build_DKF, build_STORN, build_VRNN, build_SRNN, build_RVAE, build_DSAE, build_RNN, build_MT_RNN, build_MT_VRNN_pp
 import subprocess
@@ -46,8 +55,13 @@ class LearningAlgorithm():
         self.dataset_name = self.cfg.get('DataFrame', 'dataset_name')
         self.sequence_len = self.cfg.getint('DataFrame', 'sequence_len')
 
+        # Get training parameters
         self.sampling_method = self.cfg.get('Training', 'sampling_method')
         self.sampling_ratio = self.cfg.getfloat('Training', 'sampling_ratio')
+        self.kl_warm_limit = self.cfg.getfloat('Training', 'kl_warm_limit', fallback=1.)
+        self.auto_warm_start = self.cfg.getfloat('Training', 'auto_warm_start', fallback=0.)
+        self.auto_warm_limit = self.cfg.getfloat('Training', 'auto_warm_limit', fallback=1e-4)
+
 
         # Get host name and date
         self.hostname = socket.gethostname()
@@ -206,7 +220,6 @@ class LearningAlgorithm():
         early_stop_patience = self.cfg.getint('Training', 'early_stop_patience')
         save_frequency = self.cfg.getint('Training', 'save_frequency')
         beta = self.cfg.getfloat('Training', 'beta')
-        kl_warm = 0
 
         # Create python list for loss
         if not self.params['reload']:
@@ -252,11 +265,18 @@ class LearningAlgorithm():
                 # set initial values of sigmas_history with alphas_init
                 sigmas_history[:, 0] = sigmoid_reverse(alphas_init)
 
-        kl_warm_epochs = [0]
-        kl_warm_values = [0]
-        best_state_epochs = []
-        cpt_patience_epochs = []
-        delta_per_epoch = []
+        auto_warm = self.auto_warm_start
+        auto_warm_values = np.zeros((epochs,))
+        kl_warm = 0
+        kl_warm_epochs = np.zeros((epochs)) # stores the epoch where kl_warm is increased
+        kl_warm_values = np.zeros((epochs,)) # stores the value of kl_warm at the epoch
+        best_state_epochs = np.zeros((epochs,))
+        cpt_patience_epochs = np.zeros((epochs,))
+        delta_per_epoch = np.zeros((epochs,))
+        delta_rolling_window_size = 6
+        kl_delta_threshold = -1e-4
+        auto_delta_threshold = 1e-4
+        warm_up_happened = False
 
         self.model.to(self.device)
 
@@ -275,14 +295,10 @@ class LearningAlgorithm():
                 logger.error('Unknown sampling method')
                 break
 
-
-
-
             # Batch training
             for _, batch_data in enumerate(train_dataloader):
                 batch_data = batch_data.to(self.device)
                 print(f'[Learning Algo][epoch{epoch}] sent to device: {self.device}')
-                autonomous_ratio = kl_warm * 0.8
                 
                 if self.dataset_name == 'Lorenz63' or self.dataset_name == 'Sinusoid':
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
@@ -360,9 +376,9 @@ class LearningAlgorithm():
 
             # Loss normalization
             train_loss[epoch] = train_loss[epoch]/ train_num
-            val_loss[epoch] = val_loss[epoch] / val_num
             train_recon[epoch] = train_recon[epoch] / train_num 
             train_kl[epoch] = train_kl[epoch]/ train_num
+            val_loss[epoch] = val_loss[epoch] / val_num
             val_recon[epoch] = val_recon[epoch] / val_num 
             val_kl[epoch] = val_kl[epoch] / val_num
 
@@ -373,11 +389,26 @@ class LearningAlgorithm():
             logger.info('Train => tot: {:.2f} recon {:.2f} KL {:.2f} Val => tot: {:.2f} recon {:.2f} KL {:.2f}'.format(train_loss[epoch], train_recon[epoch], train_kl[epoch], val_loss[epoch], val_recon[epoch], val_kl[epoch]))
 
 
+            # Save the best model
+            if warm_up_happened:
+                logger.info('Warm-up happened, saving the best model')
+                best_val_loss[epoch] = val_loss[epoch]
+                best_state_dict = self.model.state_dict()
+                best_optim_dict = optimizer.state_dict()
+                cur_best_epoch = epoch
+                warm_up_happened = False
+            
+            ## identify the delta between current val_loss and best_val_loss
             delta = val_loss[epoch] - best_val_loss
-            delta_per_epoch.append(delta)
+            delta_per_epoch[epoch] = delta
+            # calculate the rolling average of delta if the window size is reached
+            if epoch >= delta_rolling_window_size:
+                delta_rolling_average = np.mean(delta_per_epoch[-delta_rolling_window_size:])
+            else:
+                delta_rolling_average = np.mean(delta_per_epoch)
 
-            # Early stop patiance
-            if delta < -1e-4:
+            # Save the best model, update patience and best_val_loss
+            if delta_rolling_average < 1e-2:
                 best_val_loss = val_loss[epoch]
                 cpt_patience = 0
                 best_state_dict = self.model.state_dict()
@@ -385,41 +416,51 @@ class LearningAlgorithm():
                 cur_best_epoch = epoch
             else:
                 cpt_patience += 1
+                print(f'[Learning Algo][epoch{epoch}] Updated cpt_patience: {cpt_patience}')
+                logger.info('Updated cpt_patience: {}'.format(cpt_patience))
 
-            cpt_patience_epochs.append(cpt_patience)
-            best_state_epochs.append(epoch)
+            # # Adjust KL warm-up
+            # if epoch % early_stop_patience == 0 and kl_warm < 1 and epoch > 0:
+            #     kl_warm += 0.2 
+            #     kl_warm_epochs[epoch] = epoch
+            #     kl_warm_values[epoch] = kl_warm
+            #     logger.info('KL warm-up, anneal coeff: {}'.format(kl_warm))
+            #     # reset early stop patience and best_val_loss
+            #     best_val_loss = val_loss[epoch]
+            #     cpt_patience = 0
+            #     best_state_dict = self.model.state_dict()
+            #     best_optim_dict = optimizer.state_dict()
+            #     cur_best_epoch = epoch
 
-            # KL warm-up
-            if epoch % early_stop_patience == 0 and kl_warm < 1 and epoch > 0:
-                kl_warm += 0.2 
-                kl_warm_epochs += [epoch]
-                kl_warm_values += [kl_warm]
-                logger.info('KL warm-up, anneal coeff: {}'.format(kl_warm))
-                # reset early stop patience and best_val_loss
-                best_val_loss = val_loss[epoch]
-                cpt_patience = 0
-                best_state_dict = self.model.state_dict()
-                best_optim_dict = optimizer.state_dict()
-                cur_best_epoch = epoch
+            # # Adjust autonomous mode baseed on convergence
+            # if epoch > 0 and delta_per_epoch[-1] > 0 and auto_warm < self.auto_warm_limit:
+            #     auto_warm = min(self.auto_warm_limit, auto_warm + 0.2)
+            #     auto_warm_values[epoch] = auto_warm
+
 
             # Stop traning if early-stop triggers
-            if cpt_patience == early_stop_patience:
-                if kl_warm >= 1.0:
+            if cpt_patience > early_stop_patience:
+                if kl_warm >= 1.0 and auto_warm >= self.auto_warm_limit:
                     logger.info('Early stop patience achieved')
                     break
                 else:
-                    # increase kl_warm
-                    kl_warm += 0.2 
-                    kl_warm_epochs += [epoch]
-                    kl_warm_values += [kl_warm]
-                    logger.info('KL warm-up, anneal coeff: {}'.format(kl_warm))
+                    if kl_warm < 1.0:
+                        logger.info('Early stop patience achieved, but KL warm-up not completed')
+                        kl_warm += 0.2 
+                        kl_warm_epochs[epoch] = epoch
+                        kl_warm_values[epoch] = kl_warm
+                        logger.info('KL warm-up, anneal coeff: {}'.format(kl_warm))
+                    if auto_warm < self.auto_warm_limit:
+                        logger.info('Early stop patience achieved, but autonomous warm-up not completed')
+                        auto_warm = min(self.auto_warm_limit, auto_warm + 0.2*self.auto_warm_limit)
+                        auto_warm_values[epoch] = auto_warm
+
                     cpt_patience = 0
-                    best_val_loss = val_loss[epoch]
-                    best_state_dict = self.model.state_dict()
-                    best_optim_dict = optimizer.state_dict()
-                    cur_best_epoch = epoch
+                    warm_up_happened = True
             
-            
+            cpt_patience_epochs[epoch] = cpt_patience
+            best_state_epochs[epoch] = cur_best_epoch
+
 
             # Save model parameters regularly
             if epoch % save_frequency == 0:
@@ -444,107 +485,22 @@ class LearningAlgorithm():
                 if not os.path.exists(save_figures_dir):
                     os.makedirs(save_figures_dir)
 
-                plt.clf()
-                fig = plt.figure(figsize=(8,6))
-                plt.rcParams['font.size'] = 12
-                # add vertical line for each epoch where KL warm-up is increased
-                for kl_warm_epoch in kl_warm_epochs:
-                    plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
-                plt.plot(train_loss[:epoch+1], label='training loss')
-                plt.plot(val_loss[:epoch+1], label='validation loss')
-                plt.legend(fontsize=16, title=self.model_name, title_fontsize=20)
-                plt.xlabel('epochs', fontdict={'size':16})
-                plt.ylabel('loss', fontdict={'size':16})
-                fig_file = os.path.join(save_figures_dir, 'vis_training_loss_{}.png'.format(tag))
-                plt.savefig(fig_file)
-                plt.close(fig)
 
-                plt.clf()
-                fig = plt.figure(figsize=(8,6))
-                plt.rcParams['font.size'] = 12
-                for kl_warm_epoch in kl_warm_epochs:
-                    plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
-                plt.plot(train_recon[:epoch+1], label='Training')
-                plt.plot(val_recon[:epoch+1], label='Validation')
-                plt.legend(fontsize=16, title='{}: Recon. Loss'.format(self.model_name), title_fontsize=20)
-                plt.xlabel('epochs', fontdict={'size':16})
-                plt.ylabel('loss', fontdict={'size':16})
-                fig_file = os.path.join(save_figures_dir, 'vis_training_loss_recon_{}.png'.format(tag))
-                plt.savefig(fig_file) 
-                plt.close(fig)
+                # Calculate the epochs at which kl_warm_values and auto_warm_values change
+                kl_warm_epochs = np.where(np.diff(kl_warm_values) != 0)[0] + 1
+                kl_warm_epochs = np.insert(kl_warm_epochs, 0, 0)  # Prepend 0
+                auto_warm_epochs = np.where(np.diff(auto_warm_values) != 0)[0] + 1
+                auto_warm_epochs = np.insert(auto_warm_epochs, 0, 0)  # Prepend 0
 
-                plt.clf()
-                fig = plt.figure(figsize=(8,6))
-                plt.rcParams['font.size'] = 12
-                for kl_warm_epoch in kl_warm_epochs:
-                    plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
-                plt.plot(train_kl[:epoch+1], label='Training')
-                plt.plot(val_kl[:epoch+1], label='Validation')
-                plt.legend(fontsize=16, title='{}: KL Divergence'.format(self.model_name), title_fontsize=20)
-                plt.xlabel('epochs', fontdict={'size':16})
-                plt.ylabel('loss', fontdict={'size':16})
-                fig_file = os.path.join(save_figures_dir, 'vis_training_loss_KLD_{}.png'.format(tag))
-                plt.savefig(fig_file)
-                plt.close(fig)
-
-
-                # Save visualization of delta_per_epoch, kl_warm_values, cpt_patience_epochs, best_state_epochs with subplots
-                plt.clf()
-                fig, axs = plt.subplots(4, 1, figsize=(12, 12))
-                plt.rcParams['font.size'] = 12
-                axs[0].plot(delta_per_epoch[:epoch+1], label='delta')
-                axs[0].legend(fontsize=16, title='delta', title_fontsize=20)
-                axs[0].set_xlabel('epochs', fontdict={'size':16})
-                axs[0].set_ylabel('delta', fontdict={'size':16})
-                axs[1].step(kl_warm_epochs[:epoch+1], kl_warm_values[:epoch+1], label='kl_warm')
-                axs[1].legend(fontsize=16, title='kl_warm', title_fontsize=20)
-                axs[1].set_xlabel('epochs', fontdict={'size':16})
-                axs[1].set_ylabel('kl_warm', fontdict={'size':16})
-                axs[2].plot(cpt_patience_epochs[:epoch+1], label='cpt_patience')
-                axs[2].legend(fontsize=16, title='cpt_patience', title_fontsize=20)
-                axs[2].set_xlabel('epochs', fontdict={'size':16})
-                axs[2].set_ylabel('cpt_patience', fontdict={'size':16})
-                axs[3].step(range(epoch+1), best_state_epochs, label='best_state')
-                axs[3].legend(fontsize=16, title='best_state', title_fontsize=20)
-                axs[3].set_xlabel('epochs', fontdict={'size':16})
-                axs[3].set_ylabel('best_state', fontdict={'size':16})
-                fig_file = os.path.join(save_figures_dir, 'vis_training_delta_kl_cpt_best_state_{}.png'.format(tag))
-                plt.savefig(fig_file)
-                plt.close(fig)
-
-
-                # Save hisotry of sigma and alpha
+                visualize_total_loss(train_loss[:epoch+1], val_loss[:epoch+1], kl_warm_epochs, auto_warm_epochs, self.model_name, save_figures_dir, tag)
+                visualize_recon_loss(train_recon[:epoch+1], val_recon[:epoch+1], kl_warm_epochs, auto_warm_epochs, self.model_name, save_figures_dir, tag)
+                visualize_kld_loss(train_kl[:epoch+1], val_kl[:epoch+1], kl_warm_epochs, auto_warm_epochs, self.model_name, save_figures_dir, tag)
+                visualize_combined_metrics(delta_per_epoch[:epoch+1], kl_warm_epochs, auto_warm_epochs, kl_warm_values[:epoch+1], cpt_patience_epochs[:epoch+1], best_state_epochs[:epoch+1], self.model_name, save_figures_dir, tag)
+                
                 if self.optimize_alphas:
-                    plt.clf()
-                    fig = plt.figure(figsize=(8,6))
-                    plt.rcParams['font.size'] = 12
-                    for kl_warm_epoch in kl_warm_epochs:
-                        plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
-                    for i in range(sigmas_history.shape[0]):
-                        plt.plot(sigmas_history[i, :epoch+1], label='Sigma {}'.format(i+1))
-                    plt.legend(fontsize=16, title='Sigma values', title_fontsize=20)
-                    plt.xlabel('epochs', fontdict={'size':16})
-                    plt.ylabel('sigma', fontdict={'size':16})
-                    fig_file = os.path.join(save_figures_dir, 'vis_training_history_of_sigma_{}.png'.format(tag))
-                    plt.savefig(fig_file)
-                    plt.close(fig)
-
-                    plt.clf()
-                    fig = plt.figure(figsize=(8,6))
-                    plt.rcParams['font.size'] = 12
-                    for kl_warm_epoch in kl_warm_epochs:
-                        plt.axvline(x=kl_warm_epoch, color='r', linestyle='--')
-                    for i in range(sigmas_history.shape[0]):
-                        alphas = 1 / (1 + np.exp(-sigmas_history[i, :]))
-                        plt.plot(alphas[:epoch+1], label='Alpha {}'.format(i+1))
-                    plt.legend(fontsize=16, title='Alpha values', title_fontsize=20)
-                    plt.xlabel('epochs', fontdict={'size':16})
-                    plt.ylabel('alpha', fontdict={'size':16})
-                    plt.yscale('log')  # Set y-axis to logarithmic scale
-                    fig_file = os.path.join(save_figures_dir, 'vis_training_history_of_alpha_{}.png'.format(tag))
-                    plt.savefig(fig_file)
-                    plt.close(fig)
-
+                    visualize_sigma_history(sigmas_history[:, :epoch+1], kl_warm_epochs, auto_warm_epochs, self.model_name, save_figures_dir, tag)
+                    visualize_alpha_history(sigmas_history[:, :epoch+1], kl_warm_epochs, auto_warm_epochs, self.model_name, save_figures_dir, tag)
+        
                 visualize_combined_parameters(self.model, explain='epoch_{}'.format(epoch), save_path=save_figures_dir)
 
                 visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector, save_path=save_figures_dir, explain='epoch:{}_klwarm:{}'.format(epoch, kl_warm), inference_mode=True)
