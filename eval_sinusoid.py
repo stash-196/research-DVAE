@@ -25,7 +25,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from dvae.learning_algo import LearningAlgorithm
 from dvae.dataset import sinusoid_dataset, lorenz63_dataset
-from dvae.utils import EvalMetrics, loss_MSE, create_autonomous_mode_selector, run_parallel_visualizations, power_spectrum_error
+from dvae.utils import loss_MSE, create_autonomous_mode_selector, run_parallel_visualizations, power_spectrum_error
 from visualizers import visualize_variable_evolution, visualize_sequences, visualize_spectral_analysis, visualize_teacherforcing_2_autonomous, visualize_embedding_space, visualize_accuracy_over_time, visualize_delay_embedding, visualize_alpha_history, visualize_errors_from_lst
 from torch.nn.functional import mse_loss
 import plotly.graph_objects as go

@@ -64,7 +64,7 @@ def visualize_combined_metrics(delta_per_epoch, kl_warm_epochs, auto_warm_epochs
     axs[0].legend(fontsize=16, title='delta', title_fontsize=20)
     axs[0].set_xlabel('epochs', fontdict={'size':16})
     axs[0].set_ylabel('delta', fontdict={'size':16})
-    axs[1].step(kl_warm_epochs, kl_warm_values, label='kl_warm')
+    axs[1].step(np.arange(len(kl_warm_values)), kl_warm_values, label='kl_warm')
     axs[1].legend(fontsize=16, title='kl_warm', title_fontsize=20)
     axs[1].set_xlabel('epochs', fontdict={'size':16})
     axs[1].set_ylabel('kl_warm', fontdict={'size':16})
