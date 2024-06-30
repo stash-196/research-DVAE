@@ -6,24 +6,22 @@ Author your.email@domain.com
 Version v0.1.0
 
 %environment
-export LANG=en_US.UTF-8
-export LANGUAGE=en_US:en
-export LC_ALL=en_US.UTF-8
-export SHELL=/bin/bash
-export NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
-
+    export LANG=en_US.UTF-8
+    export LANGUAGE=en_US:en
+    export LC_ALL=en_US.UTF-8
+    export SHELL=/bin/bash
+    export NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
 
 %post
-export DEBIAN_FRONTEND=noninteractive
-apt update && apt install -y software-properties-common
+    export DEBIAN_FRONTEND=noninteractive
+    apt update && apt install -y software-properties-common
+    add-apt-repository universe
 
-add-apt-repository universe
+    # Add NVIDIA public key
+    apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/3bf863cc.pub
 
-# Add NVIDIA public key
-apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/3bf863cc.pub
-
-# Install some system packages
-apt update && apt install -y \
+    # Install system packages
+    apt update && apt install -y \
         python3-pip \
         python3-venv \
         build-essential \
@@ -53,25 +51,30 @@ apt update && apt install -y \
         graphviz \
         graphviz-dev \
         nodejs \
-        npm
+        npm \
+        openssh-server \
+        libpam-modules \
+        libpam-modules-bin \
+        libpam-runtime
 
-apt-get clean && rm -rf /var/lib/apt/lists/*
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Make UTF-8 locale
-locale-gen en_US.UTF-8
+    # Make UTF-8 locale
+    locale-gen en_US.UTF-8
 
-# Alias to Python3
-ln -s /usr/bin/python3 /usr/local/bin/python
+    # Alias to Python3
+    ln -s /usr/bin/python3 /usr/local/bin/python
 
-# Upgrade pip, setuptools and wheel.
-python3 -m pip --no-cache-dir install --upgrade \
-    build \
-    pip \
-    setuptools \
-    wheel
+    # Upgrade pip, setuptools and wheel
+    python3 -m pip --no-cache-dir install --upgrade \
+        build \
+        pip \
+        setuptools \
+        wheel
 
-# Install the necessary Python packages
-python3 -m pip --no-cache-dir install --upgrade \
+    # Install the necessary Python packages
+    python3 -m pip --no-cache-dir install --upgrade \
+        debugpy \
         numpy \
         scipy \
         pandas \
@@ -127,17 +130,56 @@ python3 -m pip --no-cache-dir install --upgrade \
         umap-learn \
         urllib3
 
+    # Set root password and configure SSH
+    echo "root:dvae_pw" | chpasswd
+    mkdir /var/run/sshd
+    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+    sed -i 's/PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+    echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+    sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+    echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config
+    sed -i 's/#Port 22/Port 2222/' /etc/ssh/sshd_config
+
+    # Expose SSH port
+    echo "Port 2222" >> /etc/ssh/sshd_config
+
+    # Permit user environment
+    echo 'PermitUserEnvironment yes' >> /etc/ssh/sshd_config
+
+    # Create a non-root user
+    useradd -m -s /bin/bash researcher
+    echo "researcher:dvae_pw" | chpasswd
+    usermod -aG sudo researcher
+
 %environment
     # Set environment variables
-    export PATH=/usr/local/python3.11/bin:$PATH
+    export PATH=/usr/bin:$PATH
     export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
     export CPATH=/usr/local/include:$CPATH
     export LIBRARY_PATH=/usr/local/lib:$LIBRARY_PATH
-    export PYTHONPATH=/usr/local/lib/python3.11/site-packages
+    export PYTHONPATH=/usr/local/lib/python3.10/dist-packages
 
 %runscript
     # This will run when the container is executed
     exec python3 "$@"
+
+%startscript
+    # This will run when the container starts
+    if [ "$1" = "ssh" ]; then
+        echo "Starting SSH server..."
+        mkdir -p /var/run/sshd
+        /usr/sbin/sshd -D &
+        shift
+    fi
+
+    # Only execute the remaining arguments if there are any
+    if [ $# -gt 0 ]; then
+        exec "$@"
+    else
+        exec /bin/bash
+    fi
+
 
 %help
 This container includes CUDA, Python 3.11, and essential libraries for data science and machine learning.

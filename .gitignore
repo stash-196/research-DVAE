@@ -5,7 +5,6 @@ notes/*
 *.pyc
 .DS_Store
 .vscode/*
-*.sh 
 data/*
 saved_model/*
 slurm/temp/*

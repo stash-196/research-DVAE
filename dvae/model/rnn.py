@@ -152,7 +152,7 @@ class RNN(nn.Module):
         return h_tp1, c_tp1
 
 
-    def forward(self, x, initialize_states=True, update_states=True, mode_selector=None,  inference_mode=False):
+    def forward(self, x, initialize_states=True, update_states=True, mode_selector=None, inference_mode=False, logger=None, from_instance=None):
 
 
         # need input:  (seq_len, batch_size, x_dim)
