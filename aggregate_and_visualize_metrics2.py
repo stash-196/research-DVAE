@@ -131,6 +131,6 @@ if __name__ == "__main__":
     visualize_error_bar(df, output_dir)
     print(f"Aggregated metrics saved to {output_file}")
 
-    VISUALIZE = True
-    if VISUALIZE:
-        visualize_aggregated_metrics(aggregated_metrics, output_dir)
+    # VISUALIZE = True
+    # if VISUALIZE:
+    #     visualize_aggregated_metrics(aggregated_metrics, output_dir)

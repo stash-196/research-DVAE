@@ -25,6 +25,7 @@ find "$search_dir" -type f -name "*final*.pt" | while read final_model; do
         
         # Running on HPC
         # apptainer exec --nv $SIF_FILE python3 eval_sinusoid.py --saved_dict "$final_model"
+        # nohup apptainer exec --nv $SIF_FILE python3 eval_sinusoid.py --saved_dict "$final_model" > run_scripts/temp/eval_$ 
     fi
 done
 
