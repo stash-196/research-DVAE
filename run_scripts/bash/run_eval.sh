@@ -5,7 +5,7 @@ echo "Time BEGIN: `date`"
 echo "Running on host: `hostname`"
 
 # source activate environment_name
-conda activate research-DVAE
+$SIF_
 
 cd ~/workspace/research-DVAE
 
