@@ -4,7 +4,7 @@
 BASE_DIR=~/workspace/research-DVAE/config/sinusoid/generated
 
 # Define a list of experiment names, each corresponding to a subdirectory under BASE_DIR
-declare -a experiments=("h27_ep500_SampMeths_RNNs_0")
+declare -a experiments=("h90_ep1000_esp10_SampMeths_RNNs_0")
 
 # Get the current date in YYYY-MM-DD format
 today=$(date +%Y-%m-%d)
@@ -46,7 +46,7 @@ for experiment in "${experiments[@]}"; do
         ERR_FILE=${LOG_DIR}/${CONFIG_BASENAME}_training.err
 
         # Singularity sif file location
-        SIF_FILE=~/workspace/research-DVAE/my_container.sif
+        SIF_FILE=~/containers/dvae_cuda11.8_py3.10.sif
 
         # Run the command using nohup and &
         echo "[bash] Running the training script with config file: $CONFIG_FILE"
