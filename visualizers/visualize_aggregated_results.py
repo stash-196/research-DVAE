@@ -70,14 +70,3 @@ def visualize_aggregated_metrics(aggregated_metrics, save_dir):
             plt.close()
             print(f"Saved plot for {param_names[0]} = {primary_value}, {residual_str}")
 
-if __name__ == "__main__":
-    aggregated_metrics_file = "path/to/aggregated_metrics.json"  # Replace with your path
-    save_dir = "path/to/save/plots"  # Replace with your path
-    
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-    
-    aggregated_metrics = load_aggregated_metrics(aggregated_metrics_file)
-    visualize_aggregated_metrics(aggregated_metrics, save_dir)
-    
-    print(f"Plots saved to {save_dir}")
