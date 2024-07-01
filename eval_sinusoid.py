@@ -26,7 +26,16 @@ import matplotlib.pyplot as plt
 from dvae.learning_algo import LearningAlgorithm
 from dvae.dataset import sinusoid_dataset, lorenz63_dataset
 from dvae.utils import loss_MSE, create_autonomous_mode_selector, run_parallel_visualizations, power_spectrum_error
-from visualizers import visualize_variable_evolution, visualize_sequences, visualize_spectral_analysis, visualize_teacherforcing_2_autonomous, visualize_embedding_space, visualize_accuracy_over_time, visualize_delay_embedding, visualize_alpha_history, visualize_errors_from_lst
+from visualizers import (
+    visualize_variable_evolution, 
+    visualize_sequences, visualize_spectral_analysis, 
+    visualize_teacherforcing_2_autonomous, 
+    visualize_embedding_space, 
+    visualize_accuracy_over_time, 
+    visualize_delay_embedding, 
+    visualize_alpha_history_and_spectrums,
+    visualize_errors_from_lst
+)
 from torch.nn.functional import mse_loss
 import plotly.graph_objects as go
 import plotly.express as px
@@ -83,7 +92,7 @@ if __name__ == '__main__':
     # Update params to use the merged configuration
     params['cfg'] = merged_config_path
     
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = 'cpu'
 
     if params['ss']:
         learning_algo = LearningAlgorithm_ss(params=params)
@@ -95,7 +104,7 @@ if __name__ == '__main__':
         learning_algo.build_model()
         dvae = learning_algo.model
     dvae.load_state_dict(torch.load(params['saved_dict'], map_location='cpu'))
-    eval_metrics = EvalMetrics(metric='all')
+
     dvae.eval()
     cfg = learning_algo.cfg
     print("[Eval] Total params: %.2fM" % (sum(p.numel() for p in dvae.parameters()) / 1000000.0))
@@ -265,7 +274,10 @@ if __name__ == '__main__':
             half_point_long = seq_len_long // 2
             # Plot the spectral analysis
             autonomous_mode_selector_long = create_autonomous_mode_selector(seq_len_long, 'half_half').astype(bool)
-            recon_data_long = dvae(batch_data_long, mode_selector=autonomous_mode_selector_long, inference_mode=True)
+
+            # turn input into tensor and send to GPU if needed
+            batch_data_long_tensor = torch.tensor(batch_data_long, device=dvae.device)           
+            recon_data_long = dvae(batch_data_long_tensor, mode_selector=autonomous_mode_selector_long, inference_mode=True).cpu().numpy()
 
 
             # Visualize the spectral analysis
@@ -299,7 +311,7 @@ if __name__ == '__main__':
                         true_alphas = [dt*2*np.pi, dt*2*np.pi/100, 2*np.pi/1000]
                 else:
                     raise ValueError("Unsupported dataset_name in configuration file.")
-                visualize_alpha_history(sigmas_history=sigmas_history, power_spectrum_lst=power_spectrum_lst[:3], spectrum_color_lst=colors_lst[:3], spectrum_name_lst=name_lst, frequencies=frequencies, dt=dt, save_dir=save_fig_dir, kl_warm_epochs=kl_warm_epochs, true_alphas=true_alphas)
+                visualize_alpha_history_and_spectrums(sigmas_history=sigmas_history, power_spectrum_lst=power_spectrum_lst[:3], spectrum_color_lst=colors_lst[:3], spectrum_name_lst=name_lst, frequencies=frequencies, dt=dt, save_dir=save_fig_dir, kl_warm_epochs=kl_warm_epochs, true_alphas=true_alphas)
 
             # Plot the reconstruction vs true sequence
             visualize_teacherforcing_2_autonomous(batch_data_long, dvae, mode_selector=autonomous_mode_selector_long, save_path=save_fig_dir, explain='final_long_inference_mode', inference_mode=True)
@@ -364,7 +376,10 @@ if __name__ == '__main__':
 
         autonomous_mode_selector = create_autonomous_mode_selector(seq_len, 'half_half').astype(bool)
         expanded_autonomous_mode_selector = expand_autonomous_mode_selector(autonomous_mode_selector, x_dim)
-        recon_data_repeated = dvae(batch_data_repeated, mode_selector=autonomous_mode_selector)
+
+        # turn input into tensor and send to GPU if needed
+        batch_data_repeated_tensor = torch.tensor(batch_data_repeated, device=dvae.device)
+        recon_data_repeated = dvae(batch_data_repeated_tensor, mode_selector=autonomous_mode_selector).cpu().numpy()
 
         batch_data_repeated = batch_data_repeated.reshape(seq_len, batch_size, num_iterations, x_dim)
         recon_data_repeated = recon_data_repeated.reshape(seq_len, batch_size, num_iterations, x_dim)

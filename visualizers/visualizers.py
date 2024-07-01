@@ -236,7 +236,7 @@ def visualize_variable_evolution(states, batch_data, save_dir, variable_name='h'
         axs[0].axvline(x=t, color='r', linestyle='--')
         axs[1].axvline(x=t * x_dim, color='r', linestyle='--')
 
-    str_alphas = ' α:' + str(set(alphas.numpy())) if alphas is not None else ''
+    str_alphas = ' α:' + str(set(alphas.cpu().detach().numpy())) if alphas is not None else ''
     axs[0].set_title(f'Evolution of {variable_name} States over Time' + str_alphas)
     axs[0].set_xlabel('Time steps')
     axs[0].set_ylabel(f'{variable_name} state value')
@@ -262,7 +262,9 @@ def visualize_teacherforcing_2_autonomous(batch_data, dvae, mode_selector, save_
     seq_len, batch_size, x_dim = batch_data.shape
     n_seq = seq_len  # Use the full sequence length for visualization
 
+    # 
     # Reconstruct the first n_seq sequences
+    batch_data = batch_data.to(dvae.device)
     recon_batch_data = dvae(batch_data[:n_seq, :1, :], mode_selector=mode_selector, inference_mode=inference_mode).detach().clone()
 
     # Flattening the time series for true and reconstructed data
@@ -493,7 +495,7 @@ def visualize_delay_embedding(observation, delay, dimensions, save_dir, variable
     plt.close()
 
 
-def visualize_alpha_history(sigmas_history, power_spectrum_lst, spectrum_color_lst,spectrum_name_lst, frequencies, save_dir, dt, kl_warm_epochs=None, explain='', true_alphas=[]):
+def visualize_alpha_history_and_spectrums(sigmas_history, power_spectrum_lst, spectrum_color_lst,spectrum_name_lst, frequencies, save_dir, dt, kl_warm_epochs=None, explain='', true_alphas=[]):
     plt.clf()
     periods = 1 / frequencies
     fig = plt.figure(figsize=(12, 8))
