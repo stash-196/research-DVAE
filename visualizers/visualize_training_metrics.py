@@ -56,7 +56,7 @@ def visualize_kld_loss(train_kl, val_kl, kl_warm_epochs, auto_warm_epochs, model
     plt.savefig(fig_file)
     plt.close(fig)
 
-def visualize_combined_metrics(delta_per_epoch, kl_warm_epochs, auto_warm_epochs, kl_warm_values, cpt_patience_epochs, best_state_epochs, model_name, save_figures_dir, tag):
+def visualize_combined_metrics(delta_per_epoch, kl_warm_epochs, auto_warm_epochs, kl_warm_values, auto_warm_values, cpt_patience_epochs, best_state_epochs, model_name, save_figures_dir, tag):
     plt.clf()
     fig, axs = plt.subplots(4, 1, figsize=(12, 12))
     plt.rcParams['font.size'] = 12
@@ -64,10 +64,11 @@ def visualize_combined_metrics(delta_per_epoch, kl_warm_epochs, auto_warm_epochs
     axs[0].legend(fontsize=16, title='delta', title_fontsize=20)
     axs[0].set_xlabel('epochs', fontdict={'size':16})
     axs[0].set_ylabel('delta', fontdict={'size':16})
-    axs[1].step(np.arange(len(kl_warm_values)), kl_warm_values, label='kl_warm')
-    axs[1].legend(fontsize=16, title='kl_warm', title_fontsize=20)
+    axs[1].step(np.arange(len(kl_warm_values)), kl_warm_values, label='kl_warm', color='c')
+    axs[1].step(np.arange(len(auto_warm_values)), auto_warm_values, label='auto_warm', color='r')
+    axs[1].legend(fontsize=16, title='warm values', title_fontsize=20)
     axs[1].set_xlabel('epochs', fontdict={'size':16})
-    axs[1].set_ylabel('kl_warm', fontdict={'size':16})
+    axs[1].set_ylabel('warm values', fontdict={'size':16})
     axs[2].plot(cpt_patience_epochs, label='cpt_patience')
     axs[2].legend(fontsize=16, title='cpt_patience', title_fontsize=20)
     axs[2].set_xlabel('epochs', fontdict={'size':16})
