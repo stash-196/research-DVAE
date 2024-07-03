@@ -10,7 +10,7 @@ import pickle
 
 
 # Define a build_dataloader function for lorenz63 dataset following the style of the above data_builder
-def build_dataloader(cfg, device):
+def build_dataloader(cfg, device, sequence_len):
 
     # Load dataset params for Lorenz63
     data_dir = cfg.get('User', 'data_dir')
@@ -18,7 +18,6 @@ def build_dataloader(cfg, device):
     shuffle = cfg.getboolean('DataFrame', 'shuffle')
     batch_size = cfg.getint('DataFrame', 'batch_size')
     num_workers = cfg.getint('DataFrame', 'num_workers')
-    sequence_len = cfg.getint('DataFrame', 'sequence_len')
     sample_rate = cfg.getint('DataFrame', 'sample_rate')
     skip_rate = cfg.getint('DataFrame', 'skip_rate')
     val_indices = cfg.getfloat('DataFrame', 'val_indices')
@@ -39,9 +38,9 @@ def build_dataloader(cfg, device):
 
     # Load dataset
     train_dataset = Lorenz63(path_to_data=data_dir, split='train', seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate,
-                             skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap,)
+                             skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap)
     val_dataset = Lorenz63(path_to_data=data_dir, split='valid', seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate,
-                           skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap,)
+                           skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap)
 
     train_num = train_dataset.__len__()
     val_num = val_dataset.__len__()
@@ -209,3 +208,17 @@ class Lorenz63(Dataset):
         end_frame = min(start_frame + self.seq_len, len(self.full_sequence))
         # Return the full (x, y, z) data
         return self.full_sequence[start_frame:end_frame]
+    
+    def update_sequence_length(self, new_seq_len):
+        self.seq_len = new_seq_len
+        # Recalculate data_idx based on the new sequence length
+        num_frames = self.seq.shape[0]
+        all_indices = data_utils.find_indices(
+            num_frames, self.seq_len, num_frames // self.seq_len)
+        train_indices, validation_indices = self.split_dataset(
+            all_indices, self.val_indices)
+        if self.split == 'train':
+            valid_frames = train_indices
+        else:
+            valid_frames = validation_indices
+        self.data_idx = list(valid_frames)

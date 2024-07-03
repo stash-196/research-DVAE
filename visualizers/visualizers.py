@@ -531,7 +531,7 @@ def visualize_alpha_history_and_spectrums(sigmas_history, power_spectrum_lst, sp
     ylim_max = max(dt/alpha_range_min, periods_max)
     ylim_min = min(dt/alpha_range_max, periods_min)
 
-    if kl_warm_epochs:
+    if kl_warm_epochs is not None:
         for kl_warm_epoch in kl_warm_epochs:
             ax1.axvline(x=kl_warm_epoch, color='r', linestyle='--',
                         label='KL & SS Warm-up' if kl_warm_epoch == kl_warm_epochs[0] else "")

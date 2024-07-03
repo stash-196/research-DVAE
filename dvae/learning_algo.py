@@ -55,6 +55,8 @@ class LearningAlgorithm():
         self.model_name = self.cfg.get('Network', 'name')
         self.dataset_name = self.cfg.get('DataFrame', 'dataset_name')
         self.sequence_len = self.cfg.getint('DataFrame', 'sequence_len')
+        self.shuffle = self.cfg.getboolean('DataFrame', 'shuffle')
+        self.num_workers = self.cfg.getint('DataFrame', 'num_workers')
 
         # Get training parameters
         self.sampling_method = self.cfg.get('Training', 'sampling_method')
@@ -206,15 +208,21 @@ class LearningAlgorithm():
         # Init optimizer
         optimizer = self.init_optimizer()
 
-        # Create data loader
-        if self.dataset_name == "Lorenz63":
-            train_dataloader, val_dataloader, train_num, val_num = lorenz63_dataset.build_dataloader(
-                self.cfg, device=self.device)
-        elif self.dataset_name == "Sinusoid":
-            train_dataloader, val_dataloader, train_num, val_num = sinusoid_dataset.build_dataloader(
-                self.cfg, device=self.device)
-        else:
-            logger.error('Unknown datset!')
+        def create_dataloader(sequence_len):
+            if self.dataset_name == "Lorenz63":
+                return lorenz63_dataset.build_dataloader(self.cfg, self.device, sequence_len)
+            elif self.dataset_name == "Sinusoid":
+                return sinusoid_dataset.build_dataloader(self.cfg, self.device, sequence_len)
+            else:
+                logger.error('Unknown dataset!')
+
+        # Create initial data loader with the starting sequence length
+        initial_sequence_len = self.cfg.getint(
+            'DataFrame', 'initial_sequence_len', fallback=self.sequence_len // 10)
+        train_dataloader, val_dataloader, train_num, val_num = create_dataloader(
+            initial_sequence_len)
+        current_sequence_len = initial_sequence_len
+
         logger.info('Training samples: {}'.format(train_num))
         logger.info('Validation samples: {}'.format(val_num))
 
@@ -427,11 +435,11 @@ class LearningAlgorithm():
             # Save the best model
             if warm_up_happened:
                 logger.info('Warm-up happened, saving the best model')
-                best_val_loss[epoch] = val_loss[epoch]
+                warm_up_happened = False
+                best_val_loss = val_loss[epoch]
                 best_state_dict = self.model.state_dict()
                 best_optim_dict = optimizer.state_dict()
                 cur_best_epoch = epoch
-                warm_up_happened = False
 
             # identify the delta between current val_loss and best_val_loss
             delta = val_loss[epoch] - best_val_loss
@@ -444,9 +452,9 @@ class LearningAlgorithm():
                 delta_rolling_average = np.mean(delta_per_epoch)
 
             # Save the best model, update patience and best_val_loss
-            if delta < -1:
-                best_val_loss = val_loss[epoch]
+            if delta < -100:
                 cpt_patience = 0
+                best_val_loss = val_loss[epoch]
                 best_state_dict = self.model.state_dict()
                 best_optim_dict = optimizer.state_dict()
                 cur_best_epoch = epoch
@@ -454,7 +462,8 @@ class LearningAlgorithm():
                 cpt_patience += 1
                 print(
                     f'[Learning Algo][epoch{epoch}] Updated cpt_patience: {cpt_patience}')
-                logger.info('Updated cpt_patience: {}'.format(cpt_patience))
+                logger.info('Updated cpt_patience: {}, delta: '.format(
+                    cpt_patience, delta))
 
             # # Adjust KL warm-up
             # if epoch % early_stop_patience == 0 and kl_warm < 1 and epoch > 0:
@@ -479,6 +488,15 @@ class LearningAlgorithm():
                     logger.info('Early stop patience achieved')
                     break
                 else:
+                    cpt_patience = 0
+                    warm_up_happened = True
+
+                    if auto_warm < self.auto_warm_limit:
+                        logger.info(
+                            'Early stop patience achieved, but autonomous warm-up not completed')
+                        auto_warm = min(self.auto_warm_limit,
+                                        auto_warm + 0.2*self.auto_warm_limit)
+                        auto_warm_values[epoch] = auto_warm
                     if kl_warm < 1.0:
                         logger.info(
                             'Early stop patience achieved, but KL warm-up not completed')
@@ -486,15 +504,19 @@ class LearningAlgorithm():
                         kl_warm_values[epoch] = kl_warm
                         logger.info(
                             'KL warm-up, anneal coeff: {}'.format(kl_warm))
-                    if auto_warm < self.auto_warm_limit:
-                        logger.info(
-                            'Early stop patience achieved, but autonomous warm-up not completed')
-                        auto_warm = min(self.auto_warm_limit,
-                                        auto_warm + 0.2*self.auto_warm_limit)
-                        auto_warm_values[epoch] = auto_warm
 
-                    cpt_patience = 0
-                    warm_up_happened = True
+                    if current_sequence_len < self.sequence_len:
+                        # Example logic to increase sequence length
+                        current_sequence_len = initial_sequence_len + \
+                            int(0.2*self.sequence_len)
+                        train_dataloader.dataset.update_sequence_length(
+                            current_sequence_len)
+                        val_dataloader.dataset.update_sequence_length(
+                            current_sequence_len)
+                        train_dataloader = torch.utils.data.DataLoader(
+                            train_dataloader.dataset, batch_size=train_dataloader.batch_size, shuffle=self.shuffle, num_workers=train_dataloader.num_workers, pin_memory=True)
+                        val_dataloader = torch.utils.data.DataLoader(
+                            val_dataloader.dataset, batch_size=val_dataloader.batch_size, shuffle=self.shuffle, num_workers=val_dataloader.num_workers, pin_memory=True)
 
             cpt_patience_epochs[epoch] = cpt_patience
             best_state_epochs[epoch] = cur_best_epoch
