@@ -15,7 +15,7 @@ import configparser
 if __name__ == '__main__':
     params = Options().get_params()
     merged_config = merge_configs(params['device_cfg'], params['cfg'])
-    
+
     # Update paths in the merged configuration
     merged_config['User']['data_dir'] = merged_config['Paths']['data_dir']
     merged_config['User']['saved_root'] = merged_config['Paths']['saved_root']
@@ -42,7 +42,7 @@ if __name__ == '__main__':
 
     # Update params to use the merged configuration
     params['cfg'] = merged_config_path
-    
+
     if not params['ss']:
         print(f"[Train] Config File: {params['cfg']}")
         learning_algo = LearningAlgorithm(params=params)

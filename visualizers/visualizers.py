@@ -1,13 +1,20 @@
+from matplotlib.animation import PillowWriter, FuncAnimation
+from umap import UMAP
+from sklearn.manifold import TSNE, LocallyLinearEmbedding, MDS, Isomap, SpectralEmbedding
+from sklearn.decomposition import PCA, FastICA, NMF, KernelPCA
+from mpl_toolkits.mplot3d import Axes3D
+from sklearn.manifold import TSNE
+from sklearn.decomposition import PCA
+import time
+import torch
+from dvae.utils import create_autonomous_mode_selector, power_spectrum_error
+import numpy as np
+import os
+import seaborn as sns
+import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')  # Set the backend to 'Agg' to avoid GUI issues
-import matplotlib.pyplot as plt
-import seaborn as sns
-import os
-import numpy as np
-from dvae.utils import create_autonomous_mode_selector, power_spectrum_error
-import torch
 
-import time
 
 def visualize_model_parameters(model, explain, save_path=None, fixed_scale=None):
     if save_path:
@@ -16,7 +23,8 @@ def visualize_model_parameters(model, explain, save_path=None, fixed_scale=None)
 
     # If a fixed scale is not provided, determine the max and min across all parameters
     if not fixed_scale:
-        all_values = [param.detach().cpu().numpy().flatten() for _, param in model.named_parameters()]
+        all_values = [param.detach().cpu().numpy().flatten()
+                      for _, param in model.named_parameters()]
         min_val = min(map(min, all_values))
         max_val = max(map(max, all_values))
         fixed_scale = (min_val, max_val)
@@ -24,12 +32,13 @@ def visualize_model_parameters(model, explain, save_path=None, fixed_scale=None)
     for name, param in model.named_parameters():
         plt.figure(figsize=(10, 5))
         param_data = param.detach().cpu().numpy()
-        
+
         # Reshape if one-dimensional
         if param.ndim == 1:
             param_data = param_data.reshape(-1, 1)
 
-        sns.heatmap(param_data, annot=False, cmap="RdBu", center=0, vmin=fixed_scale[0], vmax=fixed_scale[1])
+        sns.heatmap(param_data, annot=False, cmap="RdBu", center=0,
+                    vmin=fixed_scale[0], vmax=fixed_scale[1])
         plt.title(f'{name} at {explain}')
         plt.xlabel('Parameters')
         plt.ylabel('Values')
@@ -42,7 +51,8 @@ def visualize_model_parameters(model, explain, save_path=None, fixed_scale=None)
 def visualize_combined_parameters(model, explain, save_path=None, fixed_scale=None):
     if fixed_scale is None:
         # Compute the scale if not provided
-        all_values = [param.detach().cpu().numpy().flatten() for _, param in model.named_parameters()]
+        all_values = [param.detach().cpu().numpy().flatten()
+                      for _, param in model.named_parameters()]
         min_val = min(map(min, all_values))
         max_val = max(map(max, all_values))
         fixed_scale = (min_val, max_val)
@@ -59,7 +69,8 @@ def visualize_combined_parameters(model, explain, save_path=None, fixed_scale=No
         if param.ndim == 1:
             param_data = param_data.reshape(-1, 1)
 
-        sns.heatmap(param_data, annot=False, cmap="RdBu", center=0, vmin=fixed_scale[0], vmax=fixed_scale[1], ax=ax)
+        sns.heatmap(param_data, annot=False, cmap="RdBu", center=0,
+                    vmin=fixed_scale[0], vmax=fixed_scale[1], ax=ax)
         ax.set_title(f'{name} at {explain}')
         ax.set_xlabel('Parameters')
         ax.set_ylabel('Values')
@@ -70,13 +81,9 @@ def visualize_combined_parameters(model, explain, save_path=None, fixed_scale=No
     plt.close()
 
 
-
-import matplotlib.pyplot as plt
-import os
-
 def visualize_sequences(true_data, recon_data, mode_selector, save_dir, explain=''):
     plt.figure(figsize=(10, 6))
-    
+
     # Plotting the true sequence in blue
     plt.plot(true_data, label='True Sequence', color='blue')
 
@@ -106,7 +113,7 @@ def visualize_sequences(true_data, recon_data, mode_selector, save_dir, explain=
     plt.xlabel('Time steps')
     plt.ylabel('Value')
     plt.grid(True)
-    
+
     fig_file = os.path.join(save_dir, f'vis_pred_true_series_{explain}.png')
     plt.legend(loc='upper right')
     plt.savefig(fig_file)
@@ -143,15 +150,17 @@ def visualize_spectral_analysis(data_lst, name_lst, colors_lst, save_dir, sampli
     fig, axs = plt.subplots(num_datasets, 2, figsize=(10, 3 * num_datasets))
 
     power_spectrum_list = []
-    min_power, max_power = float('inf'), float('-inf')  # Initialize min and max power
+    min_power, max_power = float('inf'), float(
+        '-inf')  # Initialize min and max power
 
     # First pass: Compute the power spectrum and update min/max values
     for data in data_lst:
-        padded_data = np.pad(data, (0, max_length - len(data)), mode='constant')
+        padded_data = np.pad(
+            data, (0, max_length - len(data)), mode='constant')
         fft = np.fft.fft(padded_data)
         freqs = np.fft.fftfreq(max_length, 1/sampling_rate)
         nonzero_indices = np.where(freqs > 0)
-        
+
         power_spectrum = np.abs(fft[nonzero_indices]) ** 2
         power_spectrum_list.append(power_spectrum)
 
@@ -159,15 +168,16 @@ def visualize_spectral_analysis(data_lst, name_lst, colors_lst, save_dir, sampli
         min_power = min(min_power, power_spectrum.min())
         max_power = max(max_power, power_spectrum.max())
         # Calculate the limits for the frequency axis
-        freq_min, freq_max = freqs[nonzero_indices].min(), freqs[nonzero_indices].max()
+        freq_min, freq_max = freqs[nonzero_indices].min(
+        ), freqs[nonzero_indices].max()
 
         # Convert these frequency limits to period limits for the secondary axis
         period_max, period_min = 1 / freq_min, 1 / freq_max  # Note the inversion here
 
-
     # Second pass: Plotting with unified y-axis range
     for idx, (data, power_spectrum) in enumerate(zip(data_lst, power_spectrum_list)):
-        padded_data = np.pad(data, (0, max_length - len(data)), mode='constant')
+        padded_data = np.pad(
+            data, (0, max_length - len(data)), mode='constant')
         fft = np.fft.fft(padded_data)
         freqs = np.fft.fftfreq(max_length, 1/sampling_rate)
         nonzero_indices = np.where(freqs > 0)
@@ -177,8 +187,10 @@ def visualize_spectral_analysis(data_lst, name_lst, colors_lst, save_dir, sampli
         dataset_color = colors_lst[idx]
 
         # Power spectral plot with unified y-axis
-        axs[idx, 0].loglog(freqs_nonzero, power_spectrum, label=f'{name_lst[idx]} Power Spectrum', color=dataset_color)
-        axs[idx, 0].set_ylim(min_power, max_power)  # Set the same y-axis range for all plots
+        axs[idx, 0].loglog(freqs_nonzero, power_spectrum,
+                           label=f'{name_lst[idx]} Power Spectrum', color=dataset_color)
+        # Set the same y-axis range for all plots
+        axs[idx, 0].set_ylim(min_power, max_power)
         axs[idx, 0].set_xlim(freq_min, freq_max)
         axs[idx, 0].set_title(f'{name_lst[idx]} Power Spectrum')
         axs[idx, 0].set_xlabel('Frequency (Hz)')
@@ -187,14 +199,16 @@ def visualize_spectral_analysis(data_lst, name_lst, colors_lst, save_dir, sampli
 
         # Adding secondary x-axis for periods
         ax_new = axs[idx, 0].twiny()
-        ax_new.loglog(periods_nonzero, power_spectrum, alpha=0)  # Invisible plot to generate secondary x-axis
+        # Invisible plot to generate secondary x-axis
+        ax_new.loglog(periods_nonzero, power_spectrum, alpha=0)
         ax_new.set_xlabel('Period (seconds)')
         ax_new.set_xscale('log')
         ax_new.set_xlim(period_min, period_max)
 
         # Phase spectral plot
         phase_spectrum = np.angle(fft[nonzero_indices])
-        axs[idx, 1].semilogx(freqs_nonzero, phase_spectrum, label=f'{name_lst[idx]} Phase Spectrum', color=dataset_color)
+        axs[idx, 1].semilogx(freqs_nonzero, phase_spectrum,
+                             label=f'{name_lst[idx]} Phase Spectrum', color=dataset_color)
         axs[idx, 1].set_title(f'{name_lst[idx]} Phase Spectrum')
         axs[idx, 1].set_xlabel('Frequency (Hz)')
         axs[idx, 1].set_ylabel('Phase (radians)')
@@ -211,10 +225,10 @@ def visualize_spectral_analysis(data_lst, name_lst, colors_lst, save_dir, sampli
     return power_spectrum_list, freqs_nonzero, periods_nonzero
 
 
-
 def visualize_variable_evolution(states, batch_data, save_dir, variable_name='h', alphas=None, add_lines_lst=[]):
     seq_len, batch_size, x_dim = batch_data.shape
-    reshaped_batch_data = batch_data[:, 0, :].reshape(-1).cpu().numpy()  # Assuming batch size is at least 1
+    # Assuming batch size is at least 1
+    reshaped_batch_data = batch_data[:, 0, :].reshape(-1).cpu().numpy()
 
     num_dims = states.shape[2]
 
@@ -225,19 +239,23 @@ def visualize_variable_evolution(states, batch_data, save_dir, variable_name='h'
         colors = plt.cm.viridis(np.linspace(0, 1, num_dims))
 
     # Create a figure with two subplots, making the bottom subplot smaller
-    fig, axs = plt.subplots(2, 1, figsize=(12, 8), gridspec_kw={'height_ratios': [3, 1]})
+    fig, axs = plt.subplots(2, 1, figsize=(
+        12, 8), gridspec_kw={'height_ratios': [3, 1]})
 
     # Plotting the variables
     for dim in range(num_dims):
-        axs[0].plot(states[:, 0, dim].cpu().numpy(), label=f'Dim {dim}', color=colors[dim])
+        axs[0].plot(states[:, 0, dim].cpu().numpy(),
+                    label=f'Dim {dim}', color=colors[dim])
 
     # Add vertical lines at specified epochs
     for t in add_lines_lst:
         axs[0].axvline(x=t, color='r', linestyle='--')
         axs[1].axvline(x=t * x_dim, color='r', linestyle='--')
 
-    str_alphas = ' α:' + str(set(alphas.cpu().detach().numpy())) if alphas is not None else ''
-    axs[0].set_title(f'Evolution of {variable_name} States over Time' + str_alphas)
+    str_alphas = ' α:' + \
+        str(set(alphas.cpu().detach().numpy())) if alphas is not None else ''
+    axs[0].set_title(
+        f'Evolution of {variable_name} States over Time' + str_alphas)
     axs[0].set_xlabel('Time steps')
     axs[0].set_ylabel(f'{variable_name} state value')
     if num_dims <= 10:
@@ -253,7 +271,8 @@ def visualize_variable_evolution(states, batch_data, save_dir, variable_name='h'
     axs[1].grid(True)
 
     # Save the figure
-    fig_file = os.path.join(save_dir, f'vis_evolution_of_{variable_name}_state.png')
+    fig_file = os.path.join(
+        save_dir, f'vis_evolution_of_{variable_name}_state.png')
     plt.savefig(fig_file, bbox_inches='tight')
     plt.close(fig)
 
@@ -262,10 +281,11 @@ def visualize_teacherforcing_2_autonomous(batch_data, dvae, mode_selector, save_
     seq_len, batch_size, x_dim = batch_data.shape
     n_seq = seq_len  # Use the full sequence length for visualization
 
-    # 
+    #
     # Reconstruct the first n_seq sequences
     batch_data = batch_data.to(dvae.device)
-    recon_batch_data = dvae(batch_data[:n_seq, :1, :], mode_selector=mode_selector, inference_mode=inference_mode).detach().clone()
+    recon_batch_data = dvae(
+        batch_data[:n_seq, :1, :], mode_selector=mode_selector, inference_mode=inference_mode).detach().clone()
 
     # Flattening the time series for true and reconstructed data
     true_series = batch_data[:n_seq, 0, :].reshape(-1).cpu().numpy()
@@ -275,18 +295,9 @@ def visualize_teacherforcing_2_autonomous(batch_data, dvae, mode_selector, save_
     expanded_mode_selector = np.repeat(mode_selector[:n_seq], x_dim)
 
     # Plot the reconstruction vs true sequence
-    visualize_sequences(true_series, recon_series, expanded_mode_selector, save_path, explain)
+    visualize_sequences(true_series, recon_series,
+                        expanded_mode_selector, save_path, explain)
 
-
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-import numpy as np
-
-from sklearn.decomposition import PCA, FastICA, NMF, KernelPCA
-from sklearn.manifold import TSNE, LocallyLinearEmbedding, MDS, Isomap, SpectralEmbedding
-from umap import UMAP
 
 def reduce_dimensions(embeddings, technique='pca', n_components=3):
     """
@@ -326,7 +337,8 @@ def reduce_dimensions(embeddings, technique='pca', n_components=3):
     elif technique == 'kernel_pca':
         reducer = KernelPCA(n_components=n_components, kernel='rbf')
     else:
-        raise ValueError(f"Unsupported dimensionality reduction technique: {technique}")
+        raise ValueError(
+            f"Unsupported dimensionality reduction technique: {technique}")
 
     # Perform the dimensionality reduction
     # show error if it fails
@@ -335,11 +347,8 @@ def reduce_dimensions(embeddings, technique='pca', n_components=3):
     except Exception as e:
         print(f"Failed to reduce dimensions using {technique}. Error: {e}")
         return None
-    
+
     return reduced_embeddings
-
-
-from matplotlib.animation import PillowWriter, FuncAnimation
 
 
 def visualize_embedding_space(states_list, save_dir, variable_name, condition_names, explain='', technique='pca', rotation_speed=5, total_rotation=360, base_colors=['Blues']):
@@ -358,7 +367,7 @@ def visualize_embedding_space(states_list, save_dir, variable_name, condition_na
     """
     num_plots = len(states_list)
     fig = plt.figure(figsize=(10, 10 * num_plots))
-    
+
     for i, (states, condition_name, base_color) in enumerate(zip(states_list, condition_names, base_colors)):
         ax = fig.add_subplot(num_plots, 1, i + 1, projection='3d')
         reduced_embeddings = reduce_dimensions(states, technique=technique)
@@ -367,28 +376,32 @@ def visualize_embedding_space(states_list, save_dir, variable_name, condition_na
         z_min, z_max = zs.min(), zs.max()
 
         for j in range(1, len(reduced_embeddings)):
-            x, y, z = reduced_embeddings[j-1:j+1, 0], reduced_embeddings[j-1:j+1, 1], reduced_embeddings[j-1:j+1, 2]
+            x, y, z = reduced_embeddings[j-1:j+1, 0], reduced_embeddings[j -
+                                                                         1:j+1, 1], reduced_embeddings[j-1:j+1, 2]
             color_value = (z.mean() - z_min) / (z_max - z_min)
             ax.plot(x, y, z, color=cmap(color_value))
-        
+
         ax.set_xlabel('Component 1')
         ax.set_ylabel('Component 2')
         ax.set_zlabel('Component 3')
-        ax.set_title(f'Trajectory of {variable_name.capitalize()} {condition_name.capitalize()} in {explain} {technique} space', fontsize=16)
+        ax.set_title(
+            f'Trajectory of {variable_name.capitalize()} {condition_name.capitalize()} in {explain} {technique} space', fontsize=16)
 
     def update(frame):
         for ax in fig.axes:
             ax.view_init(30, frame)
         return fig,
 
-    anim = FuncAnimation(fig, update, frames=np.arange(0, total_rotation, rotation_speed), interval=200, blit=True)
-    
+    anim = FuncAnimation(fig, update, frames=np.arange(
+        0, total_rotation, rotation_speed), interval=200, blit=True)
+
     # Create save directory if it doesn't exist
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-    
+
     # Construct a unique filename to avoid overwriting
-    fig_file = os.path.join(save_dir, f'vis_trajectory_of_{variable_name}_space_{technique}.gif')
+    fig_file = os.path.join(
+        save_dir, f'vis_trajectory_of_{variable_name}_space_{technique}.gif')
     print(f"Saving animation at: {fig_file}")
 
     start_time = time.time()
@@ -396,10 +409,6 @@ def visualize_embedding_space(states_list, save_dir, variable_name, condition_na
     end_time = time.time()
     print(f"Animation saved in {end_time - start_time:.2f} seconds")
     plt.close(fig)
-
-
-
-
 
 
 def visualize_accuracy_over_time(accuracy_values, variance_values, save_dir, measure, num_batches, num_iter, explain, autonomous_mode_selector):
@@ -415,17 +424,19 @@ def visualize_accuracy_over_time(accuracy_values, variance_values, save_dir, mea
     - autonomous_mode_selector: Array indicating the mode (0 for teacher-forced, 1 for autonomous).
     """
     plt.figure(figsize=(10, 6))
-    
+
     time_steps = range(len(accuracy_values))
 
     # Plot the average accuracy line
     for i in range(len(time_steps) - 1):
         color = 'green' if autonomous_mode_selector[i] == 0 else 'red'
-        plt.plot(time_steps[i:i + 2], accuracy_values.cpu().numpy()[i:i + 2], color=color)
+        plt.plot(time_steps[i:i + 2],
+                 accuracy_values.cpu().numpy()[i:i + 2], color=color)
 
     # Shading the variance
     std_dev = torch.sqrt(variance_values).cpu().numpy()
-    plt.fill_between(time_steps, (accuracy_values - std_dev).cpu().numpy(), (accuracy_values + std_dev).cpu().numpy(), color='gray', alpha=0.3)
+    plt.fill_between(time_steps, (accuracy_values - std_dev).cpu().numpy(),
+                     (accuracy_values + std_dev).cpu().numpy(), color='gray', alpha=0.3)
 
     plt.xlabel('Time Steps')
     plt.ylabel(measure.upper())
@@ -439,7 +450,8 @@ def visualize_accuracy_over_time(accuracy_values, variance_values, save_dir, mea
     plt.plot([], [], color='gray', alpha=0.3, label='Variance')
     plt.legend()
 
-    fig_file = os.path.join(save_dir, f'vis_accuracy_{measure}_{explain.replace(" ", "_")}_btch{num_batches}_iter{num_iter}.png')
+    fig_file = os.path.join(
+        save_dir, f'vis_accuracy_{measure}_{explain.replace(" ", "_")}_btch{num_batches}_iter{num_iter}.png')
     plt.savefig(fig_file)
     print(f"{measure} plot saved at: {fig_file}")
     plt.close()
@@ -449,14 +461,16 @@ def visualize_delay_embedding(observation, delay, dimensions, save_dir, variable
     n = len(observation)
     embedding_length = n - (dimensions - 1) * delay
     if embedding_length <= 0:
-        raise ValueError("Delay and dimensions are too large for the length of the observation array.")
+        raise ValueError(
+            "Delay and dimensions are too large for the length of the observation array.")
 
     embedded = np.empty((embedding_length, dimensions))
     for i in range(dimensions):
         embedded[:, i] = observation[i * delay: i * delay + embedding_length]
 
     if dimensions != 3:
-        raise NotImplementedError("Rotation and color gradient for dimensions other than 3 is not implemented.")
+        raise NotImplementedError(
+            "Rotation and color gradient for dimensions other than 3 is not implemented.")
 
     fig = plt.figure(figsize=(12, 8))
     ax = fig.add_subplot(111, projection='3d')
@@ -482,8 +496,10 @@ def visualize_delay_embedding(observation, delay, dimensions, save_dir, variable
         ax.view_init(30, frame)
         return fig,
 
-    anim = FuncAnimation(fig, update, frames=np.arange(0, total_rotation, rotation_speed), interval=200, blit=True)
-    fig_file = os.path.join(save_dir, f'vis_delay_embedding_of_{variable_name}_τ{delay}_{explain}.gif')
+    anim = FuncAnimation(fig, update, frames=np.arange(
+        0, total_rotation, rotation_speed), interval=200, blit=True)
+    fig_file = os.path.join(
+        save_dir, f'vis_delay_embedding_of_{variable_name}_τ{delay}_{explain}.gif')
 
     print(f"Saving animation at: {fig_file}")
     start_time = time.time()
@@ -491,11 +507,11 @@ def visualize_delay_embedding(observation, delay, dimensions, save_dir, variable
     end_time = time.time()
 
     print(f"Animation saved in {end_time - start_time:.2f} seconds")
-    
+
     plt.close()
 
 
-def visualize_alpha_history_and_spectrums(sigmas_history, power_spectrum_lst, spectrum_color_lst,spectrum_name_lst, frequencies, save_dir, dt, kl_warm_epochs=None, explain='', true_alphas=[]):
+def visualize_alpha_history_and_spectrums(sigmas_history, power_spectrum_lst, spectrum_color_lst, spectrum_name_lst, frequencies, save_dir, dt, kl_warm_epochs=None, explain='', true_alphas=[]):
     plt.clf()
     periods = 1 / frequencies
     fig = plt.figure(figsize=(12, 8))
@@ -505,8 +521,8 @@ def visualize_alpha_history_and_spectrums(sigmas_history, power_spectrum_lst, sp
     plt.rcParams['font.size'] = 12
 
     # Example color scheme for alpha curves
-    alpha_colors = ['blue', 'green', 'red', 'cyan', 'magenta', 'yellow', 'black']
-
+    alpha_colors = ['blue', 'green', 'red',
+                    'cyan', 'magenta', 'yellow', 'black']
 
     alphas_from_periods = dt / periods
     periods_max, periods_min = np.max(periods), np.min(periods)
@@ -517,29 +533,34 @@ def visualize_alpha_history_and_spectrums(sigmas_history, power_spectrum_lst, sp
 
     if kl_warm_epochs:
         for kl_warm_epoch in kl_warm_epochs:
-            ax1.axvline(x=kl_warm_epoch, color='r', linestyle='--', label='KL & SS Warm-up' if kl_warm_epoch == kl_warm_epochs[0] else "")
+            ax1.axvline(x=kl_warm_epoch, color='r', linestyle='--',
+                        label='KL & SS Warm-up' if kl_warm_epoch == kl_warm_epochs[0] else "")
 
     # Plot and annotate true alphas with a specific color
     true_alpha_color = 'black'
     for idx, true_alpha in enumerate(true_alphas, start=1):
         line_y = dt/true_alpha
-        ax1.axhline(y=line_y, color=true_alpha_color, linestyle='--', label=f"\"True\" α" if idx == 1 else "")
+        ax1.axhline(y=line_y, color=true_alpha_color, linestyle='--',
+                    label=f"\"True\" α" if idx == 1 else "")
         ax2.axhline(y=true_alpha/dt, color=true_alpha_color, linestyle='--')
-        ax1.text(0.5, line_y, f"α_true: {true_alpha:.{4}g}", verticalalignment='bottom', horizontalalignment='center', transform=ax1.get_yaxis_transform(), color=true_alpha_color, fontsize=15)
+        ax1.text(0.5, line_y, f"α_true: {true_alpha:.{4}g}", verticalalignment='bottom',
+                 horizontalalignment='center', transform=ax1.get_yaxis_transform(), color=true_alpha_color, fontsize=15)
 
     num_alphas = sigmas_history.shape[0]
-    for i in range(min(num_alphas, len(alpha_colors))):  # Ensure we don't exceed the number of predefined colors
+    # Ensure we don't exceed the number of predefined colors
+    for i in range(min(num_alphas, len(alpha_colors))):
         alphas = 1 / (1 + np.exp(-sigmas_history[i]))
         periods_from_alpha = dt / alphas
         curve_color = alpha_colors[i]  # Get color for this curve
         ax1.plot(periods_from_alpha, label=f'α {i+1}', color=curve_color)
         # Annotate the last alpha value
         last_alpha_period = periods_from_alpha[-1]
-        ax1.text(len(sigmas_history[i])-1, last_alpha_period, f"α_end: {alphas[-1]:.{4}g}", verticalalignment='bottom', horizontalalignment='right', color=curve_color, fontsize=15)
+        ax1.text(len(sigmas_history[i])-1, last_alpha_period, f"α_end: {alphas[-1]:.{4}g}",
+                 verticalalignment='bottom', horizontalalignment='right', color=curve_color, fontsize=15)
         # Optionally, annotate the initial alpha value
         init_alpha_period = periods_from_alpha[0]
-        ax1.text(0, init_alpha_period, f"α_0: {alphas[0]:.{4}g}", verticalalignment='bottom', horizontalalignment='left', color=curve_color, fontsize=15)
-
+        ax1.text(0, init_alpha_period, f"α_0: {alphas[0]:.{4}g}", verticalalignment='bottom',
+                 horizontalalignment='left', color=curve_color, fontsize=15)
 
     ax1.set_title('α values during training', fontsize=18)
     ax1.legend(fontsize=16, loc='upper left')
@@ -556,8 +577,9 @@ def visualize_alpha_history_and_spectrums(sigmas_history, power_spectrum_lst, sp
     ax1_right.invert_yaxis()
 
     for power_spectrum, color, label in zip(power_spectrum_lst, spectrum_color_lst, spectrum_name_lst):
-        ax2.loglog(power_spectrum, frequencies, color=color, alpha=0.5, label=label)
-    
+        ax2.loglog(power_spectrum, frequencies,
+                   color=color, alpha=0.5, label=label)
+
     ax2.set_title('Lorenz63\nPower Spectrum', fontsize=18)
     ax2.legend(fontsize=16, loc='upper right')
     ax2.set_xlabel('Amplitude', fontsize=16)
@@ -572,15 +594,17 @@ def visualize_alpha_history_and_spectrums(sigmas_history, power_spectrum_lst, sp
     ax2_right.set_ylim(ylim_max, ylim_min)
     ax2_right.invert_yaxis()
 
-    plt.suptitle(f'α during training and Power Spectrum {explain}', fontsize=20, x=0.5, y=1.02)
+    plt.suptitle(
+        f'α during training and Power Spectrum {explain}', fontsize=20, x=0.5, y=1.02)
     plt.tight_layout()
-    fig_file = os.path.join(save_dir, f'vis_alpha_vs_power_spectrum_{explain}.png')
+    fig_file = os.path.join(
+        save_dir, f'vis_alpha_vs_power_spectrum_{explain}.png')
     plt.savefig(fig_file, bbox_inches='tight')
     plt.close()
     print(f"Alpha vs Power Spectrum plot saved at: {fig_file}")
 
 
-# Visualize the errors from an error list of any error, using a bar graph. x-axis is the subjects of the error (name_lst), y-axis is the error value. 
+# Visualize the errors from an error list of any error, using a bar graph. x-axis is the subjects of the error (name_lst), y-axis is the error value.
 # true_signal_index is the index of the true signal in the error_lst.
 def visualize_errors_from_lst(error_lst, name_lst, error_unit, colors, save_dir, explain, true_signal_index=None):
     plt.figure(figsize=(12, 6))
@@ -593,4 +617,3 @@ def visualize_errors_from_lst(error_lst, name_lst, error_unit, colors, save_dir,
     plt.savefig(fig_file)
     plt.close()
     print(f"Errors plot saved at: {fig_file}")
-    

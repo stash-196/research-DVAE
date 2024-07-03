@@ -3,9 +3,11 @@ import itertools
 import os
 import json
 
+
 class DefaultDict(defaultdict):
     def __missing__(self, key):
         return self.default_factory()
+
 
 def generate_config_file(base_template, output_dir, experiment_name, testing_keys, config):
     config['test_keys'] = keys_being_compared
@@ -25,32 +27,35 @@ def generate_config_file(base_template, output_dir, experiment_name, testing_key
     content = content.format_map(DefaultDict(lambda: '', **config))
 
     # Generating a unique name for the config file based on parameters
-    label_keys = [f"{key}-{config[key]}" for key in config if key in testing_keys]
+    label_keys = [
+        f"{key}-{config[key]}" for key in config if key in testing_keys]
 
-    output_file_name = '_'.join([experiment_name, config['tag'], *label_keys]).replace(' ', '')
+    output_file_name = '_'.join(
+        [experiment_name, config['tag'], *label_keys]).replace(' ', '')
     output_file = os.path.join(output_dir, f"cfg_{output_file_name}.ini")
-    
+
     with open(output_file, 'w') as file:
         file.write(content)
-    
+
     return output_file
+
 
 def get_configurations_for_model(params):
     param_names = list(params.keys())
     combinations = list(itertools.product(*params.values()))
     return [dict(zip(param_names, values)) for values in combinations]
 
+
 if __name__ == "__main__":
 
     experiment_name = "h27_ep2000_SampMeths_RNNs_0"
 
     models = [
-        "RNN", 
-        # "VRNN", 
-        "MT_RNN", 
+        "RNN",
+        # "VRNN",
+        "MT_RNN",
         # "MT_VRNN"
-        ]
-
+    ]
 
     # Change to dictionary of lists
     # Network
@@ -60,7 +65,7 @@ if __name__ == "__main__":
     dense_z = [[16, 32]]
 
     dim_rnn = [27]
-    alphas = [[0.00490695, 0.02916397, 0.01453569]]#, [0.1, 0.01, 0.00267]]
+    alphas = [[0.00490695, 0.02916397, 0.01453569]]  # , [0.1, 0.01, 0.00267]]
 
     # Training
     lr = [0.001]
@@ -151,27 +156,30 @@ if __name__ == "__main__":
     for key, value in model_params["MT_RNN"].items():
         if key not in model_params["MT_VRNN"]:
             model_params["MT_VRNN"][key] = value
-    
+
     # Get all the parameters
     all_params = model_params["MT_VRNN"]
 
     # Get keys for which the len of the values is greater than 1 in "MT_VRNN"
-    keys_being_compared = [key for key, value in model_params["MT_VRNN"].items() if len(value) > 1]
+    keys_being_compared = [
+        key for key, value in model_params["MT_VRNN"].items() if len(value) > 1]
 
     # exclude models that are not in models. Don't run this before getting `params_being`
-    model_params = {key: value for key, value in model_params.items() if key in models}
+    model_params = {key: value for key,
+                    value in model_params.items() if key in models}
 
     base_template = "config/sinusoid/cfg_base_template.ini"
     output_dir = os.path.join("config/sinusoid/generated/", experiment_name)
-    
+
     all_configs = {
-        model_name: get_configurations_for_model(params) 
+        model_name: get_configurations_for_model(params)
         for model_name, params in model_params.items()
     }
 
     for model_name, configs in all_configs.items():
         for config in configs:
-            generate_config_file(base_template, output_dir, experiment_name, keys_being_compared, config)
+            generate_config_file(base_template, output_dir,
+                                 experiment_name, keys_being_compared, config)
 
     # Save parameters in JSON format
     json_params = []

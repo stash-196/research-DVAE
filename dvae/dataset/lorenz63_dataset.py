@@ -23,7 +23,7 @@ def build_dataloader(cfg, device):
     skip_rate = cfg.getint('DataFrame', 'skip_rate')
     val_indices = cfg.getfloat('DataFrame', 'val_indices')
     observation_process = cfg.get('DataFrame', 'observation_process')
-    overlap = cfg.getboolean('DataFrame', 'overlap')  
+    overlap = cfg.getboolean('DataFrame', 'overlap')
 
     data_cfgs = {}
     # define long as a boolean if field exists
@@ -38,17 +38,20 @@ def build_dataloader(cfg, device):
         data_cfgs['s_dim'] = False
 
     # Load dataset
-    train_dataset = Lorenz63(path_to_data=data_dir, split='train', seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate, skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap,)
-    val_dataset = Lorenz63(path_to_data=data_dir, split='valid', seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate, skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap,)
+    train_dataset = Lorenz63(path_to_data=data_dir, split='train', seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate,
+                             skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap,)
+    val_dataset = Lorenz63(path_to_data=data_dir, split='valid', seq_len=sequence_len, x_dim=x_dim, sample_rate=sample_rate,
+                           skip_rate=skip_rate, val_indices=val_indices, observation_process=observation_process, device=device, overlap=overlap,)
 
-
-    train_num = train_dataset.__len__()    
+    train_num = train_dataset.__len__()
     val_num = val_dataset.__len__()
-    
+
     # Build dataloader
-    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=True)
-    val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=True)
-    
+    train_dataloader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=True)
+    val_dataloader = torch.utils.data.DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, pin_memory=True)
+
     return train_dataloader, val_dataloader, train_num, val_num
 
 
@@ -63,7 +66,7 @@ class Lorenz63(Dataset):
         :param skip_rate: the skip length to get example, only used for train and test
         :param val_indices: the number of slices used for validation
         """
-        
+
         self.path_to_data = path_to_data
         self.x_dim = x_dim
         self.seq_len = seq_len
@@ -75,10 +78,11 @@ class Lorenz63(Dataset):
         self.overlap = overlap
         self.shuffle = shuffle
         self.device = device
-        
+
         # read motion data from pickle file
         if split == 'test':
-            filename = '{0}/lorenz63/dataset_test.pkl'.format(self.path_to_data)
+            filename = '{0}/lorenz63/dataset_test.pkl'.format(
+                self.path_to_data)
         else:
             filename = '{0}/lorenz63/dataset.pkl'.format(self.path_to_data)
 
@@ -88,7 +92,6 @@ class Lorenz63(Dataset):
         # Store the full sequence before applying any observation process
         self.full_sequence = the_sequence
 
-        
         if self.observation_process == '3dto3d':
             pass
         elif self.observation_process == '3dto3d_noisy':
@@ -97,37 +100,45 @@ class Lorenz63(Dataset):
             # v = np.random.normal(0, 1, the_sequence.shape[-1])
             v = np.ones(the_sequence.shape[-1])
             the_sequence = the_sequence @ v  # Perform vector product to convert 3D to 1D
-            the_sequence = np.array([the_sequence[i:i+x_dim] for i in range(0, len(the_sequence), x_dim) if i+x_dim <= len(the_sequence)])
+            the_sequence = np.array([the_sequence[i:i+x_dim] for i in range(
+                0, len(the_sequence), x_dim) if i+x_dim <= len(the_sequence)])
         elif self.observation_process == '3dto1d_w_noise':
             v = np.ones(the_sequence.shape[-1])
-            the_sequence = the_sequence @ v + np.random.normal(0, 5.7, the_sequence.shape[0])  # Add Gaussian noise
-            the_sequence = np.array([the_sequence[i:i+x_dim] for i in range(0, len(the_sequence), x_dim) if i+x_dim <= len(the_sequence)])
+            the_sequence = the_sequence @ v + \
+                np.random.normal(
+                    0, 5.7, the_sequence.shape[0])  # Add Gaussian noise
+            the_sequence = np.array([the_sequence[i:i+x_dim] for i in range(
+                0, len(the_sequence), x_dim) if i+x_dim <= len(the_sequence)])
 
         # Process the sequence based on the observation process
         the_sequence = self.apply_observation_process(the_sequence)
 
-
         # Generate sequences with or without overlap
         if self.overlap:
-            the_sequence = self.create_moving_window_sequences(the_sequence, self.x_dim)
-        else: # Remove the last sequence if it is not the correct length
-            the_sequence = np.array([the_sequence[i:i+x_dim] for i in range(0, len(the_sequence), x_dim) if i+x_dim <= len(the_sequence)])
-        
+            the_sequence = self.create_moving_window_sequences(
+                the_sequence, self.x_dim)
+        else:  # Remove the last sequence if it is not the correct length
+            the_sequence = np.array([the_sequence[i:i+x_dim] for i in range(
+                0, len(the_sequence), x_dim) if i+x_dim <= len(the_sequence)])
+
         self.seq = torch.from_numpy(the_sequence).float()
-        
+
         # Use entire sequence if seq_len is None
         if seq_len is None:
             self.seq_len = len(self.seq)
-            self.data_idx = [0]  # Only one index representing the start of the entire sequence
+            # Only one index representing the start of the entire sequence
+            self.data_idx = [0]
         else:
             # Determine indices for training and validation sets
             num_frames = self.seq.shape[0]
-            all_indices = data_utils.find_indices(num_frames, self.seq_len, num_frames // self.seq_len)
-            train_indices, validation_indices = self.split_dataset(all_indices, self.val_indices)
+            all_indices = data_utils.find_indices(
+                num_frames, self.seq_len, num_frames // self.seq_len)
+            train_indices, validation_indices = self.split_dataset(
+                all_indices, self.val_indices)
             # Select appropriate indices based on the split
-            if self.split == 'train': # for train and test
+            if self.split == 'train':  # for train and test
                 valid_frames = train_indices
-            else: # for validation
+            else:  # for validation
                 valid_frames = validation_indices
 
             self.data_idx = list(valid_frames)
@@ -145,16 +156,19 @@ class Lorenz63(Dataset):
             sequence = sequence @ v  # Vector product to convert 3D to 1D
         elif self.observation_process == '3dto1d_w_noise':
             v = np.ones(sequence.shape[-1])
-            sequence = sequence @ v + np.random.normal(0, 5.7, sequence.shape[0])  # Add Gaussian noise
+            sequence = sequence @ v + \
+                np.random.normal(
+                    0, 5.7, sequence.shape[0])  # Add Gaussian noise
         elif self.observation_process == 'only_x':
             # observe only x out of xyz dimensions
-            sequence = sequence[:,0]
+            sequence = sequence[:, 0]
         elif self.observation_process == 'only_x_w_noise':
-            sequence = sequence[:,0] + np.random.normal(0, 5.7, sequence.shape[0])
+            sequence = sequence[:, 0] + \
+                np.random.normal(0, 5.7, sequence.shape[0])
         else:
             raise ValueError('Observation process not recognized.')
         return sequence
-        
+
     @staticmethod
     def create_moving_window_sequences(sequence, window_size):
         """
@@ -174,13 +188,12 @@ class Lorenz63(Dataset):
 
     def __len__(self):
         return len(self.data_idx)
-    
+
     def __getitem__(self, index):
 
         start_frame = self.data_idx[index]
         end_frame = min(start_frame + self.seq_len, len(self.seq))
         return self.seq[start_frame:end_frame]
-
 
     def get_full_xyz(self, index):
         """
@@ -194,4 +207,5 @@ class Lorenz63(Dataset):
         """
         start_frame = self.data_idx[index]
         end_frame = min(start_frame + self.seq_len, len(self.full_sequence))
-        return self.full_sequence[start_frame:end_frame]  # Return the full (x, y, z) data
+        # Return the full (x, y, z) data
+        return self.full_sequence[start_frame:end_frame]
