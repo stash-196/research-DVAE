@@ -285,8 +285,6 @@ class LearningAlgorithm():
         auto_warm = self.auto_warm_start
         auto_warm_values = np.zeros((epochs,))
         kl_warm = 0
-        # stores the epoch where kl_warm is increased
-        kl_warm_epochs = np.zeros((epochs,))
         # stores the value of kl_warm at the epoch
         kl_warm_values = np.zeros((epochs,))
         best_state_epochs = np.zeros((epochs,))
@@ -446,7 +444,7 @@ class LearningAlgorithm():
                 delta_rolling_average = np.mean(delta_per_epoch)
 
             # Save the best model, update patience and best_val_loss
-            if delta_rolling_average < 1:
+            if delta < -1:
                 best_val_loss = val_loss[epoch]
                 cpt_patience = 0
                 best_state_dict = self.model.state_dict()
@@ -461,7 +459,6 @@ class LearningAlgorithm():
             # # Adjust KL warm-up
             # if epoch % early_stop_patience == 0 and kl_warm < 1 and epoch > 0:
             #     kl_warm += 0.2
-            #     kl_warm_epochs[epoch] = epoch
             #     kl_warm_values[epoch] = kl_warm
             #     logger.info('KL warm-up, anneal coeff: {}'.format(kl_warm))
             #     # reset early stop patience and best_val_loss
@@ -486,7 +483,6 @@ class LearningAlgorithm():
                         logger.info(
                             'Early stop patience achieved, but KL warm-up not completed')
                         kl_warm += 0.2
-                        kl_warm_epochs[epoch] = epoch
                         kl_warm_values[epoch] = kl_warm
                         logger.info(
                             'KL warm-up, anneal coeff: {}'.format(kl_warm))
