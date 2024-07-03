@@ -6,7 +6,7 @@ cd ~/workspace/research-DVAE
 BASE_DIR=~/workspace/research-DVAE/config/sinusoid/generated
 
 # Define a list of experiment names, each corresponding to a subdirectory under BASE_DIR
-declare -a experiments=("h27_ep1000_esp10_SampMeths_AllRNNs_0")
+declare -a experiments=("delta_h27_ep1000_esp10_SampMeths_RNNs_1")
 # 1" "compare_alphas_&_sampling_methods_2" "compare_alphas_&_sampling_methods_3" "compare_alphas_&_sampling_methods_4" "compare_alphas_&_sampling_methods_5") # Modify this line to include your actual experiment names
 
 # Get the current date in YYYY-MM-DD format
@@ -70,7 +70,7 @@ ml singularity
 OUTPUT_EXPERIMENT_DIR="${OUTPUT_TODAY_DIR}/${experiment}"
 echo "[slurm] OUTPUT_EXPERIMENT_DIR: \$OUTPUT_EXPERIMENT_DIR"
 mkdir -p "\$OUTPUT_EXPERIMENT_DIR"
-cp "${CONFIG_DIR}/params_being_compared.txt" "\$OUTPUT_EXPERIMENT_DIR/"
+cp "${CONFIG_DIR}/params_being_compared.json" "\$OUTPUT_EXPERIMENT_DIR/"
 
 
 cd ~/workspace/research-DVAE

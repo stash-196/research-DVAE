@@ -48,7 +48,7 @@ def get_configurations_for_model(params):
 
 if __name__ == "__main__":
 
-    experiment_name = "h27_ep2000_SampMeths_RNNs_0"
+    experiment_name = "d-1_h27_ep2000_esp50_SampMeths_RNNs_1"
 
     models = [
         "RNN",
@@ -70,12 +70,14 @@ if __name__ == "__main__":
     # Training
     lr = [0.001]
     alpha_lr = [0.01]
-    epochs = [3000]
-    early_stop_patience = [100]
-    save_frequency = [100]
+    epochs = [2000]
+    early_stop_patience = [50]
+    save_frequency = [50]
     gradient_clip = [1]
     optimize_alphas = [True]
-    sampling_method = ['ss', 'ptf', 'mtf']
+    sampling_method = ['ss'
+                    #    , 'ptf', 'mtf'
+                       ]
     sampling_ratio = [0.8]
 
     # DataFrame
