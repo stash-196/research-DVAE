@@ -65,8 +65,7 @@ class LearningAlgorithm():
             'Training', 'kl_warm_limit', fallback=1.)
         self.auto_warm_start = self.cfg.getfloat(
             'Training', 'auto_warm_start', fallback=0.)
-        self.auto_warm_limit = self.cfg.getfloat(
-            'Training', 'auto_warm_limit', fallback=1e-4)
+        self.auto_warm_limit = self.sampling_ratio
 
         # Get host name and date
         self.hostname = socket.gethostname()
@@ -292,7 +291,11 @@ class LearningAlgorithm():
 
         auto_warm = self.auto_warm_start
         auto_warm_values = np.zeros((epochs,))
-        kl_warm = 0
+        # if model is vrnn or mt_vrnn, then kl_warm is used
+        if self.model_name in ['VRNN', 'MT_VRNN']:
+            kl_warm = 0
+        else:
+            kl_warm = 1
         # stores the value of kl_warm at the epoch
         kl_warm_values = np.zeros((epochs,))
         best_state_epochs = np.zeros((epochs,))
@@ -312,7 +315,7 @@ class LearningAlgorithm():
 
             if self.sampling_method == 'ss':
                 model_mode_selector = create_autonomous_mode_selector(
-                    self.sequence_len, mode='bernoulli_sampling', autonomous_ratio=kl_warm*self.sampling_ratio)
+                    self.sequence_len, mode='bernoulli_sampling', autonomous_ratio=auto_warm)
             elif self.sampling_method == 'ptf':
                 model_mode_selector = create_autonomous_mode_selector(
                     self.sequence_len, mode='bernoulli_sampling', autonomous_ratio=self.sampling_ratio)
@@ -484,7 +487,7 @@ class LearningAlgorithm():
 
             # Stop traning if early-stop triggers
             if cpt_patience > early_stop_patience:
-                if kl_warm >= 1.0 and auto_warm >= self.auto_warm_limit:
+                if kl_warm >= 1.0 and auto_warm >= self.auto_warm_limit and current_sequence_len >= self.sequence_len:
                     logger.info('Early stop patience achieved')
                     break
                 else:
@@ -499,7 +502,7 @@ class LearningAlgorithm():
                         auto_warm_values[epoch] = auto_warm
                         logger.info(
                             'Autonomous warm-up, anneal coeff: {}'.format(auto_warm))
-                    if kl_warm < 1.0:
+                    elif kl_warm < 1.0:
                         logger.info(
                             'Early stop patience achieved, but KL warm-up not completed')
                         kl_warm += 0.2
@@ -507,12 +510,12 @@ class LearningAlgorithm():
                         logger.info(
                             'KL warm-up, anneal coeff: {}'.format(kl_warm))
 
-                    if current_sequence_len < self.sequence_len:
+                    elif current_sequence_len < self.sequence_len:
                         logger.info(
                             'Early stop patience achieved, but sequence length not completed')
                         # Example logic to increase sequence length
-                        current_sequence_len = initial_sequence_len + \
-                            int(0.2*self.sequence_len)
+                        current_sequence_len = min(
+                            self.sequence_len, current_sequence_len + int(0.2*self.sequence_len))
                         train_dataloader.dataset.update_sequence_length(
                             current_sequence_len)
                         val_dataloader.dataset.update_sequence_length(
@@ -523,6 +526,15 @@ class LearningAlgorithm():
                             val_dataloader.dataset, batch_size=val_dataloader.batch_size, shuffle=self.shuffle, num_workers=val_dataloader.num_workers, pin_memory=True)
                         logger.info(
                             'Sequence length increased to: {}'.format(current_sequence_len))
+                        
+                        if self.model_name in ['VRNN', 'MT_VRNN']:
+                            kl_warm = 0
+                        auto_warm = self.auto_warm_start
+                        logger.info('Resetting warm-up values')
+                        
+                    else:
+                        logger.info('Unknown early stop condition')
+
 
             cpt_patience_epochs[epoch] = cpt_patience
             best_state_epochs[epoch] = cur_best_epoch
