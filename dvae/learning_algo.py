@@ -452,7 +452,7 @@ class LearningAlgorithm():
                 delta_rolling_average = np.mean(delta_per_epoch)
 
             # Save the best model, update patience and best_val_loss
-            if delta < -100:
+            if delta < -1e-2:
                 cpt_patience = 0
                 best_val_loss = val_loss[epoch]
                 best_state_dict = self.model.state_dict()
@@ -497,6 +497,8 @@ class LearningAlgorithm():
                         auto_warm = min(self.auto_warm_limit,
                                         auto_warm + 0.2*self.auto_warm_limit)
                         auto_warm_values[epoch] = auto_warm
+                        logger.info(
+                            'Autonomous warm-up, anneal coeff: {}'.format(auto_warm))
                     if kl_warm < 1.0:
                         logger.info(
                             'Early stop patience achieved, but KL warm-up not completed')
@@ -506,6 +508,8 @@ class LearningAlgorithm():
                             'KL warm-up, anneal coeff: {}'.format(kl_warm))
 
                     if current_sequence_len < self.sequence_len:
+                        logger.info(
+                            'Early stop patience achieved, but sequence length not completed')
                         # Example logic to increase sequence length
                         current_sequence_len = initial_sequence_len + \
                             int(0.2*self.sequence_len)
@@ -517,6 +521,8 @@ class LearningAlgorithm():
                             train_dataloader.dataset, batch_size=train_dataloader.batch_size, shuffle=self.shuffle, num_workers=train_dataloader.num_workers, pin_memory=True)
                         val_dataloader = torch.utils.data.DataLoader(
                             val_dataloader.dataset, batch_size=val_dataloader.batch_size, shuffle=self.shuffle, num_workers=val_dataloader.num_workers, pin_memory=True)
+                        logger.info(
+                            'Sequence length increased to: {}'.format(current_sequence_len))
 
             cpt_patience_epochs[epoch] = cpt_patience
             best_state_epochs[epoch] = cur_best_epoch
