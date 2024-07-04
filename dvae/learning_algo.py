@@ -290,6 +290,10 @@ class LearningAlgorithm():
                 sigmas_history[:, 0] = sigmoid_reverse(alphas_init)
 
         auto_warm = self.auto_warm_start
+        if self.sampling_method == 'ss':
+            auto_warm = self.auto_warm_start
+        else:
+            auto_warm = self.auto_warm_limit
         auto_warm_values = np.zeros((epochs,))
         # if model is vrnn or mt_vrnn, then kl_warm is used
         if self.model_name in ['VRNN', 'MT_VRNN']:
@@ -301,9 +305,11 @@ class LearningAlgorithm():
         best_state_epochs = np.zeros((epochs,))
         cpt_patience_epochs = np.zeros((epochs,))
         delta_per_epoch = np.zeros((epochs,))
+        sequence_len_values = np.zeros((epochs,))
         delta_rolling_window_size = 6
         kl_delta_threshold = -1e-4
         auto_delta_threshold = 1e-4
+        delta_threshold = 1e-4
         warm_up_happened = False
 
         self.model.to(self.device)
@@ -455,7 +461,7 @@ class LearningAlgorithm():
                 delta_rolling_average = np.mean(delta_per_epoch)
 
             # Save the best model, update patience and best_val_loss
-            if delta < -1e-2:
+            if delta < -delta_threshold:
                 cpt_patience = 0
                 best_val_loss = val_loss[epoch]
                 best_state_dict = self.model.state_dict()
@@ -465,26 +471,13 @@ class LearningAlgorithm():
                 cpt_patience += 1
                 print(
                     f'[Learning Algo][epoch{epoch}] Updated cpt_patience: {cpt_patience}')
-                logger.info('Updated cpt_patience: {}, delta: '.format(
+                logger.info('Updated cpt_patience: {}, delta: {}'.format(
                     cpt_patience, delta))
 
-            # # Adjust KL warm-up
-            # if epoch % early_stop_patience == 0 and kl_warm < 1 and epoch > 0:
-            #     kl_warm += 0.2
-            #     kl_warm_values[epoch] = kl_warm
-            #     logger.info('KL warm-up, anneal coeff: {}'.format(kl_warm))
-            #     # reset early stop patience and best_val_loss
-            #     best_val_loss = val_loss[epoch]
-            #     cpt_patience = 0
-            #     best_state_dict = self.model.state_dict()
-            #     best_optim_dict = optimizer.state_dict()
-            #     cur_best_epoch = epoch
-
-            # # Adjust autonomous mode baseed on convergence
-            # if epoch > 0 and delta_per_epoch[-1] > 0 and auto_warm < self.auto_warm_limit:
-            #     auto_warm = min(self.auto_warm_limit, auto_warm + 0.2)
-            #     auto_warm_values[epoch] = auto_warm
-
+            # Store the warm-up values
+            kl_warm_values[epoch] = kl_warm
+            auto_warm_values[epoch] = auto_warm
+            sequence_len_values[epoch] = current_sequence_len
             # Stop traning if early-stop triggers
             if cpt_patience > early_stop_patience:
                 if kl_warm >= 1.0 and auto_warm >= self.auto_warm_limit and current_sequence_len >= self.sequence_len:
@@ -499,14 +492,12 @@ class LearningAlgorithm():
                             'Early stop patience achieved, but autonomous warm-up not completed')
                         auto_warm = min(self.auto_warm_limit,
                                         auto_warm + 0.2*self.auto_warm_limit)
-                        auto_warm_values[epoch] = auto_warm
                         logger.info(
                             'Autonomous warm-up, anneal coeff: {}'.format(auto_warm))
                     elif kl_warm < 1.0:
                         logger.info(
                             'Early stop patience achieved, but KL warm-up not completed')
                         kl_warm += 0.2
-                        kl_warm_values[epoch] = kl_warm
                         logger.info(
                             'KL warm-up, anneal coeff: {}'.format(kl_warm))
 
@@ -526,15 +517,14 @@ class LearningAlgorithm():
                             val_dataloader.dataset, batch_size=val_dataloader.batch_size, shuffle=self.shuffle, num_workers=val_dataloader.num_workers, pin_memory=True)
                         logger.info(
                             'Sequence length increased to: {}'.format(current_sequence_len))
-                        
+
                         if self.model_name in ['VRNN', 'MT_VRNN']:
                             kl_warm = 0
                         auto_warm = self.auto_warm_start
-                        logger.info('Resetting warm-up values')
-                        
+                        logger.info('Resetting kl & auto warm-up values')
+
                     else:
                         logger.info('Unknown early stop condition')
-
 
             cpt_patience_epochs[epoch] = cpt_patience
             best_state_epochs[epoch] = cur_best_epoch
@@ -572,6 +562,10 @@ class LearningAlgorithm():
                     np.diff(auto_warm_values) != 0)[0] + 1
                 auto_warm_epochs = np.insert(
                     auto_warm_epochs, 0, 0)  # Prepend 0
+                sequence_len_epochs = np.where(
+                    np.diff(sequence_len_values) != initial_sequence_len)[0] + 1
+                sequence_len_epochs = np.insert(
+                    sequence_len_epochs, 0, 0)
 
                 visualize_total_loss(train_loss[:epoch+1], val_loss[:epoch+1], kl_warm_epochs,
                                      auto_warm_epochs, self.model_name, save_figures_dir, tag)
@@ -579,8 +573,11 @@ class LearningAlgorithm():
                                      kl_warm_epochs, auto_warm_epochs, self.model_name, save_figures_dir, tag)
                 visualize_kld_loss(train_kl[:epoch+1], val_kl[:epoch+1], kl_warm_epochs,
                                    auto_warm_epochs, self.model_name, save_figures_dir, tag)
-                visualize_combined_metrics(delta_per_epoch[:epoch+1], kl_warm_epochs, auto_warm_epochs, kl_warm_values[:epoch+1],
-                                           auto_warm_values[:epoch+1], cpt_patience_epochs[:epoch+1], best_state_epochs[:epoch+1], self.model_name, save_figures_dir, tag)
+                visualize_combined_metrics(delta_per_epoch[:epoch+1], delta_threshold, kl_warm_epochs, kl_warm_values[:epoch+1],
+                                           auto_warm_epochs, auto_warm_values[:epoch+1],
+                                           sequence_len_epochs, sequence_len_values[:epoch+1],
+                                           cpt_patience_epochs[:epoch+1],
+                                           best_state_epochs[:epoch+1], self.model_name, save_figures_dir, tag)
 
                 if self.optimize_alphas:
                     visualize_sigma_history(
