@@ -79,9 +79,10 @@ def visualize_combined_metrics(delta_per_epoch, delta_threshold,
         delta_per_epoch >= delta_threshold, delta_per_epoch, np.nan)
     delta_below_threshold = np.where(
         delta_per_epoch < delta_threshold, delta_per_epoch, np.nan)
-    axs[0].plot(delta_below_threshold, label='delta < threshold', color='blue')
+    axs[0].plot(delta_below_threshold,
+                label=f'delta < {delta_threshold}', color='blue')
     axs[0].plot(delta_above_threshold,
-                label='delta >= threshold', color='orange')
+                label=f'delta >= {delta_threshold}', color='orange')
     axs[0].legend(fontsize=16, title='delta',
                   title_fontsize=20, loc='upper left')
     axs[0].set_xlabel('epochs', fontdict={'size': 16})
