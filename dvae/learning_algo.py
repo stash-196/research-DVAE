@@ -571,13 +571,24 @@ class LearningAlgorithm():
                 visualize_total_loss(train_loss[:epoch+1], val_loss[:epoch+1],
                                      kl_warm_epochs, auto_warm_epochs, sequence_len_epochs,
                                      self.model_name, self.sampling_method, save_figures_dir, tag)
-                visualize_recon_loss(train_recon[:epoch+1], val_recon[:epoch+1],
+                visualize_total_loss(train_loss[:epoch+1], val_loss[:epoch+1],
                                      kl_warm_epochs, auto_warm_epochs, sequence_len_epochs,
-                                     self.model_name, self.sampling_method, save_figures_dir, tag)
+                                     self.model_name, self.sampling_method, save_figures_dir, tag, log_scale=True)
+
                 if self.model_name in ['VRNN', 'MT_VRNN']:
+                    visualize_recon_loss(train_recon[:epoch+1], val_recon[:epoch+1],
+                                         kl_warm_epochs, auto_warm_epochs, sequence_len_epochs,
+                                         self.model_name, self.sampling_method, save_figures_dir, tag)
+                    visualize_recon_loss(train_recon[:epoch+1], val_recon[:epoch+1],
+                                         kl_warm_epochs, auto_warm_epochs, sequence_len_epochs,
+                                         self.model_name, self.sampling_method, save_figures_dir, tag, log_scale=True)
                     visualize_kld_loss(train_kl[:epoch+1], val_kl[:epoch+1],
                                        kl_warm_epochs, auto_warm_epochs, sequence_len_epochs,
                                        self.model_name, self.sampling_method, save_figures_dir, tag)
+                    visualize_kld_loss(train_kl[:epoch+1], val_kl[:epoch+1],
+                                       kl_warm_epochs, auto_warm_epochs, sequence_len_epochs,
+                                       self.model_name, self.sampling_method, save_figures_dir, tag, log_scale=True)
+
                 visualize_combined_metrics(delta_per_epoch[:epoch+1], delta_threshold, kl_warm_epochs, kl_warm_values[:epoch+1],
                                            auto_warm_epochs, auto_warm_values[:epoch+1],
                                            sequence_len_epochs, sequence_len_values[:epoch+1],
