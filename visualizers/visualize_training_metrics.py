@@ -3,62 +3,80 @@ import os
 import numpy as np
 
 
-def visualize_total_loss(train_loss, val_loss, kl_warm_epochs, auto_warm_epochs, model_name, save_figures_dir, tag):
+def visualize_total_loss(train_loss, val_loss, kl_warm_epochs, auto_warm_epochs, sequence_len_epochs, model_name, sampling_method, save_figures_dir, tag, log_scale=False):
     plt.clf()
     fig = plt.figure(figsize=(8, 6))
     plt.rcParams['font.size'] = 12
     if model_name in ['VRNN', 'MT_VRNN']:
         for kl_warm_epoch in kl_warm_epochs:
             plt.axvline(x=kl_warm_epoch, color='c', linestyle='--')
-    for auto_warm_epoch in auto_warm_epochs:
-        plt.axvline(x=auto_warm_epoch, color='r', linestyle=':')
+    if sampling_method == 'ss':
+        for auto_warm_epoch in auto_warm_epochs:
+            plt.axvline(x=auto_warm_epoch, color='r', linestyle=':')
+    for sequence_len_epoch in sequence_len_epochs:
+        plt.axvline(x=sequence_len_epoch, color='m', linestyle='-.')
     plt.plot(train_loss, label='training loss')
     plt.plot(val_loss, label='validation loss')
     plt.legend(
         fontsize=16, title=f'{model_name}: Total Loss', title_fontsize=20)
     plt.xlabel('epochs', fontdict={'size': 16})
     plt.ylabel('loss', fontdict={'size': 16})
+    if log_scale:
+        plt.yscale('log')
+        tag += '_log'
     fig_file = os.path.join(save_figures_dir, f'vis_training_loss_{tag}.png')
     plt.savefig(fig_file)
     plt.close(fig)
 
 
-def visualize_recon_loss(train_recon, val_recon, kl_warm_epochs, auto_warm_epochs, model_name, save_figures_dir, tag):
+def visualize_recon_loss(train_recon, val_recon, kl_warm_epochs, auto_warm_epochs, sequence_len_epochs, model_name, sampling_method, save_figures_dir, tag, log_scale=False):
     plt.clf()
     fig = plt.figure(figsize=(8, 6))
     plt.rcParams['font.size'] = 12
     if model_name in ['VRNN', 'MT_VRNN']:
         for kl_warm_epoch in kl_warm_epochs:
             plt.axvline(x=kl_warm_epoch, color='c', linestyle='--')
-    for auto_warm_epoch in auto_warm_epochs:
-        plt.axvline(x=auto_warm_epoch, color='r', linestyle=':')
+    if sampling_method == 'ss':
+        for auto_warm_epoch in auto_warm_epochs:
+            plt.axvline(x=auto_warm_epoch, color='r', linestyle=':')
+    for sequence_len_epoch in sequence_len_epochs:
+        plt.axvline(x=sequence_len_epoch, color='m', linestyle='-.')
     plt.plot(train_recon, label='Training')
     plt.plot(val_recon, label='Validation')
     plt.legend(
         fontsize=16, title=f'{model_name}: Recon. Loss', title_fontsize=20)
     plt.xlabel('epochs', fontdict={'size': 16})
     plt.ylabel('loss', fontdict={'size': 16})
+    if log_scale:
+        plt.yscale('log')
+        tag += '_log'
     fig_file = os.path.join(
         save_figures_dir, f'vis_training_loss_recon_{tag}.png')
     plt.savefig(fig_file)
     plt.close(fig)
 
 
-def visualize_kld_loss(train_kl, val_kl, kl_warm_epochs, auto_warm_epochs, model_name, save_figures_dir, tag):
+def visualize_kld_loss(train_kl, val_kl, kl_warm_epochs, auto_warm_epochs, sequence_len_epochs, model_name, sampling_method, save_figures_dir, tag, log_scale=False):
     plt.clf()
     fig = plt.figure(figsize=(8, 6))
     plt.rcParams['font.size'] = 12
     if model_name in ['VRNN', 'MT_VRNN']:
         for kl_warm_epoch in kl_warm_epochs:
             plt.axvline(x=kl_warm_epoch, color='c', linestyle='--')
-    for auto_warm_epoch in auto_warm_epochs:
-        plt.axvline(x=auto_warm_epoch, color='r', linestyle=':')
+    if sampling_method == 'ss':
+        for auto_warm_epoch in auto_warm_epochs:
+            plt.axvline(x=auto_warm_epoch, color='r', linestyle=':')
+    for sequence_len_epoch in sequence_len_epochs:
+        plt.axvline(x=sequence_len_epoch, color='m', linestyle='-.')
     plt.plot(train_kl, label='Training')
     plt.plot(val_kl, label='Validation')
     plt.legend(
         fontsize=16, title=f'{model_name}: KL Div. Loss', title_fontsize=20)
     plt.xlabel('epochs', fontdict={'size': 16})
     plt.ylabel('loss', fontdict={'size': 16})
+    if log_scale:
+        plt.yscale('log')
+        tag += '_log'
     fig_file = os.path.join(
         save_figures_dir, f'vis_training_loss_KLD_{tag}.png')
     plt.savefig(fig_file)

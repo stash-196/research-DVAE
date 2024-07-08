@@ -305,7 +305,7 @@ class LearningAlgorithm():
         best_state_epochs = np.zeros((epochs,))
         cpt_patience_epochs = np.zeros((epochs,))
         delta_per_epoch = np.zeros((epochs,))
-        sequence_len_values = np.zeros((epochs,))
+        sequence_len_values = np.full((epochs,), initial_sequence_len)
         delta_rolling_window_size = 6
         kl_delta_threshold = -1e-4
         auto_delta_threshold = 1e-4
@@ -486,18 +486,19 @@ class LearningAlgorithm():
                 else:
                     cpt_patience = 0
                     warm_up_happened = True
+                    warm_up_value = 0.1
 
                     if auto_warm < self.auto_warm_limit:
                         logger.info(
                             'Early stop patience achieved, but autonomous warm-up not completed')
                         auto_warm = min(self.auto_warm_limit,
-                                        auto_warm + 0.2*self.auto_warm_limit)
+                                        auto_warm + warm_up_value*self.auto_warm_limit)
                         logger.info(
                             'Autonomous warm-up, anneal coeff: {}'.format(auto_warm))
                     elif kl_warm < 1.0:
                         logger.info(
                             'Early stop patience achieved, but KL warm-up not completed')
-                        kl_warm += 0.2
+                        kl_warm += warm_up_value
                         logger.info(
                             'KL warm-up, anneal coeff: {}'.format(kl_warm))
 
@@ -506,7 +507,7 @@ class LearningAlgorithm():
                             'Early stop patience achieved, but sequence length not completed')
                         # Example logic to increase sequence length
                         current_sequence_len = min(
-                            self.sequence_len, current_sequence_len + int(0.2*self.sequence_len))
+                            self.sequence_len, current_sequence_len + int(warm_up_value*self.sequence_len))
                         train_dataloader.dataset.update_sequence_length(
                             current_sequence_len)
                         val_dataloader.dataset.update_sequence_length(
@@ -563,16 +564,20 @@ class LearningAlgorithm():
                 auto_warm_epochs = np.insert(
                     auto_warm_epochs, 0, 0)  # Prepend 0
                 sequence_len_epochs = np.where(
-                    np.diff(sequence_len_values) != initial_sequence_len)[0] + 1
+                    np.diff(sequence_len_values) != 0)[0] + 1
                 sequence_len_epochs = np.insert(
                     sequence_len_epochs, 0, 0)
 
-                visualize_total_loss(train_loss[:epoch+1], val_loss[:epoch+1], kl_warm_epochs,
-                                     auto_warm_epochs, self.model_name, save_figures_dir, tag)
+                visualize_total_loss(train_loss[:epoch+1], val_loss[:epoch+1],
+                                     kl_warm_epochs, auto_warm_epochs, sequence_len_epochs,
+                                     self.model_name, self.sampling_method, save_figures_dir, tag)
                 visualize_recon_loss(train_recon[:epoch+1], val_recon[:epoch+1],
-                                     kl_warm_epochs, auto_warm_epochs, self.model_name, save_figures_dir, tag)
-                visualize_kld_loss(train_kl[:epoch+1], val_kl[:epoch+1], kl_warm_epochs,
-                                   auto_warm_epochs, self.model_name, save_figures_dir, tag)
+                                     kl_warm_epochs, auto_warm_epochs, sequence_len_epochs,
+                                     self.model_name, self.sampling_method, save_figures_dir, tag)
+                if self.model_name in ['VRNN', 'MT_VRNN']:
+                    visualize_kld_loss(train_kl[:epoch+1], val_kl[:epoch+1],
+                                       kl_warm_epochs, auto_warm_epochs, sequence_len_epochs,
+                                       self.model_name, self.sampling_method, save_figures_dir, tag)
                 visualize_combined_metrics(delta_per_epoch[:epoch+1], delta_threshold, kl_warm_epochs, kl_warm_values[:epoch+1],
                                            auto_warm_epochs, auto_warm_values[:epoch+1],
                                            sequence_len_epochs, sequence_len_values[:epoch+1],
