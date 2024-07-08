@@ -122,7 +122,8 @@ def visualize_combined_metrics(delta_per_epoch, delta_threshold,
     axs[2].set_xlabel('epochs', fontdict={'size': 16})
     axs[2].set_ylabel('sequence_len', fontdict={'size': 16})
 
-    axs[3].plot(cpt_patience_epochs, label='cpt_patience')
+    axs[3].step(range(len(cpt_patience_epochs)),
+                cpt_patience_epochs, label='cpt_patience')
     axs[3].legend(fontsize=16, title='cpt_patience', title_fontsize=20)
     axs[3].set_xlabel('epochs', fontdict={'size': 16})
     axs[3].set_ylabel('cpt_patience', fontdict={'size': 16})
