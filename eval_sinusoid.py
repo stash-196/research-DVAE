@@ -288,7 +288,9 @@ if __name__ == '__main__':
             half_point_long = seq_len_long // 2
             # Plot the spectral analysis
             autonomous_mode_selector_long = create_autonomous_mode_selector(
-                seq_len_long, 'half_half').astype(bool)
+                seq_len_long, mode='even_bursts', autonomous_ratio=0.5).astype(bool)
+            # autonomous_mode_selector_long = create_autonomous_mode_selector(
+            #     seq_len_long, 'half_half').astype(bool)
 
             # turn input into tensor and send to GPU if needed
             batch_data_long_tensor = torch.tensor(
@@ -344,9 +346,9 @@ if __name__ == '__main__':
             time_delay = 10
             delay_emedding_dimensions = 3
             if VISUALIZE_3D:
-                visualize_delay_embedding(observation=batch_data_long[:, 0, :].reshape(
+                embedded_true_x = visualize_delay_embedding(observation=batch_data_long[:, 0, :].reshape(
                     -1), delay=time_delay, dimensions=delay_emedding_dimensions, save_dir=save_fig_dir, variable_name='true_signal_inference_mode', base_color='Blues')
-                visualize_delay_embedding(observation=recon_data_long[~autonomous_mode_selector_long, 0, :].reshape(
+                embedded_ = visualize_delay_embedding(observation=recon_data_long[~autonomous_mode_selector_long, 0, :].reshape(
                     -1), delay=time_delay, dimensions=delay_emedding_dimensions, save_dir=save_fig_dir, variable_name='teacher-forced_reconstruction_inference_mode', base_color='Greens')
                 visualize_delay_embedding(observation=recon_data_long[autonomous_mode_selector_long, 0, :].reshape(
                     -1), delay=time_delay, dimensions=delay_emedding_dimensions, save_dir=save_fig_dir, variable_name='autonomous_reconstruction_inference_mode', base_color='Reds')
@@ -373,7 +375,8 @@ if __name__ == '__main__':
             #
 
             # visualize the hidden states 3d in different techniques
-            if VISUALIZE_3D:
+            # if VISUALIZE_3D:
+            if False:
                 visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_fig_dir, variable_name='hidden', condition_names=[
                                           f'teacher-forced', f'autonomous'], base_colors=['Greens', 'Reds'], technique='nmf')
                 visualize_embedding_space([teacherforced_states, autonomous_states], save_dir=save_fig_dir, variable_name='hidden', condition_names=[

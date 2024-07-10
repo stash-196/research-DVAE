@@ -317,7 +317,8 @@ def reduce_dimensions(embeddings, technique='pca', n_components=3):
     elif technique == 'tsne':
         reducer = TSNE(n_components=n_components, n_iter=300)
     elif technique == 'lle':
-        reducer = LocallyLinearEmbedding(n_components=n_components)
+        reducer = LocallyLinearEmbedding(
+            n_components=n_components, eigen_solver='dense')
     elif technique == 'umap':
         reducer = UMAP(n_components=n_components)
     elif technique == 'ica':
@@ -370,7 +371,8 @@ def visualize_embedding_space(states_list, save_dir, variable_name, condition_na
 
     for i, (states, condition_name, base_color) in enumerate(zip(states_list, condition_names, base_colors)):
         ax = fig.add_subplot(num_plots, 1, i + 1, projection='3d')
-        reduced_embeddings = reduce_dimensions(states, technique=technique)
+        reduced_embeddings = reduce_dimensions(
+            states.cpu(), technique=technique)
         zs = reduced_embeddings[:, 2]
         cmap = plt.get_cmap(base_color)
         z_min, z_max = zs.min(), zs.max()
@@ -509,6 +511,8 @@ def visualize_delay_embedding(observation, delay, dimensions, save_dir, variable
     print(f"Animation saved in {end_time - start_time:.2f} seconds")
 
     plt.close()
+    # Returning the embedded data for further analysis
+    return embedded
 
 
 def visualize_alpha_history_and_spectrums(sigmas_history, power_spectrum_lst, spectrum_color_lst, spectrum_name_lst, frequencies, save_dir, dt, kl_warm_epochs=None, explain='', true_alphas=[]):

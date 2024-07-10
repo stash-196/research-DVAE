@@ -328,6 +328,9 @@ class LearningAlgorithm():
             elif self.sampling_method == 'mtf':
                 model_mode_selector = create_autonomous_mode_selector(
                     self.sequence_len, mode='mix_sampling', autonomous_ratio=self.sampling_ratio)
+            elif self.sampling_method == 'even_bursts':
+                model_mode_selector = create_autonomous_mode_selector(
+                    self.sequence_len, mode='even_bursts', autonomous_ratio=self.sampling_ratio * current_sequence_len / 10)
             else:  # error
                 logger.error('Unknown sampling method')
                 break
@@ -604,8 +607,14 @@ class LearningAlgorithm():
                 visualize_combined_parameters(
                     self.model, explain='epoch_{}'.format(epoch), save_path=save_figures_dir)
 
-                visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector,
-                                                      save_path=save_figures_dir, explain='epoch:{}_klwarm:{}'.format(epoch, kl_warm), inference_mode=True)
+                visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector, save_path=save_figures_dir,
+                                                      explain=f'epoch:{epoch}_klwarm{kl_warm}_auto_warm{auto_warm}_window{current_sequence_len}',
+                                                      inference_mode=True)
+                model_mode_selector_flip_test = create_autonomous_mode_selector(
+                    self.sequence_len, mode='even_bursts', autonomous_ratio=0.1)
+                visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector_flip_test, save_path=save_figures_dir,
+                                                      explain=f'epoch:{epoch}_klwarm{kl_warm}_auto_warm{auto_warm}_window{current_sequence_len}',
+                                                      inference_mode=True)
 
                 if self.optimize_alphas:
                     alphas = 1 / (1 + np.exp(-sigmas_history[:, epoch]))
