@@ -114,8 +114,13 @@ def visualize_sequences(true_data, recon_data, mode_selector, save_dir, explain=
     plt.ylabel('Value')
     plt.grid(True)
 
-    fig_file = os.path.join(save_dir, f'vis_pred_true_series_{explain}.png')
     plt.legend(loc='upper right')
+    # make directory if save_dir doesn't exist
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    fig_file = os.path.join(save_dir, f'vis_pred_true_series_{explain}.png')
+
     plt.savefig(fig_file)
     plt.close()
 

@@ -607,13 +607,23 @@ class LearningAlgorithm():
                 visualize_combined_parameters(
                     self.model, explain='epoch_{}'.format(epoch), save_path=save_figures_dir)
 
-                visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector, save_path=save_figures_dir,
-                                                      explain=f'epoch:{epoch}_klwarm{kl_warm}_auto_warm{auto_warm}_window{current_sequence_len}',
+                visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector,
+                                                      save_path=os.path.join(save_figures_dir, 'training_mode'),
+                                                      explain=f'training_epoch:{epoch}_klwarm{kl_warm}_auto_warm{auto_warm}_window{current_sequence_len}',
                                                       inference_mode=True)
                 model_mode_selector_flip_test = create_autonomous_mode_selector(
-                    self.sequence_len, mode='even_bursts', autonomous_ratio=0.1)
-                visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector_flip_test, save_path=save_figures_dir,
-                                                      explain=f'epoch:{epoch}_klwarm{kl_warm}_auto_warm{auto_warm}_window{current_sequence_len}',
+                    current_sequence_len, mode='even_bursts', autonomous_ratio=0.1)
+                
+                visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector_flip_test, 
+                                                      save_path=os.path.join(save_figures_dir, 'even_bursts'),
+                                                      explain=f'even_bursts_epoch:{epoch}_klwarm{kl_warm}_auto_warm{auto_warm}_window{current_sequence_len}',
+                                                      inference_mode=True)
+                
+                model_mode_selector_flip_test = create_autonomous_mode_selector(
+                    current_sequence_len, mode='even_bursts', autonomous_ratio=0.5)
+                visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector_flip_test, 
+                                                      save_path=os.path.join(save_figures_dir, 'half_half'),
+                                                      explain=f'half_half_epoch:{epoch}_klwarm{kl_warm}_auto_warm{auto_warm}_window{current_sequence_len}',
                                                       inference_mode=True)
 
                 if self.optimize_alphas:
