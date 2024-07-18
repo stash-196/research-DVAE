@@ -374,14 +374,36 @@ class LearningAlgorithm():
                 optimizer.zero_grad()
                 loss_tot_avg.backward()
 
+                # temporarily store detatched parameters
+                current_named_params_grad = [(name, param.grad.detach().cpu().numpy())
+                                             for name, param in self.model.named_parameters()]
+                current_named_params = [(name, param.detach().cpu().numpy())
+                                        for name, param in self.model.named_parameters()]
+
+                clipped_named_params_grad = None
                 # Gradient clipping
                 # check if model has model.type_rnn, if True, and if type_rnn=='RNN', then clip the gradient
                 if hasattr(self.model, 'type_rnn'):
-                    if self.model.type_rnn == 'RNN':
+                    if self.model.type_rnn in ['RNN', 'VRNN', 'MT_RNN', 'MT_VRNN']:
                         self.gradient_clip = self.cfg.getfloat(
                             'Training', 'gradient_clip')
+                        logger.info(
+                            f'[Learning Algo][epoch{epoch}] Gradient clipping: {self.gradient_clip}')
                         torch.nn.utils.clip_grad_norm_(
                             self.model.parameters(), self.gradient_clip)
+
+                        # store the clipped gradients
+                        clipped_named_params_grad = [(name, param.grad.detach().cpu().numpy())
+                                                     for name, param in self.model.named_parameters()]
+                        # calculate and print the norm of the clipped gradient
+                        parameter_norm = get_norm_from_named_params(
+                            current_named_params)
+                        grad_norm = get_norm_from_named_params(
+                            current_named_params_grad)
+                        clipped_grad_norm = get_norm_from_named_params(
+                            clipped_named_params_grad)
+                        logger.info(
+                            f'[Learning Algo][epoch{epoch}] Gradient norm clipped from {grad_norm} to {clipped_grad_norm}, parameter norm: {parameter_norm}')
 
                 optimizer.step()
                 # profiler.step()
@@ -604,25 +626,53 @@ class LearningAlgorithm():
                     visualize_alpha_history(
                         sigmas_history[:, :epoch+1], kl_warm_epochs, auto_warm_epochs, self.model_name, save_figures_dir, tag)
 
+                # Visualize model parameters
                 visualize_combined_parameters(
-                    self.model, explain='epoch_{}'.format(epoch), save_path=save_figures_dir)
+                    name_values=current_named_params,
+                    explain='epoch_{}'.format(epoch),
+                    save_path=os.path.join(save_figures_dir, 'params_and_grads', 'model_parameters'))
+                visualize_combined_parameters(
+                    name_values=current_named_params,
+                    explain='epoch_{}'.format(epoch),
+                    save_path=os.path.join(save_figures_dir, 'params_and_grads', 'model_parameters'), matrix_or_line='line')
+                # Visualize gradients
+                visualize_combined_parameters(
+                    name_values=current_named_params_grad,
+                    explain='epoch_{}_gradients'.format(epoch),
+                    save_path=os.path.join(save_figures_dir, 'params_and_grads', 'model_gradients'), showing_gradient=True, gradient_clip_value=self.gradient_clip)
+                visualize_combined_parameters(
+                    name_values=current_named_params_grad,
+                    explain='epoch_{}_gradients'.format(epoch),
+                    save_path=os.path.join(save_figures_dir, 'params_and_grads', 'model_gradients'), matrix_or_line='line', showing_gradient=True, gradient_clip_value=self.gradient_clip)
+                # Visualize clipped gradients
+                if clipped_named_params_grad is not None:
+                    visualize_combined_parameters(
+                        name_values=clipped_named_params_grad,
+                        explain='epoch_{}_clipped_gradients'.format(epoch),
+                        save_path=os.path.join(save_figures_dir, 'params_and_grads', 'model_gradients'), matrix_or_line='line', showing_gradient=True, gradient_clip_value=self.gradient_clip)
 
+                # Visualize teacher forcing and autonomous mode
                 visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector,
-                                                      save_path=os.path.join(save_figures_dir, 'training_mode'),
+                                                      save_path=os.path.join(
+                                                          save_figures_dir, 'sequence_reconstruction', 'training_mode'),
                                                       explain=f'training_epoch:{epoch}_klwarm{kl_warm}_auto_warm{auto_warm}_window{current_sequence_len}',
                                                       inference_mode=True)
+
                 model_mode_selector_flip_test = create_autonomous_mode_selector(
                     current_sequence_len, mode='even_bursts', autonomous_ratio=0.1)
-                
-                visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector_flip_test, 
-                                                      save_path=os.path.join(save_figures_dir, 'even_bursts'),
+
+                visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector_flip_test,
+                                                      save_path=os.path.join(
+                                                          save_figures_dir, 'sequence_reconstruction', 'even_bursts'),
                                                       explain=f'even_bursts_epoch:{epoch}_klwarm{kl_warm}_auto_warm{auto_warm}_window{current_sequence_len}',
                                                       inference_mode=True)
-                
+
                 model_mode_selector_flip_test = create_autonomous_mode_selector(
                     current_sequence_len, mode='even_bursts', autonomous_ratio=0.5)
-                visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector_flip_test, 
-                                                      save_path=os.path.join(save_figures_dir, 'half_half'),
+
+                visualize_teacherforcing_2_autonomous(batch_data, self.model, mode_selector=model_mode_selector_flip_test,
+                                                      save_path=os.path.join(
+                                                          save_figures_dir, 'sequence_reconstruction', 'half_half'),
                                                       explain=f'half_half_epoch:{epoch}_klwarm{kl_warm}_auto_warm{auto_warm}_window{current_sequence_len}',
                                                       inference_mode=True)
 
@@ -677,3 +727,10 @@ def sigmoid(x):
 def sigmoid_reverse(x):
     x = np.array(x)
     return np.log(x / (1 - x))
+
+
+def get_norm_from_named_params(named_params):
+    norm = 0
+    for _, param in named_params:
+        norm += np.linalg.norm(param)
+    return norm

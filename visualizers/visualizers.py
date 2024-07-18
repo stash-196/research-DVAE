@@ -23,10 +23,10 @@ def visualize_model_parameters(model, explain, save_path=None, fixed_scale=None)
 
     # If a fixed scale is not provided, determine the max and min across all parameters
     if not fixed_scale:
-        all_values = [param.detach().cpu().numpy().flatten()
-                      for _, param in model.named_parameters()]
-        min_val = min(map(min, all_values))
-        max_val = max(map(max, all_values))
+        all_values_flattened = [param.detach().cpu().numpy().flatten()
+                                for _, param in model.named_parameters()]
+        min_val = min(map(min, all_values_flattened))
+        max_val = max(map(max, all_values_flattened))
         fixed_scale = (min_val, max_val)
 
     for name, param in model.named_parameters():
@@ -48,35 +48,63 @@ def visualize_model_parameters(model, explain, save_path=None, fixed_scale=None)
         plt.close()
 
 
-def visualize_combined_parameters(model, explain, save_path=None, fixed_scale=None):
+def visualize_combined_parameters(name_values, explain, save_path=None, fixed_scale=None, matrix_or_line='matrix', showing_gradient=False, gradient_clip_value=None):
     if fixed_scale is None:
         # Compute the scale if not provided
-        all_values = [param.detach().cpu().numpy().flatten()
-                      for _, param in model.named_parameters()]
-        min_val = min(map(min, all_values))
-        max_val = max(map(max, all_values))
+        all_values_flattened = [param.flatten() for _, param in name_values]
+        min_val = min(map(min, all_values_flattened))
+        max_val = max(map(max, all_values_flattened))
         fixed_scale = (min_val, max_val)
 
-    params = list(model.named_parameters())
-    n = len(params)
-    fig, axs = plt.subplots(nrows=n, figsize=(10, 5 * n))
+    n = len(name_values)
+    if matrix_or_line == 'matrix':
+        fig, axs = plt.subplots(nrows=n, figsize=(10, 5 * n))
 
-    for i, (name, param) in enumerate(params):
-        ax = axs[i] if n > 1 else axs
-        param_data = param.detach().cpu().numpy()
+        for i, (name, param) in enumerate(name_values):
+            ax = axs[i] if n > 1 else axs
+            param_data = param
 
-        # Reshape if one-dimensional
-        if param.ndim == 1:
-            param_data = param_data.reshape(-1, 1)
+            # Reshape if one-dimensional
+            if param.ndim == 1:
+                param_data = param_data.reshape(-1, 1)
 
-        sns.heatmap(param_data, annot=False, cmap="RdBu", center=0,
-                    vmin=fixed_scale[0], vmax=fixed_scale[1], ax=ax)
-        ax.set_title(f'{name} at {explain}')
-        ax.set_xlabel('Parameters')
-        ax.set_ylabel('Values')
+            sns.heatmap(param_data, annot=False, cmap="RdBu", center=0,
+                        vmin=fixed_scale[0], vmax=fixed_scale[1], ax=ax)
+            if showing_gradient:
+                ax.set_title(f'Gradient of {name} at {explain}')
+            else:
+                ax.set_title(f'{name} at {explain}')
 
-    plt.tight_layout()
+        plt.tight_layout()
+
+    elif matrix_or_line == 'line':
+        # Plotting all the parameters flattened in one continuous line in one plot
+        plt.figure(figsize=(10, 5))
+        if gradient_clip_value is not None:  # draw a line at the gradient clip value
+            plt.axhline(y=gradient_clip_value, color='r', linestyle='--')
+            plt.axhline(y=-gradient_clip_value, color='r', linestyle='--')
+
+        cumulative_length = 0
+        for name, param in name_values:
+            range = np.arange(cumulative_length,
+                              cumulative_length + len(param.flatten()))
+            plt.plot(range, param.flatten(), label=name)
+            cumulative_length += len(param.flatten())
+            # set title
+            if showing_gradient:
+                plt.title(f'Gradient of {name} at {explain}')
+            else:
+                plt.title(f'{name} at {explain}')
+        plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+        plt.grid(True)
+        plt.yscale('symlog')
+        plt.xlabel('Parameters')
+        plt.ylabel('Values')
+        plt.tight_layout()
+
     if save_path:
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
         plt.savefig(os.path.join(save_path, f'all_parameters_{explain}.png'))
     plt.close()
 

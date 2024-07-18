@@ -105,6 +105,8 @@ def visualize_combined_metrics(delta_per_epoch, delta_threshold,
                   title_fontsize=20, loc='upper left')
     axs[0].set_xlabel('epochs', fontdict={'size': 16})
     axs[0].set_ylabel('delta', fontdict={'size': 16})
+    axs[0].grid(True)
+    axs[0].set_yscale('symlog')
 
     if model_name in ['VRNN', 'MT_VRNN']:
         axs[1].step(np.arange(len(kl_warm_values)),
@@ -115,24 +117,28 @@ def visualize_combined_metrics(delta_per_epoch, delta_threshold,
     axs[1].legend(fontsize=16, title='warm values', title_fontsize=20)
     axs[1].set_xlabel('epochs', fontdict={'size': 16})
     axs[1].set_ylabel('warm values', fontdict={'size': 16})
+    axs[1].grid(True)
 
     axs[2].step(np.arange(len(sequence_len_values)),
                 sequence_len_values, label='sequence_len', color='m')
     axs[2].legend(fontsize=16, title='sequence_len', title_fontsize=20)
     axs[2].set_xlabel('epochs', fontdict={'size': 16})
     axs[2].set_ylabel('sequence_len', fontdict={'size': 16})
+    axs[2].grid(True)
 
     axs[3].step(range(len(cpt_patience_epochs)),
                 cpt_patience_epochs, label='cpt_patience')
     axs[3].legend(fontsize=16, title='cpt_patience', title_fontsize=20)
     axs[3].set_xlabel('epochs', fontdict={'size': 16})
     axs[3].set_ylabel('cpt_patience', fontdict={'size': 16})
+    axs[3].grid(True)
 
     axs[4].step(range(len(best_state_epochs)),
                 best_state_epochs, label='best_state')
     axs[4].legend(fontsize=16, title='best_state', title_fontsize=20)
     axs[4].set_xlabel('epochs', fontdict={'size': 16})
     axs[4].set_ylabel('best_state', fontdict={'size': 16})
+    axs[4].grid(True)
 
     if model_name in ['VRNN', 'MT_VRNN']:
         for kl_warm_epoch in kl_warm_epochs:
