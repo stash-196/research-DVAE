@@ -375,10 +375,13 @@ class LearningAlgorithm():
                 loss_tot_avg.backward()
 
                 # temporarily store detatched parameters
-                current_named_params_grad = [(name, param.grad.detach().cpu().numpy())
+                current_named_params_grad = [(name, param.grad.detach().cpu().numpy().copy())
                                              for name, param in self.model.named_parameters()]
-                current_named_params = [(name, param.detach().cpu().numpy())
+                current_named_params = [(name, param.detach().cpu().numpy().copy())
                                         for name, param in self.model.named_parameters()]
+                parameter_norm = get_norm_from_named_params(current_named_params)
+                grad_norm = get_norm_from_named_params(current_named_params_grad)
+                logger.info(f'[Learning Algo][epoch{epoch}] Parameter norm: {parameter_norm}, Gradient norm: {grad_norm}')
 
                 clipped_named_params_grad = None
                 # Gradient clipping
@@ -393,13 +396,10 @@ class LearningAlgorithm():
                             self.model.parameters(), self.gradient_clip)
 
                         # store the clipped gradients
-                        clipped_named_params_grad = [(name, param.grad.detach().cpu().numpy())
+                        clipped_named_params_grad = [(name, param.grad.detach().cpu().numpy().copy())
                                                      for name, param in self.model.named_parameters()]
                         # calculate and print the norm of the clipped gradient
-                        parameter_norm = get_norm_from_named_params(
-                            current_named_params)
-                        grad_norm = get_norm_from_named_params(
-                            current_named_params_grad)
+
                         clipped_grad_norm = get_norm_from_named_params(
                             clipped_named_params_grad)
                         logger.info(
