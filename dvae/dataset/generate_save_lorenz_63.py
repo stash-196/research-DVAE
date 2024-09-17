@@ -243,25 +243,52 @@ N = 15*60*24*5
 dt = 1e-2
 l1 = L63(sigma, rho, beta, init=[1, 10, 20], dt=1e-2)
 l2 = L63(sigma, rho, beta, init=[10, 1, 2], dt=1e-2)
+l1_nan = L63(sigma, rho, beta, init=[1, 10, 20], dt=1e-2)
+l2_nan = L63(sigma, rho, beta, init=[10, 1, 2], dt=1e-2)
 
 
 l1.integrate(N)
 l2.integrate(int(N*0.1))
+l1_nan.integrate(N)
+l2_nan.integrate(int(N*0.1))
+
+p_nan = 0.1
+# Replace some values with NaN based on the mask
+# create a mask with 10% of the values as NaN for component x, based on bernoulli distribution
+mask = np.random.binomial(1, p_nan, size=(len(l1.hist), 3)) # parameter n is the number of trials, p is the probability of success of each trial
+l1_nan.hist = np.where(mask[:, 0][:, None], np.nan, l1_nan.hist) # replace x values with NaN
+mask = np.random.binomial(1, p_nan, size=(len(l2.hist), 3))
+l2_nan.hist = np.where(mask[:, 0][:, None], np.nan, l2_nan.hist) # replace x values with NaN
 
 plot_attractor_plotly(
     [l1.hist], save_dir='temp_save/lorenz63', explain='s10_r28_b8d3_train')
 plot_attractor_plotly(
     [l2.hist], save_dir='temp_save/lorenz63', explain='s10_r28_b8d3_test')
+plot_attractor_plotly(
+    [l1_nan.hist], save_dir='temp_save/lorenz63', explain=f's10_r28_b8d3_train_nanBer{p_nan}')
+plot_attractor_plotly(
+    [l2_nan.hist], save_dir='temp_save/lorenz63', explain=f's10_r28_b8d3_test_nanBer{p_nan}')
+
 
 plot_attractor_subplots(
     [l1.hist], save_dir='temp_save/lorenz63', explain='s10_r28_b8d3_train')
 plot_attractor_subplots(
     [l2.hist], save_dir='temp_save/lorenz63', explain='s10_r28_b8d3_test')
+plot_attractor_subplots(
+    [l1_nan.hist], save_dir='temp_save/lorenz63', explain=f's10_r28_b8d3_train_nanBer{p_nan}')
+plot_attractor_subplots(
+    [l2_nan.hist], save_dir='temp_save/lorenz63', explain=f's10_r28_b8d3_test_nanBer{p_nan}')
+
 
 plot_components_vs_time_plotly(np.array(
     l1.hist), time_step=1e-2, explain='s10_r28_b8d3_train', save_dir='temp_save/lorenz63')
 plot_components_vs_time_plotly(np.array(
     l2.hist), time_step=1e-2, explain='s10_r28_b8d3_test', save_dir='temp_save/lorenz63')
+plot_components_vs_time_plotly(np.array(
+    l1_nan.hist), time_step=1e-2, explain=f's10_r28_b8d3_train_nanBer{p_nan}', save_dir='temp_save/lorenz63')
+plot_components_vs_time_plotly(np.array(
+    l2_nan.hist), time_step=1e-2, explain=f's10_r28_b8d3_test_nanBer{p_nan}', save_dir='temp_save/lorenz63')
+
 
 
 # store l.hist as pickle data for later use in pytorch dataloader
@@ -269,10 +296,13 @@ def save_pickle(data, path):
     import pickle
     with open(path, 'wb') as f:
         pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        print(f'Saved data to {path}')
 
 
 save_pickle(l1.hist, 'temp_save/lorenz63/dataset_train.pkl')
 save_pickle(l2.hist, 'temp_save/lorenz63/dataset_test.pkl')
+save_pickle(l1_nan.hist, 'temp_save/lorenz63/dataset_train_nanBer{p_nan}.pkl')
+save_pickle(l2_nan.hist, 'temp_save/lorenz63/dataset_test_nanBer{p_nan}.pkl')
 
 # calculate sampling rate
 sampling_rate = 1 / dt
@@ -346,6 +376,9 @@ def plot_delay_embedding(observation, delay, dimensions):
 # Example usage
 # Assuming you have an array `x` from the Lorenz system:
 x = np.array(l1.hist)[:, 0]
-plot_delay_embedding(x, delay=20, dimensions=3)
+plot_delay_embedding(x, delay=10, dimensions=3)
+
+x_nan = np.array(l1_nan.hist)[:, 0]
+plot_delay_embedding(x_nan, delay=10, dimensions=3)
 
 # %%
