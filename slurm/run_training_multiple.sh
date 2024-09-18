@@ -6,7 +6,7 @@ cd ~/workspace/research-DVAE
 BASE_DIR=~/workspace/research-DVAE/config/sinusoid/generated
 
 # Define a list of experiment names, each corresponding to a subdirectory under BASE_DIR
-declare -a experiments=("delta_h27_ep1000_esp10_SampMeths_RNNs_1")
+declare -a experiments=("h64_ep20000_esp50_SampMeths_AllRNNs_ActivFunc_0")
 # 1" "compare_alphas_&_sampling_methods_2" "compare_alphas_&_sampling_methods_3" "compare_alphas_&_sampling_methods_4" "compare_alphas_&_sampling_methods_5") # Modify this line to include your actual experiment names
 
 # Get the current date in YYYY-MM-DD format
@@ -51,7 +51,7 @@ for experiment in "${experiments[@]}"; do
 #SBATCH --ntasks=1                              # Run a single task
 #SBATCH --cpus-per-task=8                       # Number of CPU cores per task
 #SBATCH --mem=16G                               # Total memory limit
-#SBATCH --time=1-00:00:00                       # Time limit hrs:min:sec
+#SBATCH --time=4-00:00:00                       # Time limit hrs:min:sec
 #SBATCH --output=${LOG_DIR}/%j_training_${CONFIG_BASENAME}.log  # Standard output log
 #SBATCH --error=${LOG_DIR}/%j_training_${CONFIG_BASENAME}.err   # Standard error log
 #SBATCH --partition=compute                     # Specify the GPU partition

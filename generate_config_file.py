@@ -48,13 +48,13 @@ def get_configurations_for_model(params):
 
 if __name__ == "__main__":
 
-    experiment_name = "d-1_h27_ep2000_esp50_SampMeths_RNNs_1"
+    experiment_name = "h64_ep20000_esp50_SampMeths_AllRNNs_ActivFunc_0"
 
     models = [
         "RNN",
-        # "VRNN",
+        "VRNN",
         "MT_RNN",
-        # "MT_VRNN"
+        "MT_VRNN"
     ]
 
     # Change to dictionary of lists
@@ -64,19 +64,21 @@ if __name__ == "__main__":
     z_dim = [9]
     dense_z = [[16, 32]]
 
-    dim_rnn = [27]
+    dim_rnn = [64]
     alphas = [[0.00490695, 0.02916397, 0.01453569]]  # , [0.1, 0.01, 0.00267]]
+    activation = ['relu', 'tanh']
 
     # Training
     lr = [0.001]
     alpha_lr = [0.01]
-    epochs = [2000]
+    epochs = [20000]
     early_stop_patience = [50]
     save_frequency = [50]
     gradient_clip = [1]
     optimize_alphas = [True]
-    sampling_method = ['ss'
-                    #    , 'ptf', 'mtf'
+    sampling_method = ['ss',
+                       'ptf', 'mtf',
+                       'even_bursts'
                        ]
     sampling_ratio = [0.8]
 
@@ -100,6 +102,7 @@ if __name__ == "__main__":
             "x_dim": x_dim,
             "dense_x": dense_x,
             "dim_rnn": dim_rnn,
+            "activation": activation,
             # Training
             "lr": lr,
             "epochs": epochs,
