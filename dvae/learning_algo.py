@@ -518,9 +518,6 @@ class LearningAlgorithm:
                         logger=logger,
                         from_instance=f"[Learning Algo][epoch{epoch}][train]",
                     )
-                # mask
-                if mask_autonomous:
-                    loss_kl = loss_kl * teacher_forcing_timepoints_mask
 
                 loss_kl_avg = (
                     kl_warm * beta * loss_kl / (seq_len * bs)
@@ -600,17 +597,39 @@ class LearningAlgorithm:
             for _, batch_data in enumerate(val_dataloader):
 
                 batch_data = batch_data.to(self.device)
+                batch_size = batch_data.size(0)
+
+                model_mode_selector = create_autonomous_mode_selector(
+                    current_sequence_len,
+                    mode=sampling_config["mode"],
+                    autonomous_ratio=sampling_config["autonomous_ratio"](),
+                    batch_size=batch_size,
+                )
+                teacher_forcing_timepoints_mask = 1.0 - torch.tensor(
+                    model_mode_selector, device=self.device
+                ).unsqueeze(-1)
 
                 if self.dataset_name == "Lorenz63" or self.dataset_name == "Sinusoid":
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
                     batch_data = batch_data.permute(1, 0, 2)
+                    assert batch_data.shape[:2] == model_mode_selector.shape
                     recon_batch_data = self.model(
                         batch_data,
                         mode_selector=model_mode_selector,
                         logger=logger,
                         from_instance=f"[Learning Algo][epoch{epoch}][val]",
                     )
-                    loss_recon = loss_MSE(batch_data, recon_batch_data)
+                    if mask_autonomous:
+                        batch_data_masked = teacher_forcing_timepoints_mask * batch_data
+                        recon_batch_data_masked = (
+                            teacher_forcing_timepoints_mask * recon_batch_data
+                        )
+                        loss_recon = loss_MSE(
+                            batch_data_masked, recon_batch_data_masked
+                        )
+                    else:
+                        loss_recon = loss_MSE(batch_data, recon_batch_data)
+
                 seq_len, bs, _ = self.model.y.shape
                 loss_recon_avg = loss_recon / (seq_len * bs)
 
@@ -992,6 +1011,12 @@ class LearningAlgorithm:
                         showing_gradient=True,
                         gradient_clip_value=self.gradient_clip,
                     )
+
+                model_mode_selector = create_autonomous_mode_selector(
+                    current_sequence_len,
+                    mode=sampling_config["mode"],
+                    autonomous_ratio=sampling_config["autonomous_ratio"](),
+                )
 
                 # Visualize teacher forcing and autonomous mode
                 visualize_teacherforcing_2_autonomous(
