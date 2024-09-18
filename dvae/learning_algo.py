@@ -416,18 +416,20 @@ class LearningAlgorithm:
             }
 
             # Determine which sampling method to use
-            if self.sampling_method in sampling_configs:
-                sampling_config = sampling_configs[self.sampling_method]
-                model_mode_selector = create_autonomous_mode_selector(
-                    current_sequence_len,
-                    mode=sampling_config["mode"],
-                    autonomous_ratio=sampling_config["autonomous_ratio"](),
-                    batch_size=(
-                        self.batch_size if "batch_size" in sampling_config else None
-                    ),
-                )
-            else:
-                logger.error("Unknown sampling method")
+            # if self.sampling_method in sampling_configs:
+            #     sampling_config = sampling_configs[self.sampling_method]
+            #     model_mode_selector = create_autonomous_mode_selector(
+            #         current_sequence_len,
+            #         mode=sampling_config["mode"],
+            #         autonomous_ratio=sampling_config["autonomous_ratio"](),
+            #         batch_size=(
+            #             self.batch_size if "batch_size" in sampling_config else None
+            #         ),
+            #     )
+            # else:
+            #     logger.error("Unknown sampling method")
+
+            sampling_config = sampling_configs[self.sampling_method]
 
             # Batch training
             for _, batch_data in enumerate(train_dataloader):
@@ -437,13 +439,16 @@ class LearningAlgorithm:
                     logger.warning(
                         f"[Learning Algo][epoch{epoch}] batch_size: {batch_size}, expected: {self.batch_size}"
                     )
-                    sampling_config = sampling_configs[self.sampling_method]
-                    model_mode_selector = create_autonomous_mode_selector(
-                        current_sequence_len,
-                        mode=sampling_config["mode"],
-                        autonomous_ratio=sampling_config["autonomous_ratio"](),
-                        batch_size=batch_size,
-                    )
+
+                model_mode_selector = create_autonomous_mode_selector(
+                    current_sequence_len,
+                    mode=sampling_config["mode"],
+                    autonomous_ratio=sampling_config["autonomous_ratio"](),
+                    batch_size=batch_size,
+                )
+                teacher_forcing_timepoints_mask = 1.0 - torch.tensor(
+                    model_mode_selector, device=self.device
+                ).unsqueeze(-1)
 
                 print(f"[Learning Algo][epoch{epoch}] sent to device: {self.device}")
 
@@ -456,7 +461,28 @@ class LearningAlgorithm:
                         logger=logger,
                         from_instance=f"[Learning Algo][epoch{epoch}][train]",
                     )
-                    loss_recon = loss_MSE(batch_data, recon_batch_data)
+
+                    mask_autonomous = True
+                    if mask_autonomous:
+                        batch_data_masked = teacher_forcing_timepoints_mask * batch_data
+                        recon_batch_data_masked = (
+                            teacher_forcing_timepoints_mask * recon_batch_data
+                        )
+                        # Log percentage of masked data in loss
+                        logger.info(
+                            f"[Learning Algo][epoch{epoch}] Percentage of un-masked data in loss: {teacher_forcing_timepoints_mask.mean()}"
+                        )
+                        loss_recon = loss_MSE(
+                            batch_data_masked, recon_batch_data_masked
+                        )
+                    else:
+                        loss_recon = loss_MSE(batch_data, recon_batch_data)
+
+                    # Raise warning if nan is detected in recon loss
+                    if torch.isnan(loss_recon).any():
+                        logger.warning(
+                            f"[Learning Algo][epoch{epoch}] Nan detected in recon loss"
+                        )
                 else:
                     logger.error("Unknown datset")
                 seq_len, bs, _ = self.model.y.shape  # Sequence Length and Batch Size
@@ -492,6 +518,10 @@ class LearningAlgorithm:
                         logger=logger,
                         from_instance=f"[Learning Algo][epoch{epoch}][train]",
                     )
+                # mask
+                if mask_autonomous:
+                    loss_kl = loss_kl * teacher_forcing_timepoints_mask
+
                 loss_kl_avg = (
                     kl_warm * beta * loss_kl / (seq_len * bs)
                 )  # Average KL Divergence
