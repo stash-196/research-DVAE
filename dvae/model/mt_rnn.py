@@ -298,6 +298,9 @@ class MT_RNN(nn.Module):
                 + (1 - mix_ratio.unsqueeze(1)) * feature_tf
             )
 
+            # check if shape of feature_xt is correct
+            assert feature_xt.shape == (self.x_dim, batch_size, self.dense_x[-1])
+
             h_t_last = h_t.view(self.num_rnn, 1, batch_size, self.dim_rnn)[-1, :, :, :]
             y_t = self.generation_x(h_t_last)
             y[t, :, :] = torch.squeeze(y_t, 0)
