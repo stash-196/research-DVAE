@@ -113,11 +113,13 @@ if __name__ == "__main__":
         learning_algo = LearningAlgorithm_ss(params=params)
         learning_algo.build_model()
         dvae = learning_algo.model
+        dvae.device = device
         dvae.out_mean = True
     else:
         learning_algo = LearningAlgorithm(params=params)
         learning_algo.build_model()
-        dvae = learning_algo.model
+        dvae = learning_algo.model.to(device)
+        dvae.device = device
     dvae.load_state_dict(torch.load(params["saved_dict"], map_location="cpu"))
 
     dvae.eval()
@@ -129,6 +131,7 @@ if __name__ == "__main__":
 
     data_dir = cfg.get("Paths", "data_dir")
     x_dim = cfg.getint("Network", "x_dim")
+    dataset_label = cfg.get("DataFrame", "dataset_label", fallback=None)
     num_workers = cfg.getint("DataFrame", "num_workers")
     sample_rate = cfg.getint("DataFrame", "sample_rate")
     skip_rate = cfg.getint("DataFrame", "skip_rate")
@@ -145,6 +148,7 @@ if __name__ == "__main__":
         # Load test dataset
         test_dataset = sinusoid_dataset.Sinusoid(
             path_to_data=data_dir,
+            dataset_label=dataset_label,
             split="test",
             seq_len=seq_len,
             x_dim=x_dim,
@@ -167,6 +171,7 @@ if __name__ == "__main__":
         # Load test dataset for long sequence
         test_dataset_long = sinusoid_dataset.Sinusoid(
             path_to_data=data_dir,
+            dataset_label=dataset_label,
             split="test",
             seq_len=None,
             x_dim=x_dim,
@@ -186,6 +191,7 @@ if __name__ == "__main__":
     elif cfg["DataFrame"]["dataset_name"] == "Lorenz63":
         # Load test dataset
         test_dataset = lorenz63_dataset.Lorenz63(
+            dataset_label=dataset_label,
             path_to_data=data_dir,
             split="test",
             seq_len=seq_len,
@@ -210,6 +216,7 @@ if __name__ == "__main__":
         # Load test dataset for long sequence
         test_dataset_long = lorenz63_dataset.Lorenz63(
             path_to_data=data_dir,
+            dataset_label=dataset_label,
             split="test",
             seq_len=None,
             x_dim=x_dim,
