@@ -18,43 +18,68 @@ from collections import OrderedDict
 import math
 
 
-def build_MT_VRNN_pp(cfg, device='cpu'):
+def build_MT_VRNN_pp(cfg, device="cpu"):
 
     # Load parameters for VRNN
     # General
-    alphas = [float(i) for i in cfg.get(
-        'Network', 'alphas').split(',') if i != '']
-    x_dim = cfg.getint('Network', 'x_dim')
-    z_dim = cfg.getint('Network', 'z_dim')
-    activation = cfg.get('Network', 'activation')
-    dropout_p = cfg.getfloat('Network', 'dropout_p')
+    alphas = [float(i) for i in cfg.get("Network", "alphas").split(",") if i != ""]
+    x_dim = cfg.getint("Network", "x_dim")
+    z_dim = cfg.getint("Network", "z_dim")
+    activation = cfg.get("Network", "activation")
+    dropout_p = cfg.getfloat("Network", "dropout_p")
     # Feature extractor
-    dense_x = [] if cfg.get('Network', 'dense_x') == '' else [
-        int(i) for i in cfg.get('Network', 'dense_x').split(',')]
-    dense_z = [] if cfg.get('Network', 'dense_z') == '' else [
-        int(i) for i in cfg.get('Network', 'dense_z').split(',')]
+    dense_x = (
+        []
+        if cfg.get("Network", "dense_x") == ""
+        else [int(i) for i in cfg.get("Network", "dense_x").split(",")]
+    )
+    dense_z = (
+        []
+        if cfg.get("Network", "dense_z") == ""
+        else [int(i) for i in cfg.get("Network", "dense_z").split(",")]
+    )
     # Dense layers
-    dense_hx_z = [] if cfg.get('Network', 'dense_hx_z') == '' else [
-        int(i) for i in cfg.get('Network', 'dense_hx_z').split(',')]
-    dense_hz_x = [] if cfg.get('Network', 'dense_hz_x') == '' else [
-        int(i) for i in cfg.get('Network', 'dense_hz_x').split(',')]
-    dense_h_z = [] if cfg.get('Network', 'dense_h_z') == '' else [
-        int(i) for i in cfg.get('Network', 'dense_h_z').split(',')]
+    dense_hx_z = (
+        []
+        if cfg.get("Network", "dense_hx_z") == ""
+        else [int(i) for i in cfg.get("Network", "dense_hx_z").split(",")]
+    )
+    dense_hz_x = (
+        []
+        if cfg.get("Network", "dense_hz_x") == ""
+        else [int(i) for i in cfg.get("Network", "dense_hz_x").split(",")]
+    )
+    dense_h_z = (
+        []
+        if cfg.get("Network", "dense_h_z") == ""
+        else [int(i) for i in cfg.get("Network", "dense_h_z").split(",")]
+    )
     # RNN
-    dim_rnn = cfg.getint('Network', 'dim_rnn')
-    num_rnn = cfg.getint('Network', 'num_rnn')
-    type_rnn = cfg.get('Network', 'type_rnn')
+    dim_rnn = cfg.getint("Network", "dim_rnn")
+    num_rnn = cfg.getint("Network", "num_rnn")
+    type_rnn = cfg.get("Network", "type_rnn")
 
     # Beta-vae
-    beta = cfg.getfloat('Training', 'beta')
+    beta = cfg.getfloat("Training", "beta")
 
     # Build model
-    model = MT_VRNN(alphas=alphas, x_dim=x_dim, z_dim=z_dim, activation=activation,
-                    dense_x=dense_x, dense_z=dense_z,
-                    dense_hx_z=dense_hx_z, dense_hz_x=dense_hz_x,
-                    dense_h_z=dense_h_z,
-                    dim_rnn=dim_rnn, num_rnn=num_rnn, type_rnn=type_rnn,
-                    dropout_p=dropout_p, beta=beta, device=device).to(device)
+    model = MT_VRNN(
+        alphas=alphas,
+        x_dim=x_dim,
+        z_dim=z_dim,
+        activation=activation,
+        dense_x=dense_x,
+        dense_z=dense_z,
+        dense_hx_z=dense_hx_z,
+        dense_hz_x=dense_hz_x,
+        dense_h_z=dense_h_z,
+        dim_rnn=dim_rnn,
+        num_rnn=num_rnn,
+        type_rnn=type_rnn,
+        dropout_p=dropout_p,
+        beta=beta,
+        device=device,
+    ).to(device)
 
     return model
 
@@ -69,11 +94,24 @@ def inverse_sigmoid(y):
 
 class MT_VRNN(nn.Module):
 
-    def __init__(self, alphas, x_dim, z_dim, activation,
-                 dense_x, dense_z,
-                 dense_hx_z, dense_hz_x, dense_h_z,
-                 dim_rnn, num_rnn=1, type_rnn='RNN',
-                 dropout_p=0, beta=1, device='cpu'):
+    def __init__(
+        self,
+        alphas,
+        x_dim,
+        z_dim,
+        activation,
+        dense_x,
+        dense_z,
+        dense_hx_z,
+        dense_hz_x,
+        dense_h_z,
+        dim_rnn,
+        num_rnn=1,
+        type_rnn="RNN",
+        dropout_p=0,
+        beta=1,
+        device="cpu",
+    ):
 
         super().__init__()
         # General parameters
@@ -82,12 +120,12 @@ class MT_VRNN(nn.Module):
         self.z_dim = z_dim
         self.dropout_p = dropout_p
         self.y_dim = self.x_dim
-        if activation == 'relu':
+        if activation == "relu":
             self.activation = nn.ReLU()
-        elif activation == 'tanh':
+        elif activation == "tanh":
             self.activation = nn.Tanh()
         else:
-            raise SystemExit('Wrong activation type!')
+            raise SystemExit("Wrong activation type!")
         self.device = device
 
         # Feature extractors
@@ -104,13 +142,17 @@ class MT_VRNN(nn.Module):
         # Beta-loss
         self.beta = beta
 
-        self.sigmas = nn.Parameter(torch.tensor([inverse_sigmoid(
-            alpha) for alpha in alphas], dtype=torch.float32), requires_grad=True)
+        self.sigmas = nn.Parameter(
+            torch.tensor(
+                [inverse_sigmoid(alpha) for alpha in alphas], dtype=torch.float32
+            ),
+            requires_grad=True,
+        )
 
         self.build()
 
     def base_parameters(self):
-        return (p for name, p in self.named_parameters() if 'sigmas' not in name)
+        return (p for name, p in self.named_parameters() if "sigmas" not in name)
 
     def alphas_per_unit(self):
         # Convert sigma to alpha using sigmoid
@@ -123,7 +165,7 @@ class MT_VRNN(nn.Module):
             remainder = self.dim_rnn % len(alphas)
             return torch.cat([alphas] * num_repeats + [alphas[:remainder]])
         else:
-            return alphas[:self.dim_rnn]
+            return alphas[: self.dim_rnn]
 
     def build(self):
 
@@ -134,35 +176,39 @@ class MT_VRNN(nn.Module):
         dic_layers = OrderedDict()
         if len(self.dense_x) == 0:
             dim_feature_x = self.x_dim
-            dic_layers['Identity'] = nn.Identity()
+            dic_layers["Identity"] = nn.Identity()
         else:
             dim_feature_x = self.dense_x[-1]
             for n in range(len(self.dense_x)):
                 if n == 0:
-                    dic_layers['linear' +
-                               str(n)] = nn.Linear(self.x_dim, self.dense_x[n])
+                    dic_layers["linear" + str(n)] = nn.Linear(
+                        self.x_dim, self.dense_x[n]
+                    )
                 else:
-                    dic_layers['linear' +
-                               str(n)] = nn.Linear(self.dense_x[n-1], self.dense_x[n])
-                dic_layers['activation'+str(n)] = self.activation
-                dic_layers['dropout'+str(n)] = nn.Dropout(p=self.dropout_p)
+                    dic_layers["linear" + str(n)] = nn.Linear(
+                        self.dense_x[n - 1], self.dense_x[n]
+                    )
+                dic_layers["activation" + str(n)] = self.activation
+                dic_layers["dropout" + str(n)] = nn.Dropout(p=self.dropout_p)
         self.feature_extractor_x = nn.Sequential(dic_layers)
         # z
         dic_layers = OrderedDict()
         if len(self.dense_z) == 0:
             dim_feature_z = self.z_dim
-            dic_layers['Identity'] = nn.Identity()
+            dic_layers["Identity"] = nn.Identity()
         else:
             dim_feature_z = self.dense_z[-1]
             for n in range(len(self.dense_z)):
                 if n == 0:
-                    dic_layers['linear' +
-                               str(n)] = nn.Linear(self.z_dim, self.dense_z[n])
+                    dic_layers["linear" + str(n)] = nn.Linear(
+                        self.z_dim, self.dense_z[n]
+                    )
                 else:
-                    dic_layers['linear' +
-                               str(n)] = nn.Linear(self.dense_z[n-1], self.dense_z[n])
-                dic_layers['activation'+str(n)] = self.activation
-                dic_layers['dropout'+str(n)] = nn.Dropout(p=self.dropout_p)
+                    dic_layers["linear" + str(n)] = nn.Linear(
+                        self.dense_z[n - 1], self.dense_z[n]
+                    )
+                dic_layers["activation" + str(n)] = self.activation
+                dic_layers["dropout" + str(n)] = nn.Dropout(p=self.dropout_p)
         self.feature_extractor_z = nn.Sequential(dic_layers)
 
         ######################
@@ -172,18 +218,20 @@ class MT_VRNN(nn.Module):
         dic_layers = OrderedDict()
         if len(self.dense_hx_z) == 0:
             dim_hx_z = self.dim_rnn + dim_feature_x
-            dic_layers['Identity'] = nn.Identity()
+            dic_layers["Identity"] = nn.Identity()
         else:
             dim_hx_z = self.dense_hx_z[-1]
             for n in range(len(self.dense_hx_z)):
                 if n == 0:
-                    dic_layers['linear'+str(n)] = nn.Linear(
-                        self.dense_x[-1] + self.dim_rnn, self.dense_hx_z[n])
+                    dic_layers["linear" + str(n)] = nn.Linear(
+                        self.dense_x[-1] + self.dim_rnn, self.dense_hx_z[n]
+                    )
                 else:
-                    dic_layers['linear'+str(n)] = nn.Linear(
-                        self.dense_hx_z[n-1], self.dense_hx_z[n])
-                dic_layers['activation'+str(n)] = self.activation
-                dic_layers['dropout'+str(n)] = nn.Dropout(p=self.dropout_p)
+                    dic_layers["linear" + str(n)] = nn.Linear(
+                        self.dense_hx_z[n - 1], self.dense_hx_z[n]
+                    )
+                dic_layers["activation" + str(n)] = self.activation
+                dic_layers["dropout" + str(n)] = nn.Dropout(p=self.dropout_p)
         self.mlp_hx_z = nn.Sequential(dic_layers)
         self.inf_mean = nn.Linear(dim_hx_z, self.z_dim)
         self.inf_logvar = nn.Linear(dim_hx_z, self.z_dim)
@@ -192,18 +240,20 @@ class MT_VRNN(nn.Module):
         dic_layers = OrderedDict()
         if len(self.dense_h_z) == 0:
             dim_h_z = self.dim_rnn
-            dic_layers['Identity'] = nn.Identity()
+            dic_layers["Identity"] = nn.Identity()
         else:
             dim_h_z = self.dense_h_z[-1]
             for n in range(len(self.dense_h_z)):
                 if n == 0:
-                    dic_layers['linear' +
-                               str(n)] = nn.Linear(self.dim_rnn, self.dense_h_z[n])
+                    dic_layers["linear" + str(n)] = nn.Linear(
+                        self.dim_rnn, self.dense_h_z[n]
+                    )
                 else:
-                    dic_layers['linear'+str(n)] = nn.Linear(
-                        self.dense_h_z[n-1], self.dense_h_z[n])
-                dic_layers['activation'+str(n)] = self.activation
-                dic_layers['dropout'+str(n)] = nn.Dropout(p=self.dropout_p)
+                    dic_layers["linear" + str(n)] = nn.Linear(
+                        self.dense_h_z[n - 1], self.dense_h_z[n]
+                    )
+                dic_layers["activation" + str(n)] = self.activation
+                dic_layers["dropout" + str(n)] = nn.Dropout(p=self.dropout_p)
         self.mlp_h_z = nn.Sequential(dic_layers)
         self.prior_mean = nn.Linear(dim_h_z, self.z_dim)
         self.prior_logvar = nn.Linear(dim_h_z, self.z_dim)
@@ -212,34 +262,36 @@ class MT_VRNN(nn.Module):
         dic_layers = OrderedDict()
         if len(self.dense_hz_x) == 0:
             dim_hz_x = self.dim_rnn + dim_feature_z
-            dic_layers['Identity'] = nn.Identity()
+            dic_layers["Identity"] = nn.Identity()
         else:
             dim_hz_x = self.dense_hz_x[-1]
             for n in range(len(self.dense_hz_x)):
                 if n == 0:
-                    dic_layers['linear'+str(n)] = nn.Linear(self.dim_rnn +
-                                                            dim_feature_z, self.dense_hz_x[n])
+                    dic_layers["linear" + str(n)] = nn.Linear(
+                        self.dim_rnn + dim_feature_z, self.dense_hz_x[n]
+                    )
                 else:
-                    dic_layers['linear'+str(n)] = nn.Linear(
-                        self.dense_hz_x[n-1], self.dense_hz_x[n])
-                dic_layers['activation'+str(n)] = self.activation
-                dic_layers['dropout'+str(n)] = nn.Dropout(p=self.dropout_p)
+                    dic_layers["linear" + str(n)] = nn.Linear(
+                        self.dense_hz_x[n - 1], self.dense_hz_x[n]
+                    )
+                dic_layers["activation" + str(n)] = self.activation
+                dic_layers["dropout" + str(n)] = nn.Dropout(p=self.dropout_p)
         self.mlp_hz_x = nn.Sequential(dic_layers)
         self.gen_out = nn.Linear(dim_hz_x, self.y_dim)
 
         ####################
         #### Recurrence ####
         ####################
-        if self.type_rnn == 'LSTM':
-            self.rnn = nn.LSTM(dim_feature_x+dim_feature_z,
-                               self.dim_rnn, self.num_rnn)
-        elif self.type_rnn == 'RNN':
-            self.rnn = nn.RNN(dim_feature_x+dim_feature_z,
-                              self.dim_rnn, self.num_rnn)
+        if self.type_rnn == "LSTM":
+            self.rnn = nn.LSTM(
+                dim_feature_x + dim_feature_z, self.dim_rnn, self.num_rnn
+            )
+        elif self.type_rnn == "RNN":
+            self.rnn = nn.RNN(dim_feature_x + dim_feature_z, self.dim_rnn, self.num_rnn)
 
     def reparameterization(self, mean, logvar):
 
-        std = torch.exp(0.5*logvar)
+        std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
 
         return torch.addcmul(mean, eps, std)
@@ -273,61 +325,66 @@ class MT_VRNN(nn.Module):
 
         rnn_input = torch.cat((feature_xt, feature_zt), -1)
 
-        if self.type_rnn == 'LSTM':
+        if self.type_rnn == "LSTM":
             _, (h_tp1, c_tp1) = self.rnn(rnn_input, (h_t, c_t))
-        elif self.type_rnn == 'RNN':
+        elif self.type_rnn == "RNN":
             _, h_tp1 = self.rnn(rnn_input, h_t)
             c_tp1 = None
 
-        h_tp1 = (1 - self.alphas_per_unit()) * \
-            h_t + self.alphas_per_unit() * h_tp1
+        h_tp1 = (1 - self.alphas_per_unit()) * h_t + self.alphas_per_unit() * h_tp1
 
         return h_tp1, c_tp1
 
-    def forward(self, x, initialize_states=True, update_states=True, mode_selector=None, inference_mode=False, logger=None, from_instance=None):
+    def forward(
+        self,
+        x,
+        initialize_states=True,
+        update_states=True,
+        mode_selector=None,
+        inference_mode=False,
+        logger=None,
+        from_instance=None,
+    ):
 
         # need input:  (seq_len, batch_size, x_dim)
         seq_len, batch_size, _ = x.shape
 
         # create variable holder and send to GPU if needed
         z_mean = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
-        z_logvar = torch.zeros(
-            (seq_len, batch_size, self.z_dim)).to(self.device)
+        z_logvar = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
         y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
-        x_features = torch.zeros(
-            (seq_len, batch_size, self.dense_x[-1])).to(self.device)
+        x_features = torch.zeros((seq_len, batch_size, self.dense_x[-1])).to(
+            self.device
+        )
         z = torch.zeros((seq_len, batch_size, self.z_dim)).to(self.device)
         h = torch.zeros((seq_len, batch_size, self.dim_rnn)).to(self.device)
         z_t = torch.zeros(batch_size, self.z_dim).to(self.device)
-        h_t = torch.zeros(self.num_rnn, batch_size,
-                          self.dim_rnn).to(self.device)
+        h_t = torch.zeros(self.num_rnn, batch_size, self.dim_rnn).to(self.device)
 
-        if self.type_rnn == 'LSTM':
-            c_t = torch.zeros(self.num_rnn, batch_size,
-                              self.dim_rnn).to(self.device)
+        if self.type_rnn == "LSTM":
+            c_t = torch.zeros(self.num_rnn, batch_size, self.dim_rnn).to(self.device)
 
         # main part
-        feature_x = self.feature_extractor_x(x)
+        # feature_x = self.feature_extractor_x(x)
 
         for t in range(seq_len):
             if mode_selector is not None:
                 # Calculate the mix of autonomous and teacher-forced inputs
-                mix_ratio = mode_selector[t]
+                mode_selector_t = mode_selector[t]
             else:
-                mix_ratio = 0.0  # Default to full teacher forcing if mode_selector is not provided
+                mode_selector_t = 0.0  # Default to full teacher forcing if mode_selector is not provided
 
-            # Generate features for both teacher-forced and autonomous mode
-            feature_tf = feature_x[t, :, :].unsqueeze(
-                0)  # Teacher-forced feature
-            feature_auto = self.feature_extractor_x(
-                y_t) if t > 0 else feature_x[0, :, :].unsqueeze(0)  # Autonomous feature
+            input_t = x[t, :, :]
+            # create nan mask for the input
+            if input_t.isnan().any():
+                input_t[input_t.isnan()] = y_t[input_t.isnan()]
+
+            input_t = mode_selector_t * y_t + (1 - mode_selector_t) * input_t
 
             # Mix the features based on the ratio
-            feature_xt = mix_ratio * feature_auto + \
-                (1 - mix_ratio) * feature_tf
+            feature_xt = self.feature_extractor_x(input_t)
 
-            h_t_last = h_t.view(self.num_rnn, 1, batch_size,
-                                self.dim_rnn)[-1, :, :, :]
+            h_t_last = h_t.view(self.num_rnn, 1, batch_size, self.dim_rnn)[-1, :, :, :]
             mean_zt, logvar_zt = self.inference(feature_xt, h_t_last)
 
             if inference_mode:
@@ -343,10 +400,11 @@ class MT_VRNN(nn.Module):
             y[t, :, :] = torch.squeeze(y_t, 0)
             h[t, :, :] = torch.squeeze(h_t_last, 0)
 
-            if self.type_rnn == 'LSTM':
+            if self.type_rnn == "LSTM":
                 h_t, c_t = self.recurrence(
-                    feature_xt, feature_zt, h_t, c_t)  # recurrence for t+1
-            elif self.type_rnn == 'RNN':
+                    feature_xt, feature_zt, h_t, c_t
+                )  # recurrence for t+1
+            elif self.type_rnn == "RNN":
                 h_t, _ = self.recurrence(feature_xt, feature_zt, h_t, None)
 
         z_mean_p, z_logvar_p = self.generation_z(h)
@@ -360,7 +418,7 @@ class MT_VRNN(nn.Module):
         self.feature_x = feature_x
         self.z_t = z_t
         self.h_t = h_t
-        if self.type_rnn == 'LSTM':
+        if self.type_rnn == "LSTM":
             self.c_t = c_t
         self.z_mean_p = z_mean_p
         self.z_logvar_p = z_logvar_p
