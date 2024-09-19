@@ -90,6 +90,9 @@ class LearningAlgorithm:
             "Training", "auto_warm_start", fallback=0.0
         )
         self.auto_warm_limit = self.sampling_ratio
+        self.mask_autonomous_filled = self.cfg.getboolean(
+            "Training", "mask_autonomous_filled", fallback=False
+        )
 
         # Get host name and date
         self.hostname = socket.gethostname()
@@ -431,13 +434,14 @@ class LearningAlgorithm:
 
             sampling_config = sampling_configs[self.sampling_method]
 
+            torch.autograd.set_detect_anomaly(True)
             # Batch training
             for _, batch_data in enumerate(train_dataloader):
                 batch_data = batch_data.to(self.device)
                 batch_size = batch_data.size(0)
                 if batch_size != self.batch_size:
                     logger.warning(
-                        f"[Learning Algo][epoch{epoch}] batch_size: {batch_size}, expected: {self.batch_size}"
+                        f"[Learning Algo][epoch{epoch}][train] batch_size: {batch_size}, expected: {self.batch_size}"
                     )
 
                 model_mode_selector = create_autonomous_mode_selector(
@@ -446,11 +450,27 @@ class LearningAlgorithm:
                     autonomous_ratio=sampling_config["autonomous_ratio"](),
                     batch_size=batch_size,
                 )
+
+                # if nan is present in the batch data, overlay the mask to fill with autonomous mode
+                if batch_data.isnan().any():
+                    # ratio of nan
+                    nan_ratio = batch_data.isnan().sum() / batch_data.numel()
+                    logger.warning(
+                        f"[Learning Algo][epoch{epoch}][train] Nan detected in validation data: {nan_ratio}. Will overlay on mask"
+                    )
+                    # replace where nan is present with 1 to fill with autonomous mode
+                    model_mode_selector[
+                        batch_data.squeeze().T.isnan().detach().cpu()
+                    ] = 1.0
+
+                # creating tensor mask for loss function
                 teacher_forcing_timepoints_mask = 1.0 - torch.tensor(
                     model_mode_selector, device=self.device
                 ).unsqueeze(-1)
 
-                print(f"[Learning Algo][epoch{epoch}] sent to device: {self.device}")
+                print(
+                    f"[Learning Algo][epoch{epoch}][train] sent to device: {self.device}"
+                )
 
                 if self.dataset_name == "Lorenz63" or self.dataset_name == "Sinusoid":
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
@@ -462,12 +482,18 @@ class LearningAlgorithm:
                         from_instance=f"[Learning Algo][epoch{epoch}][train]",
                     )
 
-                    mask_autonomous = True
-                    if mask_autonomous:
+                    if self.mask_autonomous_filled:
                         batch_data_masked = teacher_forcing_timepoints_mask * batch_data
+                        batch_data_masked[batch_data_masked.isnan()] = 0.0
                         recon_batch_data_masked = (
                             teacher_forcing_timepoints_mask * recon_batch_data
                         )
+                        assert ~(
+                            (
+                                (batch_data_masked == 0)
+                                != (recon_batch_data_masked == 0)
+                            ).any()
+                        )  # Check that mask (==0.0 values) is identical
                         # Log percentage of masked data in loss
                         logger.info(
                             f"[Learning Algo][epoch{epoch}] Percentage of un-masked data in loss: {teacher_forcing_timepoints_mask.mean()}"
@@ -479,10 +505,9 @@ class LearningAlgorithm:
                         loss_recon = loss_MSE(batch_data, recon_batch_data)
 
                     # Raise warning if nan is detected in recon loss
-                    if torch.isnan(loss_recon).any():
-                        logger.warning(
-                            f"[Learning Algo][epoch{epoch}] Nan detected in recon loss"
-                        )
+                    assert not torch.isnan(
+                        loss_recon
+                    ).any(), f"[Learning Algo][epoch{epoch}][train] Nan detected in recon loss"
                 else:
                     logger.error("Unknown datset")
                 seq_len, bs, _ = self.model.y.shape  # Sequence Length and Batch Size
@@ -605,6 +630,20 @@ class LearningAlgorithm:
                     autonomous_ratio=sampling_config["autonomous_ratio"](),
                     batch_size=batch_size,
                 )
+
+                # if nan is present in the batch data, overlay the mask to fill with autonomous mode
+                if batch_data.isnan().any():
+                    # ratio of nan
+                    nan_ratio = batch_data.isnan().sum() / batch_data.numel()
+                    logger.warning(
+                        f"[Learning Algo][epoch{epoch}][train] Nan detected in validation data: {nan_ratio}. Will overlay on mask"
+                    )
+                    # replace where nan is present with 1 to fill with autonomous mode
+                    model_mode_selector[
+                        batch_data.squeeze().T.isnan().detach().cpu()
+                    ] = 1.0
+
+                # creating tensor mask for loss function
                 teacher_forcing_timepoints_mask = 1.0 - torch.tensor(
                     model_mode_selector, device=self.device
                 ).unsqueeze(-1)
@@ -619,8 +658,9 @@ class LearningAlgorithm:
                         logger=logger,
                         from_instance=f"[Learning Algo][epoch{epoch}][val]",
                     )
-                    if mask_autonomous:
+                    if self.mask_autonomous_filled:
                         batch_data_masked = teacher_forcing_timepoints_mask * batch_data
+                        batch_data_masked[batch_data_masked.isnan()] = 0.0
                         recon_batch_data_masked = (
                             teacher_forcing_timepoints_mask * recon_batch_data
                         )

@@ -262,49 +262,56 @@ class MT_RNN(nn.Module):
                 c_t = torch.zeros(self.num_rnn, batch_size, self.dim_rnn).to(
                     self.device
                 )
+            feature_x = torch.zeros((seq_len, batch_size, self.dense_x[-1])).to(
+                self.device
+            )
         else:
             y = self.y
             h = self.h
             h_t = self.h_t
+            feature_x = self.feature_x
             if self.type_rnn == "LSTM":
                 c_t = self.c_t
 
         # main part
-        feature_x = self.feature_extractor_x(x)
+        # feature_x = self.feature_extractor_x(x)
+        mode_selector = torch.tensor(mode_selector).to(self.device)
+        # x[x.isnan()] = 0.0
 
         for t in range(seq_len):
             if mode_selector is not None:
                 # Calculate the mix of autonomous and teacher-forced inputs
-                if len(mode_selector.shape) == 1:
-                    mix_ratio = mode_selector[t] * torch.ones(batch_size).to(
-                        self.device
-                    )
-                elif len(mode_selector.shape) == 2:
-                    mix_ratio = torch.tensor(mode_selector[t, :]).to(self.device)
+                mode_selector_t = mode_selector[t].unsqueeze(-1)
             else:
-                mix_ratio = torch.ones(batch_size).to(self.device)
+                mode_selector_t = 0.0  # Default to full teacher forcing if mode_selector is not provided
 
-            # Generate features for both teacher-forced and autonomous mode
-            feature_tf = feature_x[t, :, :].unsqueeze(0)  # Teacher-forced feature
-            feature_auto = (
-                self.feature_extractor_x(y_t)
-                if t > 0
-                else feature_x[0, :, :].unsqueeze(0)
-            )  # Autonomous feature
+            input_t = x[t, :, :].unsqueeze(0).clone()
+            # create nan mask for the input
+            if input_t.isnan().any():
+                if t == 0:  # Replace NaNs with 0.0 at time step 0
+                    input_t = torch.where(
+                        input_t.isnan(),
+                        torch.tensor(0.0, device=input_t.device, dtype=input_t.dtype),
+                        input_t,
+                    )
+                else:  # Replace NaNs with y_t at time steps t > 0
+                    input_t = torch.where(input_t.isnan(), y_t, input_t)
 
-            # Mix the features based on the ratio
-            feature_xt = (
-                mix_ratio.unsqueeze(1) * feature_auto
-                + (1 - mix_ratio.unsqueeze(1)) * feature_tf
-            )
+            if t == 0:
+                feature_xt = self.feature_extractor_x(input_t)
+            else:
+                input_t = mode_selector_t * y_t + (1 - mode_selector_t) * input_t
+                # Mix the features based on the ratio
+                feature_xt = self.feature_extractor_x(input_t)
 
             # check if shape of feature_xt is correct
-            assert feature_xt.shape == (self.x_dim, batch_size, self.dense_x[-1])
+            assert feature_xt.shape == (1.0, batch_size, self.dense_x[-1])
 
             h_t_last = h_t.view(self.num_rnn, 1, batch_size, self.dim_rnn)[-1, :, :, :]
             y_t = self.generation_x(h_t_last)
             y[t, :, :] = torch.squeeze(y_t, 0)
             h[t, :, :] = torch.squeeze(h_t_last, 0)
+            feature_x[t, :, :] = torch.squeeze(feature_xt, 0)
 
             if self.type_rnn == "LSTM":
                 h_t, c_t = self.recurrence(feature_xt, h_t, c_t)  # recurrence for t+1
