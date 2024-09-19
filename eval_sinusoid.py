@@ -375,7 +375,7 @@ if __name__ == "__main__":
             #     seq_len_long, 'half_half').astype(bool)
 
             # turn input into tensor and send to GPU if needed
-            batch_data_long_tensor = torch.tensor(batch_data_long, device=dvae.device)
+            batch_data_long_tensor = batch_data_long.clone().detach().to(device)
             recon_data_long = (
                 dvae(
                     batch_data_long_tensor,
