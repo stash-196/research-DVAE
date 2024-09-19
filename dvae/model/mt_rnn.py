@@ -297,8 +297,7 @@ class MT_RNN(nn.Module):
                 mode_selector_t = (
                     torch.zeros(1, batch_size, self.x_dim).to(self.device).float()
                 )
-            # print t
-            print("t: ", t)
+
             input_t = x[t, :, :].unsqueeze(0)
             assert input_t.shape == mode_selector_t.shape
             # create nan mask for the input

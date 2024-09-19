@@ -117,7 +117,7 @@ if __name__ == "__main__":
         dvae.out_mean = True
     else:
         learning_algo = LearningAlgorithm(params=params)
-        learning_algo.build_model()
+        learning_algo.build_model(device=device)
         dvae = learning_algo.model.to(device)
         dvae.device = device
     dvae.load_state_dict(torch.load(params["saved_dict"], map_location="cpu"))

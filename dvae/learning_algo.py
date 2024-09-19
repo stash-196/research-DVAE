@@ -126,15 +126,18 @@ class LearningAlgorithm:
                 if i != ""
             ]
 
-    def build_model(self):
+    def build_model(self, device=None):
+        if device is None:
+            device = self.device
+
         if self.model_name == "VRNN":
-            self.model = build_VRNN(cfg=self.cfg, device=self.device)
+            self.model = build_VRNN(cfg=self.cfg, device=device)
         elif self.model_name == "RNN":
-            self.model = build_RNN(cfg=self.cfg, device=self.device)
+            self.model = build_RNN(cfg=self.cfg, device=device)
         elif self.model_name == "MT_RNN":
-            self.model = build_MT_RNN(cfg=self.cfg, device=self.device)
+            self.model = build_MT_RNN(cfg=self.cfg, device=device)
         elif self.model_name == "MT_VRNN":
-            self.model = build_MT_VRNN_pp(cfg=self.cfg, device=self.device)
+            self.model = build_MT_VRNN_pp(cfg=self.cfg, device=device)
 
     def init_optimizer(self):
         optimization = self.cfg.get("Training", "optimization")
