@@ -280,15 +280,31 @@ class MT_RNN(nn.Module):
 
         for t in range(seq_len):
             if mode_selector is not None:
-                # Calculate the mix of autonomous and teacher-forced inputs
-                mode_selector_t = mode_selector[t].unsqueeze(-1)
-            else:
-                mode_selector_t = 0.0  # Default to full teacher forcing if mode_selector is not provided
+                if len(mode_selector.shape) == 2:
+                    # Calculate the mix of autonomous and teacher-forced inputs
+                    mode_selector_t = (
+                        mode_selector[t].unsqueeze(-1).unsqueeze(0).float()
+                    )
+                elif len(mode_selector.shape) == 1:
+                    # fill tensor of shape (1, batch_size, x_dim) with value of mode_selector[t]
+                    mode_selector_t = (
+                        mode_selector[t].item()
+                        * torch.ones(1, batch_size, self.x_dim).to(self.device).float()
+                    )
 
-            input_t = x[t, :, :].unsqueeze(0).clone()
+            else:
+                # Default to full teacher forcing if mode_selector is not provided, shape (1, batch_size, x_dim)
+                mode_selector_t = (
+                    torch.zeros(1, batch_size, self.x_dim).to(self.device).float()
+                )
+            # print t
+            print("t: ", t)
+            input_t = x[t, :, :].unsqueeze(0)
+            assert input_t.shape == mode_selector_t.shape
             # create nan mask for the input
             if input_t.isnan().any():
                 if t == 0:  # Replace NaNs with 0.0 at time step 0
+                    # if True:
                     input_t = torch.where(
                         input_t.isnan(),
                         torch.tensor(0.0, device=input_t.device, dtype=input_t.dtype),
@@ -300,6 +316,7 @@ class MT_RNN(nn.Module):
             if t == 0:
                 feature_xt = self.feature_extractor_x(input_t)
             else:
+                assert mode_selector_t.shape == y_t.shape == input_t.shape
                 input_t = mode_selector_t * y_t + (1 - mode_selector_t) * input_t
                 # Mix the features based on the ratio
                 feature_xt = self.feature_extractor_x(input_t)

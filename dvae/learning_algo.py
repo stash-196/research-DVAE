@@ -496,7 +496,7 @@ class LearningAlgorithm:
                         )  # Check that mask (==0.0 values) is identical
                         # Log percentage of masked data in loss
                         logger.info(
-                            f"[Learning Algo][epoch{epoch}] Percentage of un-masked data in loss: {teacher_forcing_timepoints_mask.mean()}"
+                            f"[Learning Algo][epoch{epoch}][train] Percentage of un-masked data in loss: {teacher_forcing_timepoints_mask.mean()}"
                         )
                         loss_recon = loss_MSE(
                             batch_data_masked, recon_batch_data_masked
@@ -664,11 +664,28 @@ class LearningAlgorithm:
                         recon_batch_data_masked = (
                             teacher_forcing_timepoints_mask * recon_batch_data
                         )
+                        assert ~(
+                            (
+                                (batch_data_masked == 0)
+                                != (recon_batch_data_masked == 0)
+                            ).any()
+                        )  # Check that mask (==0.0 values) is identical
+                        # Log percentage of masked data in loss
+                        logger.info(
+                            f"[Learning Algo][epoch{epoch}][val] Percentage of un-masked data in loss: {teacher_forcing_timepoints_mask.mean()}"
+                        )
                         loss_recon = loss_MSE(
                             batch_data_masked, recon_batch_data_masked
                         )
                     else:
                         loss_recon = loss_MSE(batch_data, recon_batch_data)
+
+                    # Raise warning if nan is detected in recon loss
+                    assert not torch.isnan(
+                        loss_recon
+                    ).any(), (
+                        f"[Learning Algo][epoch{epoch}][val] Nan detected in recon loss"
+                    )
 
                 seq_len, bs, _ = self.model.y.shape
                 loss_recon_avg = loss_recon / (seq_len * bs)
