@@ -5,6 +5,7 @@ import plotly.io as pio
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+
 # %matplotlib inline
 from mpl_toolkits.mplot3d import Axes3D
 from torch.autograd import Variable
@@ -16,6 +17,8 @@ from scipy.signal import find_peaks
 import plotly.graph_objects as go
 
 # Handy function stolen from the fast.ai library
+# Get location of current files directory
+file_dir = os.path.dirname(os.path.realpath(__file__))
 
 
 def V(x, requires_grad=False, gpu=False):
@@ -25,7 +28,7 @@ def V(x, requires_grad=False, gpu=False):
     return Variable(t, requires_grad=requires_grad)
 
 
-class L63():
+class L63:
     def __init__(self, sigma, rho, beta, init, dt):
         self.sigma, self.rho, self.beta = sigma, rho, beta
         self.x, self.y, self.z = init
@@ -43,76 +46,92 @@ class L63():
             self.step()
 
 
-def plot_attractor_plotly(hists, save_dir=None, explain=None, format='pdf'):
+def plot_attractor_plotly(hists, save_dir=None, explain=None, format="pdf"):
     if np.array(hists).ndim == 2:
         hists = [hists]
     hists = [np.array(h) for h in hists]
     fig = go.Figure()
     for h in hists:
-        fig.add_trace(go.Scatter3d(
-            x=h[:, 0], y=h[:, 1], z=h[:, 2], mode='lines', line=dict(color='blue')))
-    fig.update_layout(scene=dict(
-        xaxis_title='x',
-        yaxis_title='y',
-        zaxis_title='z',
-    ), title=f'Attractor Plot for {explain} set')
+        fig.add_trace(
+            go.Scatter3d(
+                x=h[:, 0], y=h[:, 1], z=h[:, 2], mode="lines", line=dict(color="blue")
+            )
+        )
+    fig.update_layout(
+        scene=dict(
+            xaxis_title="x",
+            yaxis_title="y",
+            zaxis_title="z",
+        ),
+        title=f"Attractor Plot for {explain} set",
+    )
     fig.show()
     if save_dir is not None:
-        save_path = os.path.join(save_dir, f'attractor_{explain}.{format}')
+        save_path = os.path.join(save_dir, f"attractor_{explain}.{format}")
         pio.write_image(fig, save_path)
 
 
-def plot_attractor_subplots(hists, explain, save_dir=None, format='pdf'):
+def plot_attractor_subplots(hists, explain, save_dir=None, format="pdf"):
     if np.array(hists).ndim == 2:
         hists = [hists]
     hists = [np.array(h) for h in hists]
 
     # Create subplots: one row for each of x, y and z
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
-                        subplot_titles=('X Timeseries', 'Y Timeseries', 'Z Timeseries'))
+    fig = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        subplot_titles=("X Timeseries", "Y Timeseries", "Z Timeseries"),
+    )
 
     for h in hists:
         # X timeseries
-        fig.add_trace(go.Scatter(
-            y=h[:, 0], mode='lines', line=dict(color='blue')), row=1, col=1)
+        fig.add_trace(
+            go.Scatter(y=h[:, 0], mode="lines", line=dict(color="blue")), row=1, col=1
+        )
         # Y timeseries
-        fig.add_trace(go.Scatter(
-            y=h[:, 1], mode='lines', line=dict(color='red')), row=2, col=1)
+        fig.add_trace(
+            go.Scatter(y=h[:, 1], mode="lines", line=dict(color="red")), row=2, col=1
+        )
         # Z timeseries
-        fig.add_trace(go.Scatter(
-            y=h[:, 2], mode='lines', line=dict(color='green')), row=3, col=1)
+        fig.add_trace(
+            go.Scatter(y=h[:, 2], mode="lines", line=dict(color="green")), row=3, col=1
+        )
 
     fig.update_layout(
-        title_text="Timeseries Subplots for X, Y, and Z for {} set".format(explain))
+        title_text="Timeseries Subplots for X, Y, and Z for {} set".format(explain)
+    )
     fig.show()
     if save_dir is not None:
-        save_path = os.path.join(save_dir, f'timeseries_{explain}.{format}')
+        save_path = os.path.join(save_dir, f"timeseries_{explain}.{format}")
         pio.write_image(fig, save_path)
 
 
-def plot_components_vs_time_plotly(time_series, time_step, explain, save_dir=None, format='pdf'):
+def plot_components_vs_time_plotly(
+    time_series, time_step, explain, save_dir=None, format="pdf"
+):
     t = np.arange(0, len(time_series) * time_step, time_step)
     x, y, z = time_series[:, 0], time_series[:, 1], time_series[:, 2]
 
     fig = go.Figure()
 
-    fig.add_trace(go.Scatter(x=t, y=x, mode='lines',
-                  name='x', line=dict(color='blue')))
-    fig.add_trace(go.Scatter(x=t, y=y, mode='lines',
-                  name='y', line=dict(color='green')))
-    fig.add_trace(go.Scatter(x=t, y=z, mode='lines',
-                  name='z', line=dict(color='red')))
+    fig.add_trace(go.Scatter(x=t, y=x, mode="lines", name="x", line=dict(color="blue")))
+    fig.add_trace(
+        go.Scatter(x=t, y=y, mode="lines", name="y", line=dict(color="green"))
+    )
+    fig.add_trace(go.Scatter(x=t, y=z, mode="lines", name="z", line=dict(color="red")))
 
-    fig.update_layout(title='Components of Lorenz63 System vs. Time for {} set'.format(explain),
-                      xaxis_title='Time',
-                      yaxis_title='Values',
-                      showlegend=True,
-                      template='plotly_white')
+    fig.update_layout(
+        title="Components of Lorenz63 System vs. Time for {} set".format(explain),
+        xaxis_title="Time",
+        yaxis_title="Values",
+        showlegend=True,
+        template="plotly_white",
+    )
 
     fig.show()
     if save_dir is not None:
-        save_path = os.path.join(
-            save_dir, f'components_vs_time_{explain}.{format}')
+        save_path = os.path.join(save_dir, f"components_vs_time_{explain}.{format}")
         pio.write_image(fig, save_path)
 
 
@@ -122,7 +141,7 @@ def plot_components_vs_time_plotly(time_series, time_step, explain, save_dir=Non
 def calculate_power_spectrum(time_series, sampling_rate):
     # Compute the Fast Fourier Transform (FFT)
     fft_result = np.fft.fft(time_series)
-    freqs = np.fft.fftfreq(len(time_series), 1/sampling_rate)
+    freqs = np.fft.fftfreq(len(time_series), 1 / sampling_rate)
     time_periods = np.zeros_like(freqs)
     # Get periods corresponding to frequencies
     time_periods[1:] = 1 / freqs[1:]
@@ -130,7 +149,7 @@ def calculate_power_spectrum(time_series, sampling_rate):
     nonzero_indices = np.where(freqs > 0)
 
     # Compute the power spectrum: the square of the absolute value of the FFT
-    power_spectrum = np.abs(fft_result[nonzero_indices])**2
+    power_spectrum = np.abs(fft_result[nonzero_indices]) ** 2
     phases = np.angle(fft_result[nonzero_indices])
 
     # Compute the frequencies corresponding to the values in the power spectrum
@@ -139,7 +158,9 @@ def calculate_power_spectrum(time_series, sampling_rate):
     return time_periods, frequencies, power_spectrum
 
 
-def plot_power_spectrum_plotly(time_series, sampling_rate, explain, save_dir=None, format='pdf'):
+def plot_power_spectrum_plotly(
+    time_series, sampling_rate, explain, save_dir=None, format="pdf"
+):
     # Create a figure
     fig = go.Figure()
 
@@ -147,13 +168,24 @@ def plot_power_spectrum_plotly(time_series, sampling_rate, explain, save_dir=Non
     for i, component in enumerate(["x", "y", "z"]):
         series = np.array(time_series)[:, i]
         time_periods, frequencies, spectrum = calculate_power_spectrum(
-            series, sampling_rate)
+            series, sampling_rate
+        )
 
         # Skip the zero frequency
-        time_periods, frequencies, spectrum = time_periods[1:], frequencies[1:], spectrum[1:]
+        time_periods, frequencies, spectrum = (
+            time_periods[1:],
+            frequencies[1:],
+            spectrum[1:],
+        )
 
-        fig.add_trace(go.Scatter(x=time_periods, y=spectrum,
-                      mode='lines', name=f'{component} power spectrum'))
+        fig.add_trace(
+            go.Scatter(
+                x=time_periods,
+                y=spectrum,
+                mode="lines",
+                name=f"{component} power spectrum",
+            )
+        )
 
     # Set the x-axis to be log scale
     fig.update_layout(
@@ -161,19 +193,20 @@ def plot_power_spectrum_plotly(time_series, sampling_rate, explain, save_dir=Non
         xaxis=dict(type="log", title="Time Periods"),
         # yaxis=dict(type="log", title="Power"),
         yaxis=dict(title="Power"),
-        template="plotly_white"
+        template="plotly_white",
     )
 
     # Display the figure
     fig.show()
 
     if save_dir is not None:
-        save_path = os.path.join(
-            save_dir, f'power_spectrum_{explain}.{format}')
+        save_path = os.path.join(save_dir, f"power_spectrum_{explain}.{format}")
         pio.write_image(fig, save_path)
 
 
-def plot_power_spectrum_subplots_loglog(time_series, sampling_rate, explain, component_labels, save_dir=None, format='pdf'):
+def plot_power_spectrum_subplots_loglog(
+    time_series, sampling_rate, explain, component_labels, save_dir=None, format="pdf"
+):
     """
     Plots the power spectrum of each component in the input time series data on a log-log scale,
     including peak detection. It works for any input time series data, making it suitable for
@@ -186,14 +219,17 @@ def plot_power_spectrum_subplots_loglog(time_series, sampling_rate, explain, com
     :param save_dir: Directory to save the plot image. If None, the plot is not saved.
     :param format: The format for saving the plot image (e.g., 'pdf', 'png').
     """
-    fig = make_subplots(rows=len(component_labels), cols=1, subplot_titles=[
-                        f'{label} Power Spectrum' for label in component_labels])
+    fig = make_subplots(
+        rows=len(component_labels),
+        cols=1,
+        subplot_titles=[f"{label} Power Spectrum" for label in component_labels],
+    )
 
     for i, label in enumerate(component_labels):
         series = time_series[:, i]
         fft_result = np.fft.fft(series)
-        frequencies = np.fft.fftfreq(len(series), 1/sampling_rate)
-        power_spectrum = np.abs(fft_result)**2
+        frequencies = np.fft.fftfreq(len(series), 1 / sampling_rate)
+        power_spectrum = np.abs(fft_result) ** 2
 
         # Focus on the positive frequencies
         positive_freqs = frequencies > 0
@@ -202,7 +238,8 @@ def plot_power_spectrum_subplots_loglog(time_series, sampling_rate, explain, com
 
         # Find peaks
         peaks, properties = find_peaks(
-            power_spectrum, height=0.5, distance=100, prominence=0.05)
+            power_spectrum, height=0.5, distance=100, prominence=0.05
+        )
         peak_heights = properties["peak_heights"]
 
         # Select the indices of the largest 3 peaks based on their height
@@ -213,22 +250,41 @@ def plot_power_spectrum_subplots_loglog(time_series, sampling_rate, explain, com
         peaks = peaks[largest_peaks_indices]
 
         # Plotting
-        fig.add_trace(go.Scatter(x=frequencies, y=power_spectrum,
-                      mode='lines', name=f'{label} Power Spectrum'), row=i+1, col=1)
-        fig.add_trace(go.Scatter(x=frequencies[peaks], y=power_spectrum[peaks], mode='markers', marker=dict(
-            color='red', size=8), name=f'{label} Peaks'), row=i+1, col=1)
+        fig.add_trace(
+            go.Scatter(
+                x=frequencies,
+                y=power_spectrum,
+                mode="lines",
+                name=f"{label} Power Spectrum",
+            ),
+            row=i + 1,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=frequencies[peaks],
+                y=power_spectrum[peaks],
+                mode="markers",
+                marker=dict(color="red", size=8),
+                name=f"{label} Peaks",
+            ),
+            row=i + 1,
+            col=1,
+        )
 
     # Update the layout for log-log scale
-    fig.update_layout(height=600, width=800,
-                      title_text=f"Power Spectrum for {explain} (Log-Log Scale)")
+    fig.update_layout(
+        height=600,
+        width=800,
+        title_text=f"Power Spectrum for {explain} (Log-Log Scale)",
+    )
     fig.update_xaxes(type="log", title="Frequency")
     fig.update_yaxes(type="log", title="Power Spectrum")
 
     fig.show()
 
     if save_dir is not None and format:
-        save_path = os.path.join(
-            save_dir, f'power_spectrum_{explain}.{format}')
+        save_path = os.path.join(save_dir, f"power_spectrum_{explain}.{format}")
         pio.write_image(fig, save_path)
 
     return peaks, frequencies, power_spectrum
@@ -236,10 +292,18 @@ def plot_power_spectrum_subplots_loglog(time_series, sampling_rate, explain, com
 
 # %%
 # Define the default parameters values
+
+save_dir_plots = os.path.join(file_dir, "temp_save", "lorenz63", "plots")
+save_dir_data = os.path.join(file_dir, "temp_save", "lorenz63", "data")
+if not os.path.exists(save_dir_plots):
+    os.makedirs(save_dir_plots)
+if not os.path.exists(save_dir_data):
+    os.makedirs(save_dir_data)
+
 sigma = 10
 rho = 28
-beta = 8/3
-N = 15*60*24*5
+beta = 8 / 3
+N = 15 * 60 * 24 * 5
 dt = 1e-2
 l1 = L63(sigma, rho, beta, init=[1, 10, 20], dt=1e-2)
 l2 = L63(sigma, rho, beta, init=[10, 1, 2], dt=1e-2)
@@ -248,79 +312,182 @@ l2_nan = L63(sigma, rho, beta, init=[10, 1, 2], dt=1e-2)
 
 
 l1.integrate(N)
-l2.integrate(int(N*0.1))
+l2.integrate(int(N * 0.1))
 l1_nan.integrate(N)
-l2_nan.integrate(int(N*0.1))
+l2_nan.integrate(int(N * 0.1))
 
 p_nan = 0.1
 # Replace some values with NaN based on the mask
 # create a mask with 10% of the values as NaN for component x, based on bernoulli distribution
-mask = np.random.binomial(1, p_nan, size=(len(l1.hist), 3)) # parameter n is the number of trials, p is the probability of success of each trial
-l1_nan.hist = np.where(mask[:, 0][:, None], np.nan, l1_nan.hist) # replace x values with NaN
+mask = np.random.binomial(
+    1, p_nan, size=(len(l1.hist), 3)
+)  # parameter n is the number of trials, p is the probability of success of each trial
+l1_nan.hist = np.where(
+    mask[:, 0][:, None], np.nan, l1_nan.hist
+)  # replace x values with NaN
 mask = np.random.binomial(1, p_nan, size=(len(l2.hist), 3))
-l2_nan.hist = np.where(mask[:, 0][:, None], np.nan, l2_nan.hist) # replace x values with NaN
+l2_nan.hist = np.where(
+    mask[:, 0][:, None], np.nan, l2_nan.hist
+)  # replace x values with NaN
 
+plot_attractor_plotly([l1.hist], save_dir=save_dir_plots, explain="s10_r28_b8d3_train")
+plot_attractor_plotly([l2.hist], save_dir=save_dir_plots, explain="s10_r28_b8d3_test")
 plot_attractor_plotly(
-    [l1.hist], save_dir='temp_save/lorenz63', explain='s10_r28_b8d3_train')
+    [l1_nan.hist],
+    save_dir=save_dir_plots,
+    explain=f"s10_r28_b8d3_train_nanBer{p_nan}",
+)
 plot_attractor_plotly(
-    [l2.hist], save_dir='temp_save/lorenz63', explain='s10_r28_b8d3_test')
-plot_attractor_plotly(
-    [l1_nan.hist], save_dir='temp_save/lorenz63', explain=f's10_r28_b8d3_train_nanBer{p_nan}')
-plot_attractor_plotly(
-    [l2_nan.hist], save_dir='temp_save/lorenz63', explain=f's10_r28_b8d3_test_nanBer{p_nan}')
+    [l2_nan.hist],
+    save_dir=save_dir_plots,
+    explain=f"s10_r28_b8d3_test_nanBer{p_nan}",
+)
 
 
 plot_attractor_subplots(
-    [l1.hist], save_dir='temp_save/lorenz63', explain='s10_r28_b8d3_train')
+    [l1.hist], save_dir=save_dir_plots, explain="s10_r28_b8d3_train"
+)
+plot_attractor_subplots([l2.hist], save_dir=save_dir_plots, explain="s10_r28_b8d3_test")
 plot_attractor_subplots(
-    [l2.hist], save_dir='temp_save/lorenz63', explain='s10_r28_b8d3_test')
+    [l1_nan.hist],
+    save_dir=save_dir_plots,
+    explain=f"s10_r28_b8d3_train_nanBer{p_nan}",
+)
 plot_attractor_subplots(
-    [l1_nan.hist], save_dir='temp_save/lorenz63', explain=f's10_r28_b8d3_train_nanBer{p_nan}')
-plot_attractor_subplots(
-    [l2_nan.hist], save_dir='temp_save/lorenz63', explain=f's10_r28_b8d3_test_nanBer{p_nan}')
+    [l2_nan.hist],
+    save_dir=save_dir_plots,
+    explain=f"s10_r28_b8d3_test_nanBer{p_nan}",
+)
 
 
-plot_components_vs_time_plotly(np.array(
-    l1.hist), time_step=1e-2, explain='s10_r28_b8d3_train', save_dir='temp_save/lorenz63')
-plot_components_vs_time_plotly(np.array(
-    l2.hist), time_step=1e-2, explain='s10_r28_b8d3_test', save_dir='temp_save/lorenz63')
-plot_components_vs_time_plotly(np.array(
-    l1_nan.hist), time_step=1e-2, explain=f's10_r28_b8d3_train_nanBer{p_nan}', save_dir='temp_save/lorenz63')
-plot_components_vs_time_plotly(np.array(
-    l2_nan.hist), time_step=1e-2, explain=f's10_r28_b8d3_test_nanBer{p_nan}', save_dir='temp_save/lorenz63')
-
+plot_components_vs_time_plotly(
+    np.array(l1.hist),
+    time_step=1e-2,
+    explain="s10_r28_b8d3_train",
+    save_dir=save_dir_plots,
+)
+plot_components_vs_time_plotly(
+    np.array(l2.hist),
+    time_step=1e-2,
+    explain="s10_r28_b8d3_test",
+    save_dir=save_dir_plots,
+)
+plot_components_vs_time_plotly(
+    np.array(l1_nan.hist),
+    time_step=1e-2,
+    explain=f"s10_r28_b8d3_train_nanBer{p_nan}",
+    save_dir=save_dir_plots,
+)
+plot_components_vs_time_plotly(
+    np.array(l2_nan.hist),
+    time_step=1e-2,
+    explain=f"s10_r28_b8d3_test_nanBer{p_nan}",
+    save_dir=save_dir_plots,
+)
 
 
 # store l.hist as pickle data for later use in pytorch dataloader
 def save_pickle(data, path):
     import pickle
-    with open(path, 'wb') as f:
+
+    with open(path, "wb") as f:
         pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
-        print(f'Saved data to {path}')
+        print(f"Saved data to {path}")
 
 
-save_pickle(l1.hist, 'temp_save/lorenz63/dataset_train.pkl')
-save_pickle(l2.hist, 'temp_save/lorenz63/dataset_test.pkl')
-save_pickle(l1_nan.hist, 'temp_save/lorenz63/dataset_train_nanBer{p_nan}.pkl')
-save_pickle(l2_nan.hist, 'temp_save/lorenz63/dataset_test_nanBer{p_nan}.pkl')
+save_pickle(l1.hist, os.path.join(save_dir_data, "dataset_train.pkl"))
+save_pickle(l2.hist, os.path.join(save_dir_data, "dataset_test.pkl"))
+save_pickle(l1_nan.hist, os.path.join(save_dir_data, "dataset_train_nanBer{p_nan}.pkl"))
+save_pickle(l2_nan.hist, os.path.join(save_dir_data, "dataset_test_nanBer{p_nan}.pkl"))
+
+missing_ratios = [0.2, 0.5, 0.7, 0.8]
+
+
+# Do the same for the list of missing data
+for p_nan in missing_ratios:
+    mask = np.random.binomial(1, p_nan, size=(len(l1.hist), 3))
+    l1_nan.hist = np.where(mask[:, 0][:, None], np.nan, l1.hist)
+    mask = np.random.binomial(1, p_nan, size=(len(l2.hist), 3))
+    l2_nan.hist = np.where(mask[:, 0][:, None], np.nan, l2.hist)
+    save_pickle(
+        l1_nan.hist, os.path.join(save_dir_data, f"dataset_train_nanBer{p_nan}.pkl")
+    )
+    save_pickle(
+        l2_nan.hist, os.path.join(save_dir_data, f"dataset_test_nanBer{p_nan}.pkl")
+    )
+    # visuzlie
+    plot_attractor_plotly(
+        [l1_nan.hist],
+        save_dir=save_dir_plots,
+        explain=f"s10_r28_b8d3_train_nanBer{p_nan}",
+    )
+    plot_attractor_plotly(
+        [l2_nan.hist],
+        save_dir=save_dir_plots,
+        explain=f"s10_r28_b8d3_test_nanBer{p_nan}",
+    )
+    plot_attractor_subplots(
+        [l1_nan.hist],
+        save_dir=save_dir_plots,
+        explain=f"s10_r28_b8d3_train_nanBer{p_nan}",
+    )
+    plot_attractor_subplots(
+        [l2_nan.hist],
+        save_dir=save_dir_plots,
+        explain=f"s10_r28_b8d3_test_nanBer{p_nan}",
+    )
+    plot_components_vs_time_plotly(
+        np.array(l1_nan.hist),
+        time_step=1e-2,
+        explain=f"s10_r28_b8d3_train_nanBer{p_nan}",
+        save_dir=save_dir_plots,
+    )
+    plot_components_vs_time_plotly(
+        np.array(l2_nan.hist),
+        time_step=1e-2,
+        explain=f"s10_r28_b8d3_test_nanBer{p_nan}",
+        save_dir=save_dir_plots,
+    )
+
 
 # calculate sampling rate
 sampling_rate = 1 / dt
 
 # Call the function to display the plot
-plot_power_spectrum_plotly(np.array(l1.hist), sampling_rate,
-                           explain='s10_r28_b8d3_train', save_dir='temp_save/lorenz63')
-plot_power_spectrum_plotly(np.array(l2.hist), sampling_rate,
-                           explain='s10_r28_b8d3_test', save_dir='temp_save/lorenz63')
+plot_power_spectrum_plotly(
+    np.array(l1.hist),
+    sampling_rate,
+    explain="s10_r28_b8d3_train",
+    save_dir="temp_save/lorenz63",
+)
+plot_power_spectrum_plotly(
+    np.array(l2.hist),
+    sampling_rate,
+    explain="s10_r28_b8d3_test",
+    save_dir="temp_save/lorenz63",
+)
+
 
 # Call the function to display the plots
 # %%
 # Example usage for original XYZ data
 component_labels_xyz = ["X", "Y", "Z"]
-peaks_train, frequenciest_train, power_spectrum_train = plot_power_spectrum_subplots_loglog(np.array(
-    l1.hist), sampling_rate, 's10_r28_b8d3_train_xyz', component_labels_xyz, save_dir='temp_save/lorenz63')
-peaks_test, frequencies_test, power_spectrum_test = plot_power_spectrum_subplots_loglog(np.array(
-    l2.hist), sampling_rate, 's10_r28_b8d3_train_xyz', component_labels_xyz, save_dir='temp_save/lorenz63')
+peaks_train, frequenciest_train, power_spectrum_train = (
+    plot_power_spectrum_subplots_loglog(
+        np.array(l1.hist),
+        sampling_rate,
+        "s10_r28_b8d3_train_xyz",
+        component_labels_xyz,
+        save_dir="temp_save/lorenz63",
+    )
+)
+peaks_test, frequencies_test, power_spectrum_test = plot_power_spectrum_subplots_loglog(
+    np.array(l2.hist),
+    sampling_rate,
+    "s10_r28_b8d3_train_xyz",
+    component_labels_xyz,
+    save_dir="temp_save/lorenz63",
+)
 
 # Example usage for PCA components
 
@@ -348,37 +515,50 @@ def plot_delay_embedding(observation, delay, dimensions):
     embedding_length = n - (dimensions - 1) * delay
     if embedding_length <= 0:
         raise ValueError(
-            "Delay and dimensions are too large for the length of the observation array.")
+            "Delay and dimensions are too large for the length of the observation array."
+        )
 
     # Create the delay-embedded matrix
     embedded = np.empty((embedding_length, dimensions))
     for i in range(dimensions):
-        embedded[:, i] = observation[i * delay: i * delay + embedding_length]
+        embedded[:, i] = observation[i * delay : i * delay + embedding_length]
 
     # Plotting
     if dimensions == 2:
-        fig = go.Figure(data=go.Scatter(
-            x=embedded[:, 0], y=embedded[:, 1], mode='lines'))
-        fig.update_layout(title='2D Delay Embedding',
-                          xaxis_title='X(t)', yaxis_title='X(t + delay)')
+        fig = go.Figure(
+            data=go.Scatter(x=embedded[:, 0], y=embedded[:, 1], mode="lines")
+        )
+        fig.update_layout(
+            title="2D Delay Embedding", xaxis_title="X(t)", yaxis_title="X(t + delay)"
+        )
     elif dimensions == 3:
-        fig = go.Figure(data=go.Scatter3d(
-            x=embedded[:, 0], y=embedded[:, 1], z=embedded[:, 2], mode='lines'))
-        fig.update_layout(title='3D Delay Embedding', scene=dict(
-            xaxis_title='X(t)', yaxis_title='X(t + delay)', zaxis_title='X(t + 2 * delay)'))
+        fig = go.Figure(
+            data=go.Scatter3d(
+                x=embedded[:, 0], y=embedded[:, 1], z=embedded[:, 2], mode="lines"
+            )
+        )
+        fig.update_layout(
+            title="3D Delay Embedding",
+            scene=dict(
+                xaxis_title="X(t)",
+                yaxis_title="X(t + delay)",
+                zaxis_title="X(t + 2 * delay)",
+            ),
+        )
     else:
         raise NotImplementedError(
-            "Plotting for dimensions higher than 3 is not implemented.")
+            "Plotting for dimensions higher than 3 is not implemented."
+        )
 
     fig.show()
 
 
-# Example usage
-# Assuming you have an array `x` from the Lorenz system:
-x = np.array(l1.hist)[:, 0]
-plot_delay_embedding(x, delay=10, dimensions=3)
+# # Example usage
+# # Assuming you have an array `x` from the Lorenz system:
+# x = np.array(l1.hist)[:, 0]
+# plot_delay_embedding(x, delay=10, dimensions=3)
 
-x_nan = np.array(l1_nan.hist)[:, 0]
-plot_delay_embedding(x_nan, delay=10, dimensions=3)
+# x_nan = np.array(l1_nan.hist)[:, 0]
+# plot_delay_embedding(x_nan, delay=10, dimensions=3)
 
 # %%

@@ -15,6 +15,7 @@ def build_dataloader(cfg, device, sequence_len):
     # Load dataset params for Lorenz63
     data_dir = cfg.get("User", "data_dir")
     x_dim = cfg.getint("Network", "x_dim")
+    dataset_label = cfg.get("DataFrame", "dataset_label", fallback=None)
     shuffle = cfg.getboolean("DataFrame", "shuffle")
     batch_size = cfg.getint("DataFrame", "batch_size")
     num_workers = cfg.getint("DataFrame", "num_workers")
@@ -39,6 +40,7 @@ def build_dataloader(cfg, device, sequence_len):
     # Load dataset
     train_dataset = Lorenz63(
         path_to_data=data_dir,
+        dataset_label=dataset_label,
         split="train",
         seq_len=sequence_len,
         x_dim=x_dim,
@@ -52,6 +54,7 @@ def build_dataloader(cfg, device, sequence_len):
     )
     val_dataset = Lorenz63(
         path_to_data=data_dir,
+        dataset_label=dataset_label,
         split="valid",
         seq_len=sequence_len,
         x_dim=x_dim,
@@ -91,6 +94,7 @@ class Lorenz63(Dataset):
     def __init__(
         self,
         path_to_data,
+        dataset_label,
         split,
         seq_len,
         x_dim,
@@ -113,6 +117,7 @@ class Lorenz63(Dataset):
         """
 
         self.path_to_data = path_to_data
+        self.dataset_label = dataset_label
         self.x_dim = x_dim
         self.seq_len = seq_len
         self.split = split
@@ -126,20 +131,16 @@ class Lorenz63(Dataset):
         self.with_nan = with_nan
 
         # read motion data from pickle file
-        if not with_nan:
+        if self.dataset_label == None:
             if split == "test":
                 filename = "{0}/lorenz63/dataset_test.pkl".format(self.path_to_data)
             else:
                 filename = "{0}/lorenz63/dataset_train.pkl".format(self.path_to_data)
-        else:  # with nan
+        else:
             if split == "test":
-                filename = "{0}/lorenz63/dataset_train_nanBer01.pkl".format(
-                    self.path_to_data
-                )
+                filename = f"{self.path_to_data}/lorenz63/dataset_test_{self.dataset_label}.pkl"
             else:
-                filename = "{0}/lorenz63/dataset_test_nanBer01.pkl".format(
-                    self.path_to_data
-                )
+                filename = f"{self.path_to_data}/lorenz63/dataset_train_{self.dataset_label}.pkl"
 
         with open(filename, "rb") as f:
             the_sequence = np.array(pickle.load(f))
