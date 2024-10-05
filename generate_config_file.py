@@ -48,13 +48,13 @@ def get_configurations_for_model(params):
 
 if __name__ == "__main__":
 
-    experiment_name = "h64_ep20000_esp50_SampMeths_AllRNNs_ActivFunc_0"
+    experiment_name = "h64_ep20000_esp30_nanBer_LASTalphas_SampMeth_SampRatio_NoV_0"
 
     models = [
-        "RNN",
-        "VRNN",
+        # "RNN",
+        # "VRNN",
         "MT_RNN",
-        "MT_VRNN"
+        # "MT_VRNN"
     ]
 
     # Change to dictionary of lists
@@ -65,25 +65,27 @@ if __name__ == "__main__":
     dense_z = [[16, 32]]
 
     dim_rnn = [64]
-    alphas = [[0.00490695, 0.02916397, 0.01453569]]  # , [0.1, 0.01, 0.00267]]
-    activation = ['relu', 'tanh']
+    alphas = [[0.09183, 0.64830, 0.73307]]# [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
+    activation = ['relu']
 
     # Training
     lr = [0.001]
     alpha_lr = [0.01]
     epochs = [20000]
-    early_stop_patience = [50]
-    save_frequency = [50]
+    early_stop_patience = [30]
+    save_frequency = [30]
     gradient_clip = [1]
     optimize_alphas = [True]
     sampling_method = ['ss',
-                       'ptf', 'mtf',
-                       'even_bursts'
+                       'ptf', 
+                    #    'mtf',
                        ]
-    sampling_ratio = [0.8]
+    sampling_ratio = [0.0, 0.2, 0.8]
+    mask_autonomous_filled = [True]
 
     # DataFrame
     dataset_name = ['Lorenz63']
+    dataset_label = ['None', 'nanBer0.2', 'nanBer0.5', 'nanBer0.7']
     s_dim = [1]
     shuffle = [True]
     batch_size = [128]
@@ -111,8 +113,10 @@ if __name__ == "__main__":
             "gradient_clip": gradient_clip,
             "sampling_method": sampling_method,
             "sampling_ratio": sampling_ratio,
+            "mask_autonomous_filled": mask_autonomous_filled,
             # DataFrame
             "dataset_name": dataset_name,
+            "dataset_label": dataset_label,
             "s_dim": s_dim,
             "shuffle": shuffle,
             "batch_size": batch_size,

@@ -6,7 +6,7 @@ cd ~/workspace/research-DVAE
 BASE_DIR=~/workspace/research-DVAE/config/sinusoid/generated
 
 # Define a list of experiment names, each corresponding to a subdirectory under BASE_DIR
-declare -a experiments=("h64_ep20000_esp50_SampMeths_AllRNNs_ActivFunc_0")
+declare -a experiments=("h64_ep20000_esp30_nanBer_LASTalphas_SampMeth_SampRatio_NoV_0")
 # 1" "compare_alphas_&_sampling_methods_2" "compare_alphas_&_sampling_methods_3" "compare_alphas_&_sampling_methods_4" "compare_alphas_&_sampling_methods_5") # Modify this line to include your actual experiment names
 
 # Get the current date in YYYY-MM-DD format

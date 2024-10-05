@@ -75,6 +75,7 @@ class LearningAlgorithm:
         print(f"[Learning Algo] Job ID: {self.job_id}")
         self.model_name = self.cfg.get("Network", "name")
         self.dataset_name = self.cfg.get("DataFrame", "dataset_name")
+        self.dataset_label = self.cfg.get("DataFrame", "dataset_label", fallback="None")
         self.sequence_len = self.cfg.getint("DataFrame", "sequence_len")
         self.shuffle = self.cfg.getboolean("DataFrame", "shuffle")
         self.num_workers = self.cfg.getint("DataFrame", "num_workers")
@@ -193,24 +194,18 @@ class LearningAlgorithm:
         if not self.params["reload"]:
             saved_root = self.cfg.get("User", "saved_root")
             tag = self.cfg.get("Network", "tag")
-
+            filename ="{}_{}_{}_{}_{}_SM{}_SR{}".format(
+                    self.job_id,
+                    self.dataset_name,
+                    self.dataset_label,
+                    self.datetime_str,
+                    tag,
+                    self.sampling_method,
+                    self.sampling_ratio,
+                )
             if self.optimize_alphas:
-                filename = "{}_{}_{}_{}_SM-{}_α-{}".format(
-                    self.job_id,
-                    self.dataset_name,
-                    self.datetime_str,
-                    tag,
-                    self.sampling_method,
-                    self.alphas,
-                )
-            else:
-                filename = "{}_{}_{}_{}_SM-{}".format(
-                    self.job_id,
-                    self.dataset_name,
-                    self.datetime_str,
-                    tag,
-                    self.sampling_method,
-                )
+                compressed_alphas = ",".join(["{:.3f}".format(alpha) for alpha in self.alphas])
+                filename += "_α{}".format(compressed_alphas)
 
             if self.job_id is not None:
                 save_dir = os.path.join(

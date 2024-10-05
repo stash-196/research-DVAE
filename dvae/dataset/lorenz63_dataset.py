@@ -131,7 +131,7 @@ class Lorenz63(Dataset):
         self.with_nan = with_nan
 
         # read motion data from pickle file
-        if self.dataset_label == None:
+        if self.dataset_label == None or self.dataset_label == "None":
             if split == "test":
                 filename = "{0}/lorenz63/dataset_test.pkl".format(self.path_to_data)
             else:
