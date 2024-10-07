@@ -40,16 +40,10 @@ from visualizers import (
 )
 from .dataset import h36m_dataset, speech_dataset, lorenz63_dataset, sinusoid_dataset
 from .model import (
-    build_VAE,
-    build_DKF,
-    build_STORN,
     build_VRNN,
-    build_SRNN,
-    build_RVAE,
-    build_DSAE,
     build_RNN,
     build_MT_RNN,
-    build_MT_VRNN_pp,
+    build_MT_VRNN,
 )
 import subprocess
 
@@ -138,7 +132,7 @@ class LearningAlgorithm:
         elif self.model_name == "MT_RNN":
             self.model = build_MT_RNN(cfg=self.cfg, device=device)
         elif self.model_name == "MT_VRNN":
-            self.model = build_MT_VRNN_pp(cfg=self.cfg, device=device)
+            self.model = build_MT_VRNN(cfg=self.cfg, device=device)
 
     def init_optimizer(self):
         optimization = self.cfg.get("Training", "optimization")
@@ -194,17 +188,19 @@ class LearningAlgorithm:
         if not self.params["reload"]:
             saved_root = self.cfg.get("User", "saved_root")
             tag = self.cfg.get("Network", "tag")
-            filename ="{}_{}_{}_{}_{}_SM{}_SR{}".format(
-                    self.job_id,
-                    self.dataset_name,
-                    self.dataset_label,
-                    self.datetime_str,
-                    tag,
-                    self.sampling_method,
-                    self.sampling_ratio,
-                )
+            filename = "{}_{}_{}_{}_{}_SM{}_SR{}".format(
+                self.job_id,
+                self.dataset_name,
+                self.dataset_label,
+                self.datetime_str,
+                tag,
+                self.sampling_method,
+                self.sampling_ratio,
+            )
             if self.optimize_alphas:
-                compressed_alphas = ",".join(["{:.3f}".format(alpha) for alpha in self.alphas])
+                compressed_alphas = ",".join(
+                    ["{:.3f}".format(alpha) for alpha in self.alphas]
+                )
                 filename += "_α{}".format(compressed_alphas)
 
             if self.job_id is not None:

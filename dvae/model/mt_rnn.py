@@ -24,6 +24,7 @@ from torch import nn
 import torch
 from collections import OrderedDict
 import math
+from dvae.model.base_rnn import BaseRNN
 
 
 def build_MT_RNN(cfg, device="cpu"):
@@ -82,8 +83,7 @@ def inverse_sigmoid(y):
     return -math.log((1 / y) - 1)
 
 
-class MT_RNN(nn.Module):
-
+class MT_RNN(BaseRNN):
     def __init__(
         self,
         alphas,
@@ -98,44 +98,31 @@ class MT_RNN(nn.Module):
         beta=1,
         device="cpu",
     ):
+        super().__init__(
+            x_dim,
+            activation,
+            dense_x,
+            dense_h_x,
+            dim_rnn,
+            num_rnn,
+            type_rnn,
+            dropout_p,
+            device,
+        )
 
-        super().__init__()
-        # General parameters
         self.alphas = alphas
-        self.x_dim = x_dim
-        self.dropout_p = dropout_p
-        self.y_dim = self.x_dim
-        if activation == "relu":
-            self.activation = nn.ReLU()
-        elif activation == "tanh":
-            self.activation = nn.Tanh()
-        else:
-            raise SystemExit("Wrong activation type!")
-        self.device = device
-        # Feature extractor
-        self.dense_x = dense_x
-        # Dense layers
-        self.dense_h_x = dense_h_x
-        # RNN
-        self.dim_rnn = dim_rnn
-        self.num_rnn = num_rnn
-        self.type_rnn = type_rnn
-        # Beta-loss
-        self.beta = beta
-        # # Create an array of alphas for each hidden unit
-        # Convert alphas to sigma using inverse sigmoid
         self.sigmas = nn.Parameter(
             torch.tensor(
-                [inverse_sigmoid(alpha) for alpha in alphas], dtype=torch.float32
+                [self.inverse_sigmoid(alpha) for alpha in alphas], dtype=torch.float32
             ),
             requires_grad=True,
         )
 
-        # self.register_buffer('alphas_per_unit', self.assign_alpha_per_unit())
-        # self.alphas_per_unit = nn.Parameter(self.assign_alpha_per_unit())
+        self.beta = beta
 
-        # Build the model
-        self.build()
+    @staticmethod
+    def inverse_sigmoid(y):
+        return -math.log((1 / y) - 1)
 
     def base_parameters(self):
         return (p for name, p in self.named_parameters() if "sigmas" not in name)
@@ -143,218 +130,26 @@ class MT_RNN(nn.Module):
     def alphas_per_unit(self):
         # Convert sigma to alpha using sigmoid
         alphas = torch.sigmoid(self.sigmas)
-
         # If the number of hidden units is greater than the number of alphas,
         # distribute the alphas evenly among the hidden units.
         if self.dim_rnn > len(alphas):
-            num_repeats = self.dim_rnn // len(alphas)
+            repeats = self.dim_rnn // len(alphas)
             remainder = self.dim_rnn % len(alphas)
-            return torch.cat([alphas] * num_repeats + [alphas[:remainder]])
+            return torch.cat([alphas] * repeats + [alphas[:remainder]])
         else:
             return alphas[: self.dim_rnn]
 
-    def build(self):
-
-        ###########################
-        #### Feature extractor ####
-        ###########################
-        # x
-        dic_layers = OrderedDict()
-        if len(self.dense_x) == 0:
-            dim_feature_x = self.x_dim
-            dic_layers["Identity"] = nn.Identity()
-        else:
-            dim_feature_x = self.dense_x[-1]
-            for n in range(len(self.dense_x)):
-                if n == 0:
-                    dic_layers["linear" + str(n)] = nn.Linear(
-                        self.x_dim, self.dense_x[n]
-                    )
-                else:
-                    dic_layers["linear" + str(n)] = nn.Linear(
-                        self.dense_x[n - 1], self.dense_x[n]
-                    )
-                dic_layers["activation" + str(n)] = self.activation
-                dic_layers["dropout" + str(n)] = nn.Dropout(p=self.dropout_p)
-        self.feature_extractor_x = nn.Sequential(dic_layers)
-
-        ######################
-        #### Dense layers ####
-        ######################
-        # h_t to x_t (Generation x)
-        dic_layers = OrderedDict()
-        if len(self.dense_h_x) == 0:
-            dim_h_x = self.dim_rnn
-            dic_layers["Identity"] = nn.Identity()
-        else:
-            dim_h_x = self.dense_h_x[-1]
-            for n in range(len(self.dense_h_x)):
-                if n == 0:
-                    dic_layers["linear" + str(n)] = nn.Linear(
-                        self.dim_rnn, self.dense_h_x[n]
-                    )
-                else:
-                    dic_layers["linear" + str(n)] = nn.Linear(
-                        self.dense_h_x[n - 1], self.dense_h_x[n]
-                    )
-                dic_layers["activation" + str(n)] = self.activation
-                dic_layers["dropout" + str(n)] = nn.Dropout(p=self.dropout_p)
-        self.mlp_h_x = nn.Sequential(dic_layers)
-        self.gen_out = nn.Linear(dim_h_x, self.y_dim)
-
-        ####################
-        #### Recurrence ####
-        ####################
-        if self.type_rnn == "LSTM":
-            self.rnn = nn.LSTM(dim_feature_x, self.dim_rnn, self.num_rnn)
-        elif self.type_rnn == "RNN":
-            self.rnn = nn.RNN(dim_feature_x, self.dim_rnn, self.num_rnn)
-
-        # # Add the weight initialization here
-        # for name, param in self.rnn.named_parameters():
-        #     if 'weight_ih' in name:
-        #         torch.nn.init.xavier_uniform_(param.data)
-        #     elif 'weight_hh' in name:
-        #         torch.nn.init.orthogonal_(param.data)
-        #     elif 'bias' in name:
-        #         param.data.fill_(0)
-
-    def generation_x(self, h_t):
-        dec_input = h_t
-        dec_output = self.mlp_h_x(dec_input)
-        y_t = self.gen_out(dec_output)
-        return y_t
-
     def recurrence(self, feature_xt, h_t, c_t=None):
-
-        rnn_input = feature_xt
-
         if self.type_rnn == "LSTM":
-            _, (h_tp1, c_tp1) = self.rnn(rnn_input, (h_t, c_t))
+            _, (h_tp1, c_tp1) = self.rnn(feature_xt, (h_t, c_t))
         elif self.type_rnn == "RNN":
-            _, h_tp1 = self.rnn(rnn_input, h_t)
+            _, h_tp1 = self.rnn(feature_xt, h_t)
             c_tp1 = None
-
         h_tp1 = (1 - self.alphas_per_unit()) * h_t + self.alphas_per_unit() * h_tp1
-
         return h_tp1, c_tp1
 
-    def forward(
-        self,
-        x,
-        initialize_states=True,
-        update_states=True,
-        mode_selector=None,
-        inference_mode=False,
-        logger=None,
-        from_instance=None,
-    ):
 
-        # need input:  (seq_len, batch_size, x_dim)
-        seq_len, batch_size, _ = x.shape
-
-        if initialize_states:
-            # create variable holder and send to GPU if needed
-            y = torch.zeros((seq_len, batch_size, self.y_dim)).to(self.device)
-            h = torch.zeros((seq_len, batch_size, self.dim_rnn)).to(self.device)
-            h_t = torch.zeros(self.num_rnn, batch_size, self.dim_rnn).to(self.device)
-            if self.type_rnn == "LSTM":
-                c_t = torch.zeros(self.num_rnn, batch_size, self.dim_rnn).to(
-                    self.device
-                )
-            feature_x = torch.zeros((seq_len, batch_size, self.dense_x[-1])).to(
-                self.device
-            )
-        else:
-            y = self.y
-            h = self.h
-            h_t = self.h_t
-            feature_x = self.feature_x
-            if self.type_rnn == "LSTM":
-                c_t = self.c_t
-
-        # main part
-        # feature_x = self.feature_extractor_x(x)
-        mode_selector = torch.tensor(mode_selector).to(self.device)
-        # x[x.isnan()] = 0.0
-
-        for t in range(seq_len):
-            if mode_selector is not None:
-                if len(mode_selector.shape) == 2:
-                    # Calculate the mix of autonomous and teacher-forced inputs
-                    mode_selector_t = (
-                        mode_selector[t].unsqueeze(-1).unsqueeze(0).float()
-                    )
-                elif len(mode_selector.shape) == 1:
-                    # fill tensor of shape (1, batch_size, x_dim) with value of mode_selector[t]
-                    mode_selector_t = (
-                        mode_selector[t].item()
-                        * torch.ones(1, batch_size, self.x_dim).to(self.device).float()
-                    )
-
-            else:
-                # Default to full teacher forcing if mode_selector is not provided, shape (1, batch_size, x_dim)
-                mode_selector_t = (
-                    torch.zeros(1, batch_size, self.x_dim).to(self.device).float()
-                )
-
-            input_t = x[t, :, :].unsqueeze(0)
-            assert input_t.shape == mode_selector_t.shape
-            # create nan mask for the input
-            if input_t.isnan().any():
-                if t == 0:  # Replace NaNs with 0.0 at time step 0
-                    # if True:
-                    input_t = torch.where(
-                        input_t.isnan(),
-                        torch.tensor(0.0, device=input_t.device, dtype=input_t.dtype),
-                        input_t,
-                    )
-                else:  # Replace NaNs with y_t at time steps t > 0
-                    input_t = torch.where(input_t.isnan(), y_t, input_t)
-
-            if t == 0:
-                feature_xt = self.feature_extractor_x(input_t)
-            else:
-                assert mode_selector_t.shape == y_t.shape == input_t.shape
-                input_t = mode_selector_t * y_t + (1 - mode_selector_t) * input_t
-                # Mix the features based on the ratio
-                feature_xt = self.feature_extractor_x(input_t)
-
-            # check if shape of feature_xt is correct
-            assert feature_xt.shape == (1.0, batch_size, self.dense_x[-1])
-
-            h_t_last = h_t.view(self.num_rnn, 1, batch_size, self.dim_rnn)[-1, :, :, :]
-            y_t = self.generation_x(h_t_last)
-            y[t, :, :] = torch.squeeze(y_t, 0)
-            h[t, :, :] = torch.squeeze(h_t_last, 0)
-            feature_x[t, :, :] = torch.squeeze(feature_xt, 0)
-
-            if self.type_rnn == "LSTM":
-                h_t, c_t = self.recurrence(feature_xt, h_t, c_t)  # recurrence for t+1
-            elif self.type_rnn == "RNN":
-                h_t, _ = self.recurrence(feature_xt, h_t)
-
-        # save states
-        self.y = y
-        self.h = h
-        self.feature_x = feature_x
-        self.h_t = h_t
-        if self.type_rnn == "LSTM":
-            self.c_t = c_t
-
-        return y
-
-    def get_info(self):
-
-        info = []
-        info.append("----- Feature extractor -----")
-        for layer in self.feature_extractor_x:
-            info.append(str(layer))
-        info.append("----- Generation x -----")
-        for layer in self.mlp_h_x:
-            info.append(str(layer))
-        info.append(str(self.gen_out))
-        info.append("----- Recurrence -----")
-        info.append(str(self.rnn))
-
-        return info
+# feature_xt.shape
+# torch.Size([1, 128, 100])
+# h_t.shape
+# torch.Size([1, 128, 64])

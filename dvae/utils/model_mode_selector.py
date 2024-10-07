@@ -85,3 +85,38 @@ def create_autonomous_mode_selector(
         raise ValueError("Invalid mode selected.")
 
     return mode_selector
+
+
+import torch
+
+
+def prepare_mode_selector(mode_selector, seq_len, batch_size, x_dim, device):
+    if mode_selector is not None:
+        if not torch.is_tensor(mode_selector):
+            mode_selector = torch.tensor(mode_selector, device=device)
+        else:
+            mode_selector = mode_selector.to(device)
+    else:
+        mode_selector = torch.zeros(seq_len, device=device)
+
+    if mode_selector.dim() == 0:
+        # Scalar mode_selector, expand to (seq_len, batch_size, x_dim)
+        mode_selector = (
+            mode_selector.view(1, 1, 1).expand(seq_len, batch_size, x_dim).float()
+        )
+    elif mode_selector.dim() == 1:
+        # mode_selector of shape (seq_len,)
+        mode_selector = (
+            mode_selector.view(seq_len, 1, 1).expand(seq_len, batch_size, x_dim).float()
+        )
+    elif mode_selector.dim() == 2:
+        # mode_selector of shape (seq_len, batch_size)
+        mode_selector = (
+            mode_selector.view(seq_len, batch_size, 1)
+            .expand(seq_len, batch_size, x_dim)
+            .float()
+        )
+    else:
+        raise ValueError(f"Unsupported mode_selector shape: {mode_selector.shape}")
+
+    return mode_selector
