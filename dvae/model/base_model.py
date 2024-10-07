@@ -71,12 +71,24 @@ class BaseModel(nn.Module):
 
         return mode_selector
 
-    def handle_nans(self, input_t, y_t, t):
+    def impute_inputs_nans_with_output(self, input_t, y_t, t):
         if input_t.isnan().any():
             if t == 0:
-                input_t = torch.where(
+                imputed_input_t = torch.where(
                     input_t.isnan(), torch.zeros_like(input_t), input_t
                 )
             else:
-                input_t = torch.where(input_t.isnan(), y_t, input_t)
+                imputed_input_t = torch.where(input_t.isnan(), y_t, input_t)
+            return imputed_input_t
         return input_t
+
+    def mix_inputs_with_outputs(self, input_t, y_t, mode_selector_t, t):
+        """
+        Mixes the inputs based on the mode_selector.
+        Handles the case when t == 0 internally.
+        """
+        if t == 0:
+            return input_t
+        else:
+            mixed_input = mode_selector_t * y_t + (1 - mode_selector_t) * input_t
+            return mixed_input

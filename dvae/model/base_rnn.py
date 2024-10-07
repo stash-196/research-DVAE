@@ -108,15 +108,17 @@ class BaseRNN(BaseModel):
             input_t = x[t, :, :]  # Shape: (batch_size, x_dim)
             mode_selector_t = mode_selector[t, :, :]  # Shape: (batch_size, x_dim)
 
-            # Handle NaNs
-            input_t = self.handle_nans(input_t, y_t if t > 0 else None, t)
+            # Impute NaNs with previous output
+            imputed_input_t = self.impute_inputs_nans_with_output(
+                input_t, y_t if t > 0 else None, t
+            )
 
-            # Mix inputs based on mode_selector
-            if t == 0:
-                feature_xt = self.feature_extractor_x(input_t)
-            else:
-                input_t = mode_selector_t * y_t + (1 - mode_selector_t) * input_t
-                feature_xt = self.feature_extractor_x(input_t)
+            # Mix inputs based on mode_selector and extract features
+            mixed_input_t = self.mix_inputs_with_outputs(
+                imputed_input_t, y_t if t > 0 else None, mode_selector_t, t
+            )
+
+            feature_xt = self.feature_extractor_x(mixed_input_t)
 
             # Proceed with model-specific methods
             h_t_last = h_t[-1]  # Shape: (batch_size, dim_rnn)
