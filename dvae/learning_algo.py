@@ -188,11 +188,9 @@ class LearningAlgorithm:
         if not self.params["reload"]:
             saved_root = self.cfg.get("User", "saved_root")
             tag = self.cfg.get("Network", "tag")
-            filename = "{}_{}_{}_{}_{}_SM{}_SR{}".format(
-                self.job_id,
+            filename = "{}_{}_{}_{}_{}".format(
                 self.dataset_name,
                 self.dataset_label,
-                self.datetime_str,
                 tag,
                 self.sampling_method,
                 self.sampling_ratio,
@@ -202,6 +200,12 @@ class LearningAlgorithm:
                     ["{:.3f}".format(alpha) for alpha in self.alphas]
                 )
                 filename += "_α{}".format(compressed_alphas)
+
+            # add job_id to the filename
+            filename += "_{}_{}".format(
+                self.job_id,
+                self.datetime_str,
+            )
 
             if self.job_id is not None:
                 save_dir = os.path.join(
