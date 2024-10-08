@@ -486,12 +486,13 @@ class LearningAlgorithm:
                         recon_batch_data_masked = (
                             teacher_forcing_timepoints_mask * recon_batch_data
                         )
+                        # Check that mask (==0.0 values) is identical
+                        unmatched_mask = (batch_data_masked == 0) != (
+                            recon_batch_data_masked == 0
+                        )
                         assert ~(
-                            (
-                                (batch_data_masked == 0)
-                                != (recon_batch_data_masked == 0)
-                            ).any()
-                        )  # Check that mask (==0.0 values) is identical
+                            unmatched_mask.any()
+                        ), f"[Learning Algo][epoch{epoch}][train] Mask (==0.0 values) is not identical. {unmatched_mask.sum()} mismatches"
                         # Log percentage of masked data in loss
                         logger.info(
                             f"[Learning Algo][epoch{epoch}][train] Percentage of un-masked data in loss: {teacher_forcing_timepoints_mask.mean()}"
@@ -662,12 +663,15 @@ class LearningAlgorithm:
                         recon_batch_data_masked = (
                             teacher_forcing_timepoints_mask * recon_batch_data
                         )
+
+                        # Check that mask (==0.0 values) is identical
+                        unmatched_mask = (batch_data_masked == 0) != (
+                            recon_batch_data_masked == 0
+                        )
                         assert ~(
-                            (
-                                (batch_data_masked == 0)
-                                != (recon_batch_data_masked == 0)
-                            ).any()
-                        )  # Check that mask (==0.0 values) is identical
+                            unmatched_mask.any()
+                        ), f"[Learning Algo][epoch{epoch}][train] Mask (==0.0 values) is not identical. {unmatched_mask.sum()} mismatches"
+
                         # Log percentage of masked data in loss
                         logger.info(
                             f"[Learning Algo][epoch{epoch}][val] Percentage of un-masked data in loss: {teacher_forcing_timepoints_mask.mean()}"
@@ -1023,14 +1027,14 @@ class LearningAlgorithm:
                     name_values=current_named_params,
                     explain="epoch_{}".format(epoch),
                     save_path=os.path.join(
-                        save_figures_dir, "params_and_grads", "model_parameters"
+                        save_figures_dir, "params_and_grads", "model_parameters_matrix"
                     ),
                 )
                 visualize_combined_parameters(
                     name_values=current_named_params,
                     explain="epoch_{}".format(epoch),
                     save_path=os.path.join(
-                        save_figures_dir, "params_and_grads", "model_parameters"
+                        save_figures_dir, "params_and_grads", "model_parameters_line"
                     ),
                     matrix_or_line="line",
                 )
@@ -1039,7 +1043,7 @@ class LearningAlgorithm:
                     name_values=current_named_params_grad,
                     explain="epoch_{}_gradients".format(epoch),
                     save_path=os.path.join(
-                        save_figures_dir, "params_and_grads", "model_gradients"
+                        save_figures_dir, "params_and_grads", "model_gradients_matrix"
                     ),
                     showing_gradient=True,
                     gradient_clip_value=self.gradient_clip,
@@ -1048,7 +1052,7 @@ class LearningAlgorithm:
                     name_values=current_named_params_grad,
                     explain="epoch_{}_gradients".format(epoch),
                     save_path=os.path.join(
-                        save_figures_dir, "params_and_grads", "model_gradients"
+                        save_figures_dir, "params_and_grads", "model_gradients_line"
                     ),
                     matrix_or_line="line",
                     showing_gradient=True,
@@ -1060,7 +1064,7 @@ class LearningAlgorithm:
                         name_values=clipped_named_params_grad,
                         explain="epoch_{}_clipped_gradients".format(epoch),
                         save_path=os.path.join(
-                            save_figures_dir, "params_and_grads", "model_gradients"
+                            save_figures_dir, "params_and_grads", "model_gradients_line"
                         ),
                         matrix_or_line="line",
                         showing_gradient=True,

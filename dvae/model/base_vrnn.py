@@ -85,8 +85,11 @@ class BaseVRNN(BaseModel):
 
     def generation_x(self, feature_zt, h_t):
         dec_input = torch.cat((feature_zt, h_t), -1)
+        assert torch.isnan(dec_input).sum() == 0, "NaNs in dec_input"
         dec_output = self.mlp_hz_x(dec_input)
+        assert torch.isnan(dec_output).sum() == 0, "NaNs in dec_output"
         y_t = self.gen_out(dec_output)
+        assert torch.isnan(y_t).sum() == 0, "NaNs in gen_out"
         return y_t
 
     # Generate the Prior Distribution of z
@@ -193,6 +196,9 @@ class BaseVRNN(BaseModel):
 
             # Generation
             y_t = self.generation_x(feature_zt, h_t_last)
+            assert (
+                torch.isnan(y_t).sum() == 0
+            ), f"NaNs in y_t at t={t}, {torch.isnan(y_t).sum()} NaNs"
             y[t, :, :] = y_t
             feature_x[t, :, :] = feature_xt
             h[t, :, :] = h_t_last
