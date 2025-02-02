@@ -9,8 +9,6 @@ from sklearn.manifold import (
 )
 from sklearn.decomposition import PCA, FastICA, NMF, KernelPCA
 from mpl_toolkits.mplot3d import Axes3D
-from sklearn.manifold import TSNE
-from sklearn.decomposition import PCA
 import time
 import torch
 from dvae.utils import create_autonomous_mode_selector, power_spectrum_error
@@ -21,6 +19,8 @@ import matplotlib.pyplot as plt
 import matplotlib
 
 matplotlib.use("Agg")  # Set the backend to 'Agg' to avoid GUI issues
+
+plt.rcParams["font.family"] = "Times New Roman"
 
 
 def visualize_model_parameters(model, explain, save_path=None, fixed_scale=None):
@@ -459,13 +459,16 @@ def visualize_embedding_space(
     Args:
     - states_list: List of states numpy arrays.
     - save_dir: Directory to save the plots.
-    - variable_name_list: List of names for each variable corresponding to states.
+    - variable_name: Name of the variable corresponding to states.
+    - condition_names: List of condition names for each set of states.
     - explain: Explanation text to add to the plot title.
-    - technique: Dimensionality reduction technique to use.
+    - technique: Dimensionality reduction technique.
     - rotation_speed: Degrees to rotate for each frame of the animation.
     - total_rotation: Total degrees of rotation.
-    - base_color_list: List of base colors for each subplot.
+    - base_colors: List of base colors for each subplot.
     """
+
+    font_scale = 1
     num_plots = len(states_list)
     fig = plt.figure(figsize=(10, 10 * num_plots))
 
@@ -474,6 +477,8 @@ def visualize_embedding_space(
     ):
         ax = fig.add_subplot(num_plots, 1, i + 1, projection="3d")
         reduced_embeddings = reduce_dimensions(states.cpu(), technique=technique)
+        if reduced_embeddings is None:
+            continue  # Skip this iteration if dimensionality reduction failed
         zs = reduced_embeddings[:, 2]
         cmap = plt.get_cmap(base_color)
         z_min, z_max = zs.min(), zs.max()
@@ -487,25 +492,28 @@ def visualize_embedding_space(
             color_value = (z.mean() - z_min) / (z_max - z_min)
             ax.plot(x, y, z, color=cmap(color_value))
 
-        ax.set_xlabel("Component 1")
-        ax.set_ylabel("Component 2")
-        ax.set_zlabel("Component 3")
+        # Set larger font sizes for axis labels
+        ax.set_xlabel("Component 1", fontsize=14 * font_scale)
+        ax.set_ylabel("Component 2", fontsize=14 * font_scale)
+        ax.set_zlabel("Component 3", fontsize=14 * font_scale)
         ax.set_title(
-            f"Trajectory of {variable_name.capitalize()} {condition_name.capitalize()} in {explain} {technique} space",
-            fontsize=16,
+            f"Trajectory of {variable_name.capitalize()} {condition_name.capitalize()} in {explain} {technique.upper()} space",
+            fontsize=16 * font_scale,
         )
+        # Adjust tick label font sizes
+        ax.tick_params(axis="both", which="major", labelsize=12 * font_scale)
 
     def update(frame):
         for ax in fig.axes:
             ax.view_init(30, frame)
-        return (fig,)
+        return fig.axes
 
     anim = FuncAnimation(
         fig,
         update,
         frames=np.arange(0, total_rotation, rotation_speed),
         interval=200,
-        blit=True,
+        blit=False,
     )
 
     # Create save directory if it doesn't exist
@@ -629,13 +637,18 @@ def visualize_delay_embedding(
         color_value = (z.mean() - z_min) / (z_max - z_min)
         ax.plot(x, y, z, color=cmap(color_value))
 
-    ax.set_xlabel("X(t)")
-    ax.set_ylabel("X(t + delay)")
-    ax.set_zlabel("X(t + 2 * delay)")
+    font_scale = 3
+
+    # ax.set_xlabel("X(t)", fontsize=16 * font_scale)
+    # ax.set_ylabel("X(t + delay)", fontsize=16 * font_scale)
+    # ax.set_zlabel("X(t + 2 * delay)", fontsize=16 * font_scale)
     title = (
         f"Delay Embedding of {variable_name.capitalize()} {explain} (Delay: {delay})"
     )
-    plt.title(title, fontsize=16)
+    # plt.title(title, fontsize=16 * font_scale)
+
+    # Adjust tick label font sizes
+    ax.tick_params(axis="both", which="major", labelsize=12 * font_scale)
 
     def update(frame):
         ax.view_init(30, frame)
