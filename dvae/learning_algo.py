@@ -38,7 +38,13 @@ from visualizers import (
     visualize_sigma_history,
     visualize_alpha_history,
 )
-from .dataset import h36m_dataset, speech_dataset, lorenz63_dataset, sinusoid_dataset
+from .dataset import (
+    h36m_dataset,
+    speech_dataset,
+    lorenz63_dataset,
+    sinusoid_dataset,
+    xhro_dataset,
+)
 from .model import (
     build_VRNN,
     build_RNN,
@@ -255,6 +261,10 @@ class LearningAlgorithm:
                 )
             elif self.dataset_name == "Sinusoid":
                 return sinusoid_dataset.build_dataloader(
+                    self.cfg, self.device, sequence_len
+                )
+            elif self.dataset_name == "Xhro":
+                return xhro_dataset.build_dataloader(
                     self.cfg, self.device, sequence_len
                 )
             else:

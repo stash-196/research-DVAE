@@ -303,7 +303,7 @@ if not os.path.exists(save_dir_data):
 sigma = 10
 rho = 28
 beta = 8 / 3
-N = 15 * 60 * 24 * 5
+N = 15 * 60 * 24 * 5  # 5 days worth of data of frequency 15Hz
 dt = 1e-2
 l1 = L63(sigma, rho, beta, init=[1, 10, 20], dt=1e-2)
 l2 = L63(sigma, rho, beta, init=[10, 1, 2], dt=1e-2)
@@ -400,7 +400,23 @@ save_pickle(l2.hist, os.path.join(save_dir_data, "dataset_test.pkl"))
 save_pickle(l1_nan.hist, os.path.join(save_dir_data, "dataset_train_nanBer{p_nan}.pkl"))
 save_pickle(l2_nan.hist, os.path.join(save_dir_data, "dataset_test_nanBer{p_nan}.pkl"))
 
-missing_ratios = [0.2, 0.5, 0.7, 0.8]
+missing_ratios = [
+    0.0,
+    0.1,
+    0.2,
+    0.3,
+    0.4,
+    0.5,
+    0.6,
+    0.7,
+    0.8,
+    0.85,
+    0.9,
+    0.92,
+    0.95,
+    0.99,
+    1.0,
+]
 
 
 # Do the same for the list of missing data
