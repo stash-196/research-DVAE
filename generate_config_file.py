@@ -48,7 +48,8 @@ def get_configurations_for_model(params):
 
 if __name__ == "__main__":
 
-    experiment_name = "h64_ep20000_esp30_nanBer_LASTalphas_SampMeth_SampRatio_NoV_0"
+    # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
+    experiment_name = "test-gpu"
 
     models = [
         # "RNN",
@@ -65,27 +66,56 @@ if __name__ == "__main__":
     dense_z = [[16, 32]]
 
     dim_rnn = [64]
-    alphas = [[0.09183, 0.64830, 0.73307]]# [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
+    alphas = [ 
+        # [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        [0.1]
+    ]
+    # [0.09183, 0.64830, 0.73307]]# [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
     activation = ['relu']
 
     # Training
     lr = [0.001]
     alpha_lr = [0.01]
     epochs = [20000]
-    early_stop_patience = [30]
-    save_frequency = [30]
+    early_stop_patience = [50]
+    save_frequency = [100]
     gradient_clip = [1]
     optimize_alphas = [True]
-    sampling_method = ['ss',
-                       'ptf', 
-                    #    'mtf',
+    sampling_method = [
+        # 'ss',
+        'ptf', 
+        # 'mtf',
                        ]
-    sampling_ratio = [0.0, 0.2, 0.8]
+    sampling_ratio = [
+        # 0.0, 0.001, 0.003, 0.01, 0.03, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99, 1.0
+        0.0,
+        0.2,
+        0.8
+    ]
     mask_autonomous_filled = [True]
 
     # DataFrame
     dataset_name = ['Lorenz63']
-    dataset_label = ['None', 'nanBer0.2', 'nanBer0.5', 'nanBer0.7']
+    dataset_label = [
+        # 'None',
+        'nanBer0.0',
+        # 'nanBer0.1',
+        # 'nanBer0.2',
+        # 'nanBer0.3',
+        # 'nanBer0.4',
+        # 'nanBer0.5',
+        # 'nanBer0.6',
+        # 'nanBer0.7',
+        # 'nanBer0.8',
+        # 'nanBer0.85',
+        # 'nanBer0.9',
+        # 'nanBer0.92',
+        # 'nanBer0.95',
+        # 'nanBer0.99',
+        # 'nanBer1.0',
+        # 'nanBer0.5',
+        # 'nanBer0.7'
+        ]
     s_dim = [1]
     shuffle = [True]
     batch_size = [128]

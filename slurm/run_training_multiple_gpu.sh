@@ -1,10 +1,12 @@
 #!/bin/bash
 
+cd ~/workspace/research-DVAE
+
 # Base directory where the configurations are stored
 BASE_DIR=~/workspace/research-DVAE/config/sinusoid/generated
 
 # Define a list of experiment names, each corresponding to a subdirectory under BASE_DIR
-declare -a experiments=("h180_ep500_SampMeths_Vrnns_2")
+declare -a experiments=("test-gpu")
 
 # Get the current date in YYYY-MM-DD format
 today=$(date +%Y-%m-%d)
@@ -38,7 +40,7 @@ for experiment in "${experiments[@]}"; do
         UNIQUE_ID=$(uuidgen)
 
         # Create a temporary SLURM script for this configuration
-        cat > "temp/run_training_gpu_${CONFIG_BASENAME}.slurm" <<EOL
+        cat > "slurm/temp/run_training_gpu_${CONFIG_BASENAME}.slurm" <<EOL
 #!/bin/bash
 
 #SBATCH --job-name=gpu_${CONFIG_BASENAME}_training  # Job name based on config file
@@ -47,14 +49,14 @@ for experiment in "${experiments[@]}"; do
 #SBATCH --cpus-per-task=8                          # Number of CPU cores per task
 #SBATCH --gres=gpu:2                                # Number of GPUs per task
 #SBATCH --mem=16G                                  # Total memory limit
-#SBATCH --time=1-00:00:00                           # Time limit hrs:min:sec
+#SBATCH --time=3-00:00:00                           # Time limit hrs:min:sec
 #SBATCH --output=${LOG_DIR}/%j_gpu_training_${CONFIG_BASENAME}.log  # Standard output log
 #SBATCH --error=${LOG_DIR}/%j_gpu_training_${CONFIG_BASENAME}.err   # Standard error log
 #SBATCH --partition=gpu                             # Specify the GPU partition
 
 # Print the time, hostname, and job ID
-echo "[slurm] Time BEGIN: \$(date)"
-echo "[slurm] Running on host: \$(hostname)"
+echo "[slurm] Time BEGIN: \`date\`"
+echo "[slurm] Running on host: \`hostname\`"
 echo "[slurm] Under SLURM JobID: \$SLURM_JOBID"
 
 # Singularity sif file location
@@ -88,7 +90,7 @@ EOL
 
         # Submit the temporary SLURM script to the queue
         echo "[bash] Submitting $experiment / run_training_gpu_$CONFIG_BASENAME.slurm"
-        sbatch "temp/run_training_gpu_$CONFIG_BASENAME.slurm"
+        sbatch "slurm/temp/run_training_gpu_$CONFIG_BASENAME.slurm"
 
         # Optionally, remove the temporary SLURM script after submission
         # rm "temp/run_training_gpu_$CONFIG_BASENAME.slurm"

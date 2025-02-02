@@ -6,7 +6,7 @@ cd ~/workspace/research-DVAE
 BASE_DIR=~/workspace/research-DVAE/config/sinusoid/generated
 
 # Define a list of experiment names, each corresponding to a subdirectory under BASE_DIR
-declare -a experiments=("h64_ep20000_esp30_nanBer_LASTalphas_SampMeth_SampRatio_NoV_0")
+declare -a experiments=("ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios")
 # 1" "compare_alphas_&_sampling_methods_2" "compare_alphas_&_sampling_methods_3" "compare_alphas_&_sampling_methods_4" "compare_alphas_&_sampling_methods_5") # Modify this line to include your actual experiment names
 
 # Get the current date in YYYY-MM-DD format
@@ -31,8 +31,6 @@ mkdir -p "$LOG_DIR"
 # Loop over each experiment name to process its configuration files
 for experiment in "${experiments[@]}"; do
     CONFIG_DIR="$BASE_DIR/$experiment"
-
-
 
     # Use the find command to locate .ini files and iterate over them
     find "$CONFIG_DIR" -name "*.ini" | while read CONFIG_FILE; do
