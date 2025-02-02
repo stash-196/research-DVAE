@@ -137,14 +137,44 @@ class Xhro(Dataset):
         )
         the_sequence = np.load(filename, allow_pickle=True)
 
+        if self.split == "test":  # use the latter half of the data for testing
+            the_sequence = the_sequence[the_sequence.shape[0] // 2 :]
+        else:
+            the_sequence = the_sequence[: the_sequence.shape[0] // 2]
+
         # Store the full sequence before applying any observation process
         self.full_sequence = the_sequence
 
         # Process the sequence based on the observation process
         the_sequence = self.apply_observation_process(the_sequence)
 
-        # Process the sequence based on the observation process
-        the_sequence = self.apply_observation_process(the_sequence)
+        # Generate sequences with or without overlap
+        if self.overlap:
+            the_sequence = self.create_moving_window_sequences(
+                the_sequence, self.seq_len
+            )
+        else:
+            total_frames = the_sequence.shape[0]
+            num_sequences = total_frames // self.seq_len  # Number of sequences
+            the_sequence = the_sequence[
+                : num_sequences * self.seq_len
+            ]  # Trim data to fit sequences
+            the_sequence = the_sequence.reshape(num_sequences, self.seq_len, -1)
+
+        self.seq = torch.from_numpy(the_sequence).float()
+
+        # Split dataset into training and validation indices
+        num_sequences = self.seq.shape[0]
+        all_indices = np.arange(num_sequences)
+        train_indices, validation_indices = self.split_dataset(
+            all_indices, self.val_indices
+        )
+
+        # Select appropriate indices based on the split
+        if self.split == "train":
+            self.data_idx = train_indices
+        else:
+            self.data_idx = validation_indices
 
     def apply_observation_process(self, sequence):
         """
@@ -171,3 +201,60 @@ class Xhro(Dataset):
         std = np.nanstd(data, axis=0)
         data = (data - mean) / std
         return data
+
+    @staticmethod
+    def create_moving_window_sequences(sequence, window_size):
+        """
+        Converts a time series into a 3D array of overlapping sequences.
+        """
+        num_samples = sequence.shape[0]
+        stride = sequence.strides[0]
+        num_sequences = num_samples - window_size + 1
+        shape = (num_sequences, window_size, sequence.shape[1])
+        strides = (stride, stride, sequence.strides[1])
+        return np.lib.stride_tricks.as_strided(sequence, shape=shape, strides=strides)
+
+    def split_dataset(self, indices, val_ratio):
+        """
+        Splits the dataset indices into training and validation sets.
+        """
+        if self.shuffle:
+            np.random.shuffle(indices)
+        split_point = int(len(indices) * (1 - val_ratio))
+        return indices[:split_point], indices[split_point:]
+
+    def __len__(self):
+        return len(self.data_idx)
+
+    def __getitem__(self, index):
+        idx = self.data_idx[index]
+        sequence = self.seq[idx]
+        return sequence
+
+    def update_sequence_length(self, new_seq_len):
+        self.seq_len = new_seq_len
+        # Regenerate sequences with the new sequence length
+        if self.overlap:
+            the_sequence = self.create_moving_window_sequences(
+                self.full_sequence, self.seq_len
+            )
+        else:
+            total_frames = self.full_sequence.shape[0]
+            num_sequences = total_frames // self.seq_len
+            the_sequence = self.full_sequence[: num_sequences * self.seq_len]
+            the_sequence = the_sequence.reshape(num_sequences, self.seq_len, -1)
+
+        self.seq = torch.from_numpy(the_sequence).float()
+
+        # Update data indices
+        num_sequences = self.seq.shape[0]
+        all_indices = np.arange(num_sequences)
+        train_indices, validation_indices = self.split_dataset(
+            all_indices, self.val_indices
+        )
+
+        # Select appropriate indices based on the split
+        if self.split == "train":
+            self.data_idx = train_indices
+        else:
+            self.data_idx = validation_indices
