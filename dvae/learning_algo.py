@@ -98,6 +98,7 @@ class LearningAlgorithm:
 
         # Load model parameters
         self.use_cuda = self.cfg.getboolean("Training", "use_cuda")
+        print(f"cuda.is_available: {torch.cuda.is_available()}, use_torch: {self.use_cuda}")
         if torch.cuda.is_available() and self.use_cuda:
             self.device = "cuda"
         elif torch.backends.mps.is_available():
