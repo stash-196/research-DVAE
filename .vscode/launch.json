@@ -1,0 +1,78 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File (Local)",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            // "pythonPath": "/Users/stashtomonaga/opt/miniconda3/envs/research-DVAE/bin/python -Xfrozen_modules=off",
+            "pythonArgs": [
+                "-Xfrozen_modules=off"
+            ],
+            "args": [
+            ]
+        },
+        {
+            "name": "Python: eval.py (Local)",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            // "pythonPath": "/Users/stashtomonaga/opt/miniconda3/envs/research-DVAE/bin/python -Xfrozen_modules=off",
+            "pythonArgs": [
+                "-Xfrozen_modules=off"
+            ],
+            "args": [
+                // "--saved_dict", "/Users/stashtomonaga/workspace/research-DVAE/saved_model/2024-07-08/d-1e-4_x1_h27_ep10000_esp50_SampRat07_SampMeths_RNNs_0/40137521_Lorenz63_2024-07-08-17:20:08_RNN_SM-ss/RNN_final_epoch9995.pt",
+                // "--saved_dict", "/Users/stashtomonaga/workspace/research-DVAE/saved_model/2024-08-15/h64_ep20000_esp50_SampMeths_AllRNNs_ActivFunc_0/41206769_Lorenz63_2024-08-15-15:38:55_MT_RNN_SM-ptf_α-[0.00490695, 0.02916397, 0.01453569]/MT_RNN_final_epoch9864.pt",
+                // "--saved_dict", "/Users/stashtomonaga/workspace/research-DVAE/saved_model/2024-08-15/h64_ep20000_esp50_SampMeths_AllRNNs_ActivFunc_0/41206784_Lorenz63_2024-08-15-15:38:51_MT_RNN_SM-ss_α-[0.00490695, 0.02916397, 0.01453569]/MT_RNN_final_epoch11046.pt",
+                // "--saved_dict", "/Users/stashtomonaga/workspace/research-DVAE/saved_model/2024-10-06/h27_ep2000_SampMeths_RNNs_0/181ace0b_Lorenz63_nanBer0.2_2024-10-06-00:10:49_MT_RNN_SMss_SR0.8_α0.005,0.029,0.015/MT_RNN_final_epoch2.pt",
+                // "--saved_dict", "/Users/stashtomonaga/workspace/research-DVAE/saved_model/2024-12-06/41206769_Lorenz63_2024-08-15-15:38:55_MT_RNN_SM-ptf_α-[0.00490695, 0.02916397, 0.01453569]/MT_RNN_final_epoch9864.pt",
+                "--saved_dict", "/Users/stashtomonaga/workspace/research-DVAE/saved_model/2024-12-06/41206784_Lorenz63_2024-08-15-15:38:51_MT_RNN_SM-ss_α-[0.00490695, 0.02916397, 0.01453569]/MT_RNN_final_epoch11046.pt",
+
+            ]
+        },
+        {
+            "name": "Python: train.py (Local)",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            // "pythonPath": "/Users/stashtomonaga/opt/miniconda3/envs/research-DVAE/bin/python -Xfrozen_modules=off",
+            "pythonArgs": [
+                "-Xfrozen_modules=off"
+            ],
+            "args": [
+                // "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/saved_model/2024-09-18/h27_ep2000_SampMeths_RNNs_0/c9b35073_Lorenz63_2024-09-18-17:05:35_MT_RNN_SM-ss_α-[0.00490695, 0.02916397, 0.01453569]/config.ini"
+                // "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/sinusoid/generated/debug_test/cfg_debug_test_RNN.ini",
+                "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/sinusoid/cfg_mt_rnn.ini",
+
+
+
+            ]
+        },
+        {
+            "name": "Python: aggregate_and_visualize.py (Local)",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "pythonArgs": [
+                "-Xfrozen_modules=off"
+            ],
+            "args": [
+                // "--exp_dir", "/Users/stashtomonaga/workspace/research-DVAE/saved_model/2024-05-15/h180_ep500_SampMeths_αs_0",
+                "--exp_dir", "/Users/stashtomonaga/workspace/research-DVAE/saved_model/2024-06-27/h27_ep500_SampMeths_RNNs_0"
+            ]
+        },
+    ]
+}

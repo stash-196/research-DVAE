@@ -1,0 +1,10 @@
+{
+    "python.analysis.autoFormatStrings": true,
+    "editor.defaultFormatter": "ms-python.black-formatter",
+    "editor.codeActionsOnSave": {
+
+    },
+    "editor.formatOnSave": true,
+    "notebook.defaultFormatter": "ms-python.black-formatter",
+    "files.autoSave": "onFocusChange"
+}
