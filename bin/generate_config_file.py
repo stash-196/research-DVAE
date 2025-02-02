@@ -9,8 +9,10 @@ class DefaultDict(defaultdict):
         return self.default_factory()
 
 
-def generate_config_file(base_template, output_dir, experiment_name, testing_keys, config):
-    config['test_keys'] = keys_being_compared
+def generate_config_file(
+    base_template, output_dir, experiment_name, testing_keys, config
+):
+    config["test_keys"] = keys_being_compared
 
     # Ensure the output directory exists
     os.makedirs(output_dir, exist_ok=True)
@@ -18,23 +20,23 @@ def generate_config_file(base_template, output_dir, experiment_name, testing_key
     # Convert list values to comma-separated strings
     for key, value in config.items():
         if isinstance(value, list):
-            config[key] = ', '.join(map(str, value))
+            config[key] = ", ".join(map(str, value))
 
-    with open(base_template, 'r') as file:
+    with open(base_template, "r") as file:
         content = file.read()
 
     # Replace the placeholders with the actual values
-    content = content.format_map(DefaultDict(lambda: '', **config))
+    content = content.format_map(DefaultDict(lambda: "", **config))
 
     # Generating a unique name for the config file based on parameters
-    label_keys = [
-        f"{key}-{config[key]}" for key in config if key in testing_keys]
+    label_keys = [f"{key}-{config[key]}" for key in config if key in testing_keys]
 
-    output_file_name = '_'.join(
-        [experiment_name, config['tag'], *label_keys]).replace(' ', '')
+    output_file_name = "_".join([experiment_name, config["tag"], *label_keys]).replace(
+        " ", ""
+    )
     output_file = os.path.join(output_dir, f"cfg_{output_file_name}.ini")
 
-    with open(output_file, 'w') as file:
+    with open(output_file, "w") as file:
         file.write(content)
 
     return output_file
@@ -48,7 +50,8 @@ def get_configurations_for_model(params):
 
 if __name__ == "__main__":
 
-    experiment_name = "h64_ep20000_esp30_nanBer_LASTalphas_SampMeth_SampRatio_NoV_0"
+    # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
+    experiment_name = "test-gpu"
 
     models = [
         # "RNN",
@@ -65,34 +68,63 @@ if __name__ == "__main__":
     dense_z = [[16, 32]]
 
     dim_rnn = [64]
-    alphas = [[0.09183, 0.64830, 0.73307]]# [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
-    activation = ['relu']
+    alphas = [
+        # [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        [0.1]
+    ]
+    # [0.09183, 0.64830, 0.73307]]# [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
+    activation = ["relu"]
 
     # Training
     lr = [0.001]
     alpha_lr = [0.01]
     epochs = [20000]
-    early_stop_patience = [30]
-    save_frequency = [30]
+    early_stop_patience = [50]
+    save_frequency = [100]
     gradient_clip = [1]
     optimize_alphas = [True]
-    sampling_method = ['ss',
-                       'ptf', 
-                    #    'mtf',
-                       ]
-    sampling_ratio = [0.0, 0.2, 0.8]
+    sampling_method = [
+        # 'ss',
+        "ptf",
+        # 'mtf',
+    ]
+    sampling_ratio = [
+        # 0.0, 0.001, 0.003, 0.01, 0.03, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99, 1.0
+        0.0,
+        0.2,
+        0.8,
+    ]
     mask_autonomous_filled = [True]
 
     # DataFrame
-    dataset_name = ['Lorenz63']
-    dataset_label = ['None', 'nanBer0.2', 'nanBer0.5', 'nanBer0.7']
+    dataset_name = ["Lorenz63"]
+    dataset_label = [
+        # 'None',
+        "nanBer0.0",
+        # 'nanBer0.1',
+        # 'nanBer0.2',
+        # 'nanBer0.3',
+        # 'nanBer0.4',
+        # 'nanBer0.5',
+        # 'nanBer0.6',
+        # 'nanBer0.7',
+        # 'nanBer0.8',
+        # 'nanBer0.85',
+        # 'nanBer0.9',
+        # 'nanBer0.92',
+        # 'nanBer0.95',
+        # 'nanBer0.99',
+        # 'nanBer1.0',
+        # 'nanBer0.5',
+        # 'nanBer0.7'
+    ]
     s_dim = [1]
     shuffle = [True]
     batch_size = [128]
     num_workers = [8]
     sequence_len = [1000]
     val_indices = [0.8]
-    observation_process = ['only_x']
+    observation_process = ["only_x"]
 
     model_params = {
         "RNN": {
@@ -171,11 +203,11 @@ if __name__ == "__main__":
 
     # Get keys for which the len of the values is greater than 1 in "MT_VRNN"
     keys_being_compared = [
-        key for key, value in model_params["MT_VRNN"].items() if len(value) > 1]
+        key for key, value in model_params["MT_VRNN"].items() if len(value) > 1
+    ]
 
     # exclude models that are not in models. Don't run this before getting `params_being`
-    model_params = {key: value for key,
-                    value in model_params.items() if key in models}
+    model_params = {key: value for key, value in model_params.items() if key in models}
 
     base_template = "config/sinusoid/cfg_base_template.ini"
     output_dir = os.path.join("config/sinusoid/generated/", experiment_name)
@@ -187,17 +219,20 @@ if __name__ == "__main__":
 
     for model_name, configs in all_configs.items():
         for config in configs:
-            generate_config_file(base_template, output_dir,
-                                 experiment_name, keys_being_compared, config)
+            generate_config_file(
+                base_template, output_dir, experiment_name, keys_being_compared, config
+            )
 
     # Save parameters in JSON format
     json_params = []
     for model_name, configs in all_configs.items():
         for config in configs:
-            json_params.append({
-                "model": model_name,
-                **{key: config.get(key, None) for key in keys_being_compared}
-            })
+            json_params.append(
+                {
+                    "model": model_name,
+                    **{key: config.get(key, None) for key in keys_being_compared},
+                }
+            )
 
     with open(os.path.join(output_dir, "params_being_compared.json"), "w") as file:
         json.dump(json_params, file, indent=4)
