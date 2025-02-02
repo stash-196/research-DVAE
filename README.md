@@ -1,29 +1,45 @@
+# This Forked Repository
 
 ## Setup Instructions
-### 1. Clone the Repository
 
+### 1. Clone the Repository
 ```sh
-git clone https://github.com/yourusername/your-repository.git
-cd your-repository
+git clone https://github.com/stash-196/research-DVAE.git
+cd research-DVAE
 ```
 
-### 2. Create and Activate Virtual Environment
+### 2. Install Python and Set Up Virtual Environment
+Ensure you have **Pyenv** installed. Then, create and activate a Pyenv-managed virtual environment:
 ```sh
-python3 -m venv research-DVAE
-source research-DVAE/bin/activate  # On Windows use `research-DVAE\Scripts\activate`
+pyenv install 3.12.7  # If not already installed
+pyenv virtualenv 3.12.7 research-dvae-env
+pyenv local research-dvae-env
 ```
 
 ### 3. Install Dependencies
 ```sh
-pip install -r requirements.txt
+pip install --upgrade pip
+pip install -e .
+pip install -r dev-requirements.txt
 ```
 
-### 4. Activate Environment
-```sh
-  source research-DVAE/bin/activate
+### 4. Directory Structure Overview
+```
+research-DVAE/
+├── setup.py                # Project setup file
+├── requirements.txt        # Main dependencies
+├── dev-requirements.txt    # Development dependencies
+├── src/                    # Source code
+│   ├── dvae/               # Main package
+│   ├── ...
+├── bin/                    # Executable scripts
+├── slurm/                  # SLURM job scripts
+├── scripts/                # Bash scripts
+├── data/                   # Git-ignored datasets
+├── outputs/                # Model outputs and logs
 ```
 
-
+Now, your environment is set up and ready to use! 🚀
 
 
 # Dynamical Variational Autoencoders A Comprehensive Review
