@@ -33,9 +33,8 @@ def setup_project_root():
         project_root = find_project_root(__file__)
         project_root_str = str(project_root)
 
-        print(f"[INFO] Project root detected at: {project_root_str}")
-
         if project_root_str not in sys.path:
+            print(f"[INFO] Project root detected at: {project_root_str}")
             sys.path.insert(0, project_root_str)
             print(f"[INFO] Project root added to sys.path")
 

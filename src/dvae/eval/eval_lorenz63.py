@@ -22,11 +22,13 @@ import torch
 import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+from torch.nn.functional import mse_loss
+
+from dvae.utils import path_manager
 from dvae.learning_algo import LearningAlgorithm
-from dvae.learning_algo_ss import LearningAlgorithm_ss
 from dvae.dataset import lorenz63_dataset
 from dvae.utils import EvalMetrics
-from torch.nn.functional import mse_loss
+
 
 class Options:
     def __init__(self):
@@ -35,72 +37,77 @@ class Options:
 
     def _initial(self):
         # Basic config file
-        self.parser.add_argument('--ss', action='store_true', help='schedule sampling')
-        self.parser.add_argument('--cfg', type=str, default=None, help='config path')
-        self.parser.add_argument('--saved_dict', type=str, default=None, help='trained model dict')
+        self.parser.add_argument("--ss", action="store_true", help="schedule sampling")
+        self.parser.add_argument("--cfg", type=str, default=None, help="config path")
+        self.parser.add_argument(
+            "--saved_dict", type=str, default=None, help="trained model dict"
+        )
+
     def get_params(self):
         self._initial()
         self.opt = self.parser.parse_args()
         params = vars(self.opt)
         return params
 
-def visualize_sequences(true_data, recon_data, save_dir, name=''):
+
+def visualize_sequences(true_data, recon_data, save_dir, name=""):
     plt.figure(figsize=(10, 6))
-    plt.plot(true_data, label='True Sequence', color='blue')
-    plt.plot(recon_data, label='Predicted Sequence', color='red')
+    plt.plot(true_data, label="True Sequence", color="blue")
+    plt.plot(recon_data, label="Predicted Sequence", color="red")
     plt.legend()
-    plt.title('Comparison of True and Predicted Sequences')
-    plt.xlabel('Time steps')
-    plt.ylabel('Value')
+    plt.title("Comparison of True and Predicted Sequences")
+    plt.xlabel("Time steps")
+    plt.ylabel("Value")
     plt.grid(True)
-    fig_file = os.path.join(save_dir, f'vis_pred_true_series{name}.png')
+    fig_file = os.path.join(save_dir, f"vis_pred_true_series{name}.png")
     plt.savefig(fig_file)
     plt.close()
+
 
 def spectral_analysis(true_data, recon_data, save_dir):
     true_fft = np.fft.fft(true_data)
     recon_fft = np.fft.fft(recon_data)
 
     plt.figure(figsize=(10, 6))
-    plt.plot(np.abs(true_fft), label='True Spectrum', color='blue')
-    plt.plot(np.abs(recon_fft), label='Predicted Spectrum', color='red')
+    plt.plot(np.abs(true_fft), label="True Spectrum", color="blue")
+    plt.plot(np.abs(recon_fft), label="Predicted Spectrum", color="red")
     plt.legend()
-    plt.title('Spectral Analysis')
-    plt.xlabel('Frequency components')
-    plt.ylabel('Magnitude')
+    plt.title("Spectral Analysis")
+    plt.xlabel("Frequency components")
+    plt.ylabel("Magnitude")
     plt.grid(True)
-    fig_file = os.path.join(save_dir, 'vis_pred_true_spectrums.png')
+    fig_file = os.path.join(save_dir, "vis_pred_true_spectrums.png")
     plt.savefig(fig_file)
     plt.close()
 
-def visualize_hidden_states(h_states, save_dir, name=''):
+
+def visualize_hidden_states(h_states, save_dir, name=""):
     plt.figure(figsize=(12, 8))
-    
+
     # Given h_states is of shape (seq_len, batch_size, hidden_size)
     # For this example, we are plotting for batch 0 and all hidden dimensions
     for dim in range(h_states.shape[2]):
-        plt.plot(h_states[:, 0, dim].cpu().numpy(), label=f'Dim {dim}')
+        plt.plot(h_states[:, 0, dim].cpu().numpy(), label=f"Dim {dim}")
 
-    plt.title('Evolution of Hidden States over Time')
-    plt.xlabel('Time steps')
-    plt.ylabel('Hidden state value')
-    plt.legend(loc='upper right', bbox_to_anchor=(1.15, 1))
+    plt.title("Evolution of Hidden States over Time")
+    plt.xlabel("Time steps")
+    plt.ylabel("Hidden state value")
+    plt.legend(loc="upper right", bbox_to_anchor=(1.15, 1))
     plt.grid(True)
 
-    fig_file = os.path.join(save_dir, f'vis_hidden_state_evolution{name}.png')
-    plt.savefig(fig_file, bbox_inches='tight')
+    fig_file = os.path.join(save_dir, f"vis_hidden_state_evolution{name}.png")
+    plt.savefig(fig_file, bbox_inches="tight")
     plt.close()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     torch.manual_seed(0)
     np.random.seed(0)
 
-
     params = Options().get_params()
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    if params['ss']:
+    if params["ss"]:
         learning_algo = LearningAlgorithm_ss(params=params)
         learning_algo.build_model()
         dvae = learning_algo.model
@@ -109,16 +116,20 @@ if __name__ == '__main__':
         learning_algo = LearningAlgorithm(params=params)
         learning_algo.build_model()
         dvae = learning_algo.model
-    dvae.load_state_dict(torch.load(params['saved_dict'], map_location='cpu'))
-    eval_metrics = EvalMetrics(metric='all')
+    dvae.load_state_dict(torch.load(params["saved_dict"], map_location="cpu"))
+    eval_metrics = EvalMetrics(metric="all")
     dvae.eval()
     cfg = learning_algo.cfg
-    print('Total params: %.2fM' % (sum(p.numel() for p in dvae.parameters()) / 1000000.0))
+    print(
+        "Total params: %.2fM" % (sum(p.numel() for p in dvae.parameters()) / 1000000.0)
+    )
 
     # Use the lorenz63 dataset
-    train_dataloader, val_dataloader, train_num, val_num = lorenz63_dataset.build_dataloader(cfg, device)
+    train_dataloader, val_dataloader, train_num, val_num = (
+        lorenz63_dataset.build_dataloader(cfg, device)
+    )
     test_num = len(val_dataloader.dataset)
-    print('Test samples: {}'.format(test_num))
+    print("Test samples: {}".format(test_num))
 
     RMSE = 0
     with torch.no_grad():
@@ -128,8 +139,10 @@ if __name__ == '__main__':
             # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
             batch_data = batch_data.permute(1, 0, 2)
             recon_batch_data = dvae(batch_data)
-            
-            loss_recon = torch.sqrt(mse_loss(batch_data, recon_batch_data))  # Compute RMSE
+
+            loss_recon = torch.sqrt(
+                mse_loss(batch_data, recon_batch_data)
+            )  # Compute RMSE
             seq_len = batch_data.shape[0]
             RMSE += loss_recon.item() / seq_len
 
@@ -137,26 +150,35 @@ if __name__ == '__main__':
                 true_series = batch_data[0:10, 0, :].reshape(-1).cpu().numpy()
                 recon_series = recon_batch_data[0:10, 0, :].reshape(-1).cpu().numpy()
                 # Plot the reconstruction vs true sequence
-                visualize_sequences(true_series, recon_series, os.path.dirname(params['saved_dict']))
+                visualize_sequences(
+                    true_series, recon_series, os.path.dirname(params["saved_dict"])
+                )
                 # Plot the spectral analysis
-                spectral_analysis(true_series, recon_series, os.path.dirname(params['saved_dict']))
+                spectral_analysis(
+                    true_series, recon_series, os.path.dirname(params["saved_dict"])
+                )
 
-                true_series_avg = batch_data[:, 0, :].mean(dim=1).reshape(-1).cpu().numpy()
-                recon_series_avg = recon_batch_data[:, 0, :].mean(dim=1).reshape(-1).cpu().numpy()
-                visualize_sequences(true_series_avg, recon_series_avg, os.path.dirname(params['saved_dict']), '_avg')
+                true_series_avg = (
+                    batch_data[:, 0, :].mean(dim=1).reshape(-1).cpu().numpy()
+                )
+                recon_series_avg = (
+                    recon_batch_data[:, 0, :].mean(dim=1).reshape(-1).cpu().numpy()
+                )
+                visualize_sequences(
+                    true_series_avg,
+                    recon_series_avg,
+                    os.path.dirname(params["saved_dict"]),
+                    "_avg",
+                )
 
                 # visualize the hidden states
-                visualize_hidden_states(dvae.h, os.path.dirname(params['saved_dict']))
-
-
-
-
+                visualize_hidden_states(dvae.h, os.path.dirname(params["saved_dict"]))
 
     RMSE = RMSE / test_num
-    print('RMSE: {:.2f}'.format(RMSE))
+    print("RMSE: {:.2f}".format(RMSE))
 
-    results_path = os.path.join(os.path.dirname(params['saved_dict']), 'results.txt')
-    with open(results_path, 'w') as f:
-        f.write('RMSE: {:.2f}\n'.format(RMSE))
+    results_path = os.path.join(os.path.dirname(params["saved_dict"]), "results.txt")
+    with open(results_path, "w") as f:
+        f.write("RMSE: {:.2f}\n".format(RMSE))
 
     # Plot the reconstruction

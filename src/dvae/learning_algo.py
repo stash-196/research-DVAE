@@ -17,7 +17,8 @@ import pickle
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-from .utils import (
+from dvae.utils import (
+    find_project_root,
     myconf,
     get_logger,
     loss_ISD,
@@ -27,7 +28,7 @@ from .utils import (
     create_autonomous_mode_selector,
     profile_execution,
 )
-from visualizers import (
+from dvae.visualizers import (
     visualize_model_parameters,
     visualize_combined_parameters,
     visualize_teacherforcing_2_autonomous,
@@ -38,14 +39,14 @@ from visualizers import (
     visualize_sigma_history,
     visualize_alpha_history,
 )
-from .dataset import (
+from dvae.dataset import (
     h36m_dataset,
     speech_dataset,
     lorenz63_dataset,
     sinusoid_dataset,
     xhro_dataset,
 )
-from .model import (
+from dvae.model import (
     build_VRNN,
     build_RNN,
     build_MT_RNN,
@@ -1174,7 +1175,7 @@ class LearningAlgorithm:
             logger.info("Loss saved in: {}".format(loss_file))
 
         # run evaluation script
-        subprocess.run(["python", "eval_sinusoid.py", "--saved_dict", save_file])
+        subprocess.run(["python", "eval_signal.py", "--saved_dict", save_file])
 
 
 # sigmoid function for arrays

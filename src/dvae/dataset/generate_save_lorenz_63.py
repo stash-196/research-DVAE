@@ -5,6 +5,8 @@ import plotly.io as pio
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.lines as mlines
+import matplotlib.patches as mpatches
 
 # %matplotlib inline
 from mpl_toolkits.mplot3d import Axes3D
@@ -16,11 +18,16 @@ import numpy as np
 from scipy.signal import find_peaks
 import plotly.graph_objects as go
 
+from dvae.utils import find_project_root
+
+project_root = find_project_root(__file__)
+
 # Handy function stolen from the fast.ai library
 # Get location of current files directory
 file_dir = os.path.dirname(os.path.realpath(__file__))
 
 
+# %%
 def V(x, requires_grad=False, gpu=False):
     t = torch.FloatTensor(np.atleast_1d(x).astype(np.float32))
     if gpu:
@@ -293,13 +300,153 @@ def plot_power_spectrum_subplots_loglog(
 # %%
 # Define the default parameters values
 
-save_dir_plots = os.path.join(file_dir, "temp_save", "lorenz63", "plots")
-save_dir_data = os.path.join(file_dir, "temp_save", "lorenz63", "data")
+save_dir_plots = os.path.join(project_root, "data/lorenz63", "plots")
+save_dir_data = os.path.join(project_root, "data/lorenz63", "data")
 if not os.path.exists(save_dir_plots):
     os.makedirs(save_dir_plots)
 if not os.path.exists(save_dir_data):
     os.makedirs(save_dir_data)
 
+# %% ================== For Presentation ==================
+sigma = 10
+rho = 28
+beta = 8 / 3
+N = 1000
+dt = 1e-2
+l_present = L63(sigma, rho, beta, init=[1, 10, 20], dt=1e-2)
+l_present.integrate(N)
+
+# mask 10-20, 30-50, 70-80
+L = len(l_present.hist)
+mask_burst = np.zeros(L)
+mask_burst[int(L * 0.1) : int(L * 0.2)] = 1
+mask_burst[int(L * 0.3) : int(L * 0.4)] = 1
+mask_burst[int(L * 0.6) : int(L * 0.8)] = 1
+
+
+mask_burst_inv = mask_burst * -1 + 1
+
+mask_bernoulli = np.random.binomial(1, 0.5, size=L)
+maskb_inv = mask_bernoulli * -1 + 1
+
+x_signal = np.array(l_present.hist)[:, 0]
+# create x_signal copy masked with NaN
+x_signal_data_remain = np.where(mask_burst, np.nan, x_signal)
+x_signal_data_lack = np.where(mask_burst_inv, np.nan, x_signal)
+
+x_signal_auto_sample = np.where(mask_bernoulli, np.nan, x_signal)
+import matplotlib.pyplot as plt
+
+plt.rcParams.update(
+    {
+        "font.size": 20,  # General font size
+        "axes.titlesize": 22,  # Title size
+        "axes.labelsize": 20,  # X and Y label size
+        "xtick.labelsize": 18,  # X tick labels
+        "ytick.labelsize": 18,  # Y tick labels
+        "legend.fontsize": 18,  # Legend font size
+        # font times new roman
+        "font.family": "serif",
+        "font.serif": ["Times New Roman"],
+        "font.sans-serif": ["Times New Roman"],
+    }
+)
+
+# Plot Scheduled Sampling Learning
+linewidth = 4
+plt.figure(figsize=(10, 7.5))
+offset = 20
+(line1,) = plt.plot(
+    x_signal + offset, color="blue", label="True Signal", linewidth=linewidth
+)
+(line2,) = plt.plot(
+    x_signal - offset, color="green", label="Teacher-Forced Output", linewidth=linewidth
+)
+(line3,) = plt.plot(
+    x_signal_auto_sample - offset,
+    color="red",
+    label="Autonomous Output",
+    linewidth=linewidth,
+)
+line_auto_sample = mlines.Line2D(
+    [], [], color="red", linestyle="--", label="Autonomous Output", linewidth=linewidth
+)
+
+# Combine all legend handles
+handles = [line1, line2, line_auto_sample]
+plt.legend(handles=handles, loc="upper right")  # Single legend box
+# plt.title("Scheduled Sampling Learning for Lorenz63 System")
+plt.xlabel("Time")
+plt.ylabel("x variable of Lorenz63")
+# save to this file directory
+plt.savefig(os.path.join(file_dir, "Scheduled_Sampling_Learning.png"))
+plt.show()
+
+
+# Plot Opportunistic Teacher-Forced Learning
+plt.figure(figsize=(10, 7.5))
+offset = 20
+(line1,) = plt.plot(
+    x_signal_data_remain + offset,
+    color="blue",
+    label="True Signal",
+    linewidth=linewidth,
+)
+(line2,) = plt.plot(
+    x_signal_data_remain - offset,
+    color="green",
+    label="Teacher-Forced Output",
+    linewidth=linewidth,
+)
+(line3,) = plt.plot(
+    x_signal_data_lack - offset,
+    color="red",
+    label="Autonomous Output filling",
+    linewidth=linewidth,
+)
+(line4,) = plt.plot(x_signal_auto_sample - offset, color="red", linewidth=linewidth)
+
+# plt.title("Opportunistic Teacher-Forced Learning for Lorenz63 System")
+plt.xlabel("Time")
+plt.ylabel("x variable of Lorenz63")
+
+mask_for_loss = mask_burst_inv * mask_bernoulli
+mask_for_loss_inv = mask_for_loss * -1 + 1
+
+shade_mask = mask_burst
+# Add shade for masked regions
+shade_mask_start = 0
+for i in range(1, L):  # Iterate through the mask
+    # if mask_burst[i] == 1 and mask_burst[i - 1] == 0:
+    #     start = i
+    # if mask_burst[i] == 0 and mask_burst[i - 1] == 1:
+    #     end = i
+    #     plt.axvspan(start, end, color="gray", alpha=0.3)  # Shade the region
+    # yellow shade for loss mask
+    if shade_mask[i] == 1 and shade_mask[i - 1] == 0:
+        shade_mask_start = i
+    if shade_mask[i] == 0 and shade_mask[i - 1] == 1:
+        if shade_mask_start != 0:
+            mask_loss_end = i
+            plt.axvspan(shade_mask_start, mask_loss_end, color="gray", alpha=0.3)
+
+# Create legend items
+gray_patch = mpatches.Patch(color="gray", alpha=0.3, label="Missing Data")
+line_auto_sample = mlines.Line2D(
+    [], [], color="red", linestyle="--", label="Autonomous Output", linewidth=linewidth
+)
+
+# Combine all legend handles
+handles = [line1, line2, line3, line_auto_sample, gray_patch]
+plt.legend(handles=handles, loc="upper right")  # Single legend box
+
+plt.savefig(os.path.join(file_dir, "Opportunistic_Teacher_Forced_Learning.png"))
+plt.show()
+# save to this file directory
+
+# ================== END ==================
+
+# %%
 sigma = 10
 rho = 28
 beta = 8 / 3

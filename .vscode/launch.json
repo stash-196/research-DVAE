@@ -53,7 +53,7 @@
             "args": [
                 // "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/saved_model/2024-09-18/h27_ep2000_SampMeths_RNNs_0/c9b35073_Lorenz63_2024-09-18-17:05:35_MT_RNN_SM-ss_α-[0.00490695, 0.02916397, 0.01453569]/config.ini"
                 // "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/sinusoid/generated/debug_test/cfg_debug_test_RNN.ini",
-                "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/sinusoid/cfg_mt_rnn.ini",
+                "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/general_signal/generated/debug_test/cfg_debug_test_MT_RNN.ini",
 
 
 
