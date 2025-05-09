@@ -60,6 +60,10 @@ setup(
         "tzdata",
         "umap-learn",
         "urllib3",
+        "nbformat",
+        "ipykernel",
+        "ipython",
+        "kaleido",
     ],
     extras_require={
         "dev": [

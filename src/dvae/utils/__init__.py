@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+from .path_manager import setup_project_root, find_project_root
+
+# Automatically set up the project root when utils is imported
+setup_project_root()
 
 
 from .logger import get_logger, print_or_log
