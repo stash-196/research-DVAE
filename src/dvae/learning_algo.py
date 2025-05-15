@@ -156,7 +156,9 @@ class LearningAlgorithm:
             params = self.model.parameters()
 
         if optimization == "adam":
-            optimizer = torch.optim.Adam(params, lr=self.lr)
+            optimizer = torch.optim.Adam(params, lr=self.lr, weight_decay=1e-5)
+        elif optimization == "adamW":
+            optimizer = torch.optim.AdamW(params, lr=self.lr, weight_decay=1e-5)
         else:
             # fallback to Adam if optimization method is not recognized
             optimizer = torch.optim.Adam(params, lr=self.lr)
