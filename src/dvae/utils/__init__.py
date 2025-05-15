@@ -8,7 +8,16 @@ setup_project_root()
 
 from .logger import get_logger, print_or_log
 from .read_config import myconf
-from .eval_metric import state_space_divergence, power_spectrum_error, prediction_error
+from .eval_metric import (
+    state_space_divergence,
+    power_spectrum_error,
+    prediction_error,
+    calculate_power_spectrum_error,
+    calculate_expected_accuracy,
+    rmse,
+    r_squared,
+    expand_autonomous_mode_selector
+)
 from .loss import loss_ISD, loss_KLD, loss_JointNorm, loss_MPJPE, loss_MSE
 from .model_mode_selector import create_autonomous_mode_selector
 from .parallel_tasks_executers import run_parallel_visualizations

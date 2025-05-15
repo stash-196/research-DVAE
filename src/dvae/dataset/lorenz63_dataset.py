@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-"""
+""" """
 import torch
 from torch.utils.data import Dataset
 import numpy as np
@@ -131,22 +130,55 @@ class Lorenz63(Dataset):
         self.with_nan = with_nan
 
         # read motion data from pickle file
-        if self.dataset_label == None or self.dataset_label == "None":
-            if split == "test":
-                filename = "{0}/lorenz63/dataset_test.pkl".format(self.path_to_data)
-            else:
-                filename = "{0}/lorenz63/dataset_train.pkl".format(self.path_to_data)
+        # if self.dataset_label == None or self.dataset_label == "None":
+        #     if split == "test":
+        #         complete_data_filename = "{0}/lorenz63/dataset_test.pkl".format(self.path_to_data)
+        #     else:
+        #         complete_data_filename = "{0}/lorenz63/dataset_train.pkl".format(self.path_to_data)
+        # else:
+        #     if split == "test":
+        #         complete_data_filename = f"{self.path_to_data}/lorenz63/dataset_test_{self.dataset_label}.pkl"
+        #     else:
+        #         complete_data_filename = f"{self.path_to_data}/lorenz63/dataset_train_{self.dataset_label}.pkl"
+        if split == "test":
+            complete_data_filename = "{0}/lorenz63/data/sigma10_rho28_beta8d3_N108k_dt0.01/complete_dataset_test.pkl".format(
+                self.path_to_data
+            )
         else:
-            if split == "test":
-                filename = f"{self.path_to_data}/lorenz63/dataset_test_{self.dataset_label}.pkl"
-            else:
-                filename = f"{self.path_to_data}/lorenz63/dataset_train_{self.dataset_label}.pkl"
+            complete_data_filename = "{0}/lorenz63/data/sigma10_rho28_beta8d3_N108k_dt0.01/complete_dataset_train.pkl".format(
+                self.path_to_data
+            )
+        # load the complete dataset
+        with open(complete_data_filename, "rb") as f:
+            complete_sequence = np.array(pickle.load(f))
 
-        with open(filename, "rb") as f:
-            the_sequence = np.array(pickle.load(f))
+        # load the mask
+        if self.dataset_label != None or self.dataset_label != "None":
+            # dataset_label should be {distribution}_{rate}
+            dataset_label = self.dataset_label.split("_")
+            distribution = dataset_label[0]
+            rate = dataset_label[-1]
+            if distribution == "Markov":
+                average_burst_length = dataset_label[1]
+                distribution_label = f"{distribution}_{average_burst_length}"
+            else:
+                distribution_label = f"{distribution}"
+
+            if split == "test":
+                mask_filename = f"{self.path_to_data}/lorenz63/data/sigma10_rho28_beta8d3_N108k_dt0.01/mask_{distribution_label}_pnan{rate}_test.pkl"
+            else:
+                mask_filename = f"{self.path_to_data}/lorenz63/data/sigma10_rho28_beta8d3_N108k_dt0.01/mask_{distribution_label}_pnan{rate}_train.pkl"
+
+            with open(mask_filename, "rb") as f:
+                mask_sequence = np.array(pickle.load(f))
+
+            # Apply the mask to the sequence
+            the_sequence = np.where(mask_sequence, np.nan, complete_sequence)
+        else:
+            the_sequence = complete_sequence
 
         # Store the full sequence before applying any observation process
-        self.full_sequence = the_sequence
+        self.full_sequence = complete_sequence
 
         # Process the sequence based on the observation process
         the_sequence = self.apply_observation_process(the_sequence)

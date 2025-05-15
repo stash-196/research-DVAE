@@ -30,8 +30,13 @@ from dvae.utils import (
     create_autonomous_mode_selector,
     run_parallel_visualizations,
     power_spectrum_error,
+    calculate_power_spectrum_error,
+    calculate_expected_accuracy,
+    rmse,
+    r_squared,
+    expand_autonomous_mode_selector,
 )
-from visualizers import (
+from dvae.visualizers import (
     visualize_variable_evolution,
     visualize_sequences,
     visualize_spectral_analysis,
@@ -110,11 +115,10 @@ if __name__ == "__main__":
     device = "cpu"
 
     if params["ss"]:
-        learning_algo = LearningAlgorithm_ss(params=params)
-        learning_algo.build_model()
-        dvae = learning_algo.model
-        dvae.device = device
-        dvae.out_mean = True
+        # Learning Algo SS does not exist any more. Raise Error
+        raise ValueError(
+            "Learning Algorithm with schedule sampling does not exist. Please use the one without schedule sampling."
+        )
     else:
         learning_algo = LearningAlgorithm(params=params)
         learning_algo.build_model(device=device)
@@ -264,90 +268,6 @@ if __name__ == "__main__":
         print(f"[Eval] No loss data file found at {loss_file}")
 
     ############################################################################
-
-    def calculate_expected_accuracy(true_data, reconstructed_data, accuracy_measure):
-        """
-        Calculate the expected accuracy measure over batch data.
-
-        Args:
-        - true_data: The true data in batch format (seq_len, batch_size, x_dim).
-        - reconstructed_data: The reconstructed data in the same format as true_data.
-        - accuracy_measure: Function to compute the accuracy measure (e.g., RMSE).
-
-        Returns:
-        - A tensor of accuracy values averaged over batches.
-        """
-        seq_len, batch_size, num_iterations, x_dim = true_data.shape
-
-        reshaped_true = true_data.reshape(seq_len * x_dim, batch_size, num_iterations)
-        reshaped_recon = reconstructed_data.reshape(
-            seq_len * x_dim, batch_size, num_iterations
-        )
-
-        accuracy_values = torch.zeros(seq_len * x_dim, device=true_data.device)
-        variance_values = torch.zeros(seq_len * x_dim, device=true_data.device)
-
-        for t in range(seq_len * x_dim):
-            accuracy_t = accuracy_measure(reshaped_true[t], reshaped_recon[t])
-            accuracy_values[t] = accuracy_t.mean()
-            variance_values[t] = accuracy_t.var()
-
-        return accuracy_values, variance_values
-
-    def rmse(true_data, pred_data):
-        # RMSE per batch item
-        return torch.sqrt(torch.mean((true_data - pred_data) ** 2, dim=-1))
-
-    def r_squared(true_data, pred_data, epsilon=1e-8):
-        """
-        Coefficient of Determination (R^2) calculation with stability check.
-
-        Args:
-        - true_data: True data tensor.
-        - pred_data: Predicted data tensor.
-        - epsilon: A small value to ensure numerical stability.
-
-        Returns:
-        - R^2 value.
-        """
-        ss_total = torch.sum(
-            (true_data - true_data.mean(dim=-1, keepdim=True)) ** 2, dim=-1
-        )
-        ss_res = torch.sum((true_data - pred_data) ** 2, dim=-1)
-
-        # Avoid division by very small or zero values
-        stable_ss_total = torch.where(
-            ss_total > epsilon, ss_total, torch.ones_like(ss_total) * epsilon
-        )
-        r2 = 1 - ss_res / stable_ss_total
-        return r2  # R^2 per batch item
-
-    def expand_autonomous_mode_selector(selector, x_dim):
-        return np.repeat(selector, x_dim)
-
-    def calculate_power_spectrum_error(
-        power_spectrum_lst, true_signal_index, filter_std
-    ):
-        """
-        Calculate the power spectrum error for each signal in the list.
-
-        Args:
-        - power_spectrum_lst: A list of power spectra.
-        - true_signal_index: The index of the true signal in the list.
-
-        Returns:
-        - A list of power spectrum errors.
-        """
-        true_power_spectrum = power_spectrum_lst[true_signal_index]
-        power_spectrum_errors = []
-        for power_spectrum in power_spectrum_lst:
-            power_spectrum_errors.append(
-                power_spectrum_error(
-                    power_spectrum, true_power_spectrum, filter_std=filter_std
-                )
-            )
-
-        return power_spectrum_errors
 
     VISUALIZE_3D = True
 

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-"""
+""" """
 import torch
 from torch.utils.data import Dataset
+import os
 import numpy as np
+import pandas as pd
 from .utils import data_utils
 import pickle
 
@@ -132,10 +133,17 @@ class Xhro(Dataset):
         self.device = device
 
         # Read data from file
-        filename = (
-            f"{self.path_to_data}/xhro/{self.dataset_label}/preprocessed_data.npy"
+        # filename = (
+        #     f"{self.path_to_data}/xhro/{self.dataset_label}/preprocessed_data.npy"
+        # )
+        filename = os.path.join(
+            f"{self.path_to_data}",
+            "processed",
+            "xhro",
+            f"{self.dataset_label}",
+            "filtered_data.parquet",
         )
-        the_sequence = np.load(filename, allow_pickle=True)
+        the_sequence = pd.read_parquet(filename)
 
         if self.split == "test":  # use the latter half of the data for testing
             the_sequence = the_sequence[the_sequence.shape[0] // 2 :]

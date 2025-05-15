@@ -10,7 +10,6 @@ import sys
 import uuid
 import configparser
 
-
 from dvae.utils import find_project_root, Options, merge_configs
 from dvae.learning_algo import LearningAlgorithm
 

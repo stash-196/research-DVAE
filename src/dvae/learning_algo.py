@@ -191,6 +191,8 @@ class LearningAlgorithm:
         self.model.train()
         torch.autograd.set_detect_anomaly(True)
 
+        project_root = find_project_root(__file__)
+
         # Create directory for results
         if not self.params["reload"]:
             saved_root = self.cfg.get("User", "saved_root")
@@ -586,38 +588,28 @@ class LearningAlgorithm:
                 clipped_named_params_grad = None
                 # Gradient clipping
                 # check if model has model.type_rnn, if True, and if type_rnn=='RNN', then clip the gradient
-                if hasattr(self.model, "type_rnn"):
-                    if self.model.type_rnn in ["RNN", "VRNN", "MT_RNN", "MT_VRNN"]:
-                        self.gradient_clip = self.cfg.getfloat(
-                            "Training", "gradient_clip"
-                        )
-                        logger.info(
-                            f"[Learning Algo][epoch{epoch}] Gradient clipping: {self.gradient_clip}"
-                        )
-                        torch.nn.utils.clip_grad_norm_(
-                            self.model.parameters(), self.gradient_clip
-                        )
 
-                        # store the clipped gradients
+                self.gradient_clip = self.cfg.getfloat(
+                    "Training", "gradient_clip", fallback=0.0
+                )
+                if self.gradient_clip > 0.0:
+                    # clip the gradient
+                    logger.info(
+                        f"[Learning Algo][epoch{epoch}] Gradient clipping: {self.gradient_clip}"
+                    )
 
-                        clipped_named_params_grad = [
-                            (name, param.grad.detach().cpu().numpy().copy())
-                            for name, param in self.model.named_parameters()
-                        ]
-                        # calculate and print the norm of the clipped gradient
-                        parameter_norm = get_norm_from_named_params(
-                            current_named_params
-                        )
-                        grad_norm = get_norm_from_named_params(
-                            current_named_params_grad
-                        )
+                    # store the clipped gradients
+                    clipped_named_params_grad = [
+                        (name, param.grad.detach().cpu().numpy().copy())
+                        for name, param in self.model.named_parameters()
+                    ]
 
-                        clipped_grad_norm = get_norm_from_named_params(
-                            clipped_named_params_grad
-                        )
-                        logger.info(
-                            f"[Learning Algo][epoch{epoch}] Gradient norm clipped from {grad_norm} to {clipped_grad_norm}, parameter norm: {parameter_norm}"
-                        )
+                    clipped_grad_norm = get_norm_from_named_params(
+                        clipped_named_params_grad
+                    )
+                    logger.info(
+                        f"[Learning Algo][epoch{epoch}] Gradient norm clipped from {grad_norm} to {clipped_grad_norm}, parameter norm: {parameter_norm}"
+                    )
 
                 optimizer.step()
                 # profiler.step()
@@ -1175,7 +1167,8 @@ class LearningAlgorithm:
             logger.info("Loss saved in: {}".format(loss_file))
 
         # run evaluation script
-        subprocess.run(["python", "eval_signal.py", "--saved_dict", save_file])
+        eval_file = os.path.join(project_root, "src", "dvae", "eval", "eval_signal.py")
+        subprocess.run(["python", eval_file, "--saved_dict", save_file])
 
 
 # sigmoid function for arrays

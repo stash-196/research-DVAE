@@ -7,6 +7,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 import matplotlib.patches as mpatches
+import pickle
+from fractions import Fraction
 
 # %matplotlib inline
 from mpl_toolkits.mplot3d import Axes3D
@@ -28,6 +30,17 @@ file_dir = os.path.dirname(os.path.realpath(__file__))
 
 
 # %%
+
+
+def human_format(num):
+    if num >= 1_000_000:
+        return f"{num/1_000_000:.0f}M"
+    elif num >= 1_000:
+        return f"{num/1_000:.0f}k"
+    else:
+        return str(num)
+
+
 def V(x, requires_grad=False, gpu=False):
     t = torch.FloatTensor(np.atleast_1d(x).astype(np.float32))
     if gpu:
@@ -143,8 +156,6 @@ def plot_components_vs_time_plotly(
 
 
 # %%
-
-
 def calculate_power_spectrum(time_series, sampling_rate):
     # Compute the Fast Fourier Transform (FFT)
     fft_result = np.fft.fft(time_series)
@@ -295,6 +306,56 @@ def plot_power_spectrum_subplots_loglog(
         pio.write_image(fig, save_path)
 
     return peaks, frequencies, power_spectrum
+
+
+def generate_fixed_burst_mask(length, p_missing, burst_length=50):
+    mask = np.zeros(length, dtype=int)
+    num_bursts = int(p_missing * length / burst_length)
+    starts = np.random.choice(length - burst_length, num_bursts, replace=False)
+    for start in starts:
+        mask[start : start + burst_length] = 1
+    return mask
+
+
+def generate_markovian_burst_mask(shape, pi_1, exp_burst_length):
+    """
+    Generate a Markovian burst mask for missing data.
+
+    Parameters:
+    - length (int): Length of the mask.
+    - pi_1 (float): Desired long-run proportion of missing data (between 0 and 1).
+    - p_01 (float): Probability of transitioning from missing (1) to present (0).
+
+    Returns:
+    - numpy array: Binary mask where 1 means missing, 0 means present.
+    """
+    length = shape[0]
+    dim = shape[1] if len(shape) > 1 else 1
+
+    exp_burst_length = exp_burst_length - 1
+
+    pi_0 = 1 - pi_1
+    p_11 = exp_burst_length / (1 + exp_burst_length)
+    p_10 = 1 - p_11
+    p_00 = 1 / pi_0 * ((1 + p_10) * pi_0 - p_10)
+    p_01 = 1 - p_00
+
+    P = np.array([[p_00, p_01], [p_10, p_11]])
+
+    # print(f"p_00: {p_00}, p_01: {p_01}, p_10: {p_10}, p_11: {p_11}")
+    # print(P)
+
+    # Start with data present (state 0)
+    masks = []
+    # Generate the sequence
+    for _ in range(dim):
+        state = 0
+        mask = []
+        for _ in range(length):
+            mask.append(state)
+            state = np.random.choice([0, 1], p=P[state])
+        masks.append(mask)
+    return np.array(masks).T
 
 
 # %%
@@ -450,102 +511,73 @@ plt.show()
 sigma = 10
 rho = 28
 beta = 8 / 3
-N = 15 * 60 * 24 * 5  # 5 days worth of data of frequency 15Hz
+N = 15 * 60 * 24 * 5  # 5 days worth of data of frequency 0.25Hz (4s period)
 dt = 1e-2
+
+beta_frac = Fraction(beta).limit_denominator()
+beta_str = f"{beta_frac.numerator}d{beta_frac.denominator}"
+
+
+parameter_str = f"sigma{sigma}_rho{rho}_beta{beta_str}_N{human_format(N)}_dt{dt}"
+save_dir_specific_data = os.path.join(
+    save_dir_data,
+    parameter_str,
+)
+save_dir_specific_plots = os.path.join(
+    save_dir_plots,
+    parameter_str,
+)
+if not os.path.exists(save_dir_specific_data):
+    os.makedirs(save_dir_specific_data)
+if not os.path.exists(save_dir_specific_plots):
+    os.makedirs(save_dir_specific_plots)
+
+
 l1 = L63(sigma, rho, beta, init=[1, 10, 20], dt=1e-2)
 l2 = L63(sigma, rho, beta, init=[10, 1, 2], dt=1e-2)
-l1_nan = L63(sigma, rho, beta, init=[1, 10, 20], dt=1e-2)
-l2_nan = L63(sigma, rho, beta, init=[10, 1, 2], dt=1e-2)
-
-
-l1.integrate(N)
+l1.integrate(int(N * 0.9))
 l2.integrate(int(N * 0.1))
-l1_nan.integrate(N)
-l2_nan.integrate(int(N * 0.1))
 
-p_nan = 0.1
-# Replace some values with NaN based on the mask
-# create a mask with 10% of the values as NaN for component x, based on bernoulli distribution
-mask = np.random.binomial(
-    1, p_nan, size=(len(l1.hist), 3)
-)  # parameter n is the number of trials, p is the probability of success of each trial
-l1_nan.hist = np.where(
-    mask[:, 0][:, None], np.nan, l1_nan.hist
-)  # replace x values with NaN
-mask = np.random.binomial(1, p_nan, size=(len(l2.hist), 3))
-l2_nan.hist = np.where(
-    mask[:, 0][:, None], np.nan, l2_nan.hist
-)  # replace x values with NaN
-
-plot_attractor_plotly([l1.hist], save_dir=save_dir_plots, explain="s10_r28_b8d3_train")
-plot_attractor_plotly([l2.hist], save_dir=save_dir_plots, explain="s10_r28_b8d3_test")
 plot_attractor_plotly(
-    [l1_nan.hist],
-    save_dir=save_dir_plots,
-    explain=f"s10_r28_b8d3_train_nanBer{p_nan}",
+    [l1.hist], save_dir=save_dir_specific_plots, explain=f"{parameter_str}_train"
 )
 plot_attractor_plotly(
-    [l2_nan.hist],
-    save_dir=save_dir_plots,
-    explain=f"s10_r28_b8d3_test_nanBer{p_nan}",
+    [l2.hist], save_dir=save_dir_specific_plots, explain=f"{parameter_str}_test"
 )
 
 
 plot_attractor_subplots(
-    [l1.hist], save_dir=save_dir_plots, explain="s10_r28_b8d3_train"
-)
-plot_attractor_subplots([l2.hist], save_dir=save_dir_plots, explain="s10_r28_b8d3_test")
-plot_attractor_subplots(
-    [l1_nan.hist],
-    save_dir=save_dir_plots,
-    explain=f"s10_r28_b8d3_train_nanBer{p_nan}",
+    [l1.hist], save_dir=save_dir_specific_plots, explain=f"{parameter_str}_train"
 )
 plot_attractor_subplots(
-    [l2_nan.hist],
-    save_dir=save_dir_plots,
-    explain=f"s10_r28_b8d3_test_nanBer{p_nan}",
+    [l2.hist], save_dir=save_dir_specific_plots, explain=f"{parameter_str}_test"
 )
-
 
 plot_components_vs_time_plotly(
     np.array(l1.hist),
     time_step=1e-2,
-    explain="s10_r28_b8d3_train",
-    save_dir=save_dir_plots,
+    explain=f"{parameter_str}_train",
+    save_dir=save_dir_specific_plots,
 )
 plot_components_vs_time_plotly(
     np.array(l2.hist),
     time_step=1e-2,
-    explain="s10_r28_b8d3_test",
-    save_dir=save_dir_plots,
-)
-plot_components_vs_time_plotly(
-    np.array(l1_nan.hist),
-    time_step=1e-2,
-    explain=f"s10_r28_b8d3_train_nanBer{p_nan}",
-    save_dir=save_dir_plots,
-)
-plot_components_vs_time_plotly(
-    np.array(l2_nan.hist),
-    time_step=1e-2,
-    explain=f"s10_r28_b8d3_test_nanBer{p_nan}",
-    save_dir=save_dir_plots,
+    explain=f"{parameter_str}_test",
+    save_dir=save_dir_specific_plots,
 )
 
 
 # store l.hist as pickle data for later use in pytorch dataloader
 def save_pickle(data, path):
-    import pickle
 
     with open(path, "wb") as f:
         pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
         print(f"Saved data to {path}")
 
 
-save_pickle(l1.hist, os.path.join(save_dir_data, "dataset_train.pkl"))
-save_pickle(l2.hist, os.path.join(save_dir_data, "dataset_test.pkl"))
-save_pickle(l1_nan.hist, os.path.join(save_dir_data, "dataset_train_nanBer{p_nan}.pkl"))
-save_pickle(l2_nan.hist, os.path.join(save_dir_data, "dataset_test_nanBer{p_nan}.pkl"))
+save_pickle(l1.hist, os.path.join(save_dir_specific_data, "complete_dataset_train.pkl"))
+save_pickle(l2.hist, os.path.join(save_dir_specific_data, "complete_dataset_test.pkl"))
+# %%
 
 missing_ratios = [
     0.0,
@@ -564,69 +596,131 @@ missing_ratios = [
     0.99,
     1.0,
 ]
-
-
+# Generate masks
+np.random.seed(42)
 # Do the same for the list of missing data
 for p_nan in missing_ratios:
-    mask = np.random.binomial(1, p_nan, size=(len(l1.hist), 3))
-    l1_nan.hist = np.where(mask[:, 0][:, None], np.nan, l1.hist)
-    mask = np.random.binomial(1, p_nan, size=(len(l2.hist), 3))
-    l2_nan.hist = np.where(mask[:, 0][:, None], np.nan, l2.hist)
+    mask_train = np.random.binomial(1, p_nan, size=(len(l1.hist), 3))
+    mask_test = np.random.binomial(1, p_nan, size=(len(l2.hist), 3))
+
     save_pickle(
-        l1_nan.hist, os.path.join(save_dir_data, f"dataset_train_nanBer{p_nan}.pkl")
+        mask_train,
+        os.path.join(save_dir_specific_data, f"mask_Bernoulli_pnan{p_nan}_train.pkl"),
     )
     save_pickle(
-        l2_nan.hist, os.path.join(save_dir_data, f"dataset_test_nanBer{p_nan}.pkl")
-    )
-    # visuzlie
-    plot_attractor_plotly(
-        [l1_nan.hist],
-        save_dir=save_dir_plots,
-        explain=f"s10_r28_b8d3_train_nanBer{p_nan}",
-    )
-    plot_attractor_plotly(
-        [l2_nan.hist],
-        save_dir=save_dir_plots,
-        explain=f"s10_r28_b8d3_test_nanBer{p_nan}",
-    )
-    plot_attractor_subplots(
-        [l1_nan.hist],
-        save_dir=save_dir_plots,
-        explain=f"s10_r28_b8d3_train_nanBer{p_nan}",
-    )
-    plot_attractor_subplots(
-        [l2_nan.hist],
-        save_dir=save_dir_plots,
-        explain=f"s10_r28_b8d3_test_nanBer{p_nan}",
-    )
-    plot_components_vs_time_plotly(
-        np.array(l1_nan.hist),
-        time_step=1e-2,
-        explain=f"s10_r28_b8d3_train_nanBer{p_nan}",
-        save_dir=save_dir_plots,
-    )
-    plot_components_vs_time_plotly(
-        np.array(l2_nan.hist),
-        time_step=1e-2,
-        explain=f"s10_r28_b8d3_test_nanBer{p_nan}",
-        save_dir=save_dir_plots,
+        mask_test,
+        os.path.join(save_dir_specific_data, f"mask_Bernoulli_pnan{p_nan}_test.pkl"),
     )
 
+    markovian_expected_burst_length = 15
+    if markovian_expected_burst_length * (1 - p_nan) >= p_nan:
+        mask_train = generate_markovian_burst_mask(
+            np.array(l1.hist).shape,
+            pi_1=p_nan,
+            exp_burst_length=markovian_expected_burst_length,
+        )
+        mask_test = generate_markovian_burst_mask(
+            np.array(l2.hist).shape,
+            pi_1=p_nan,
+            exp_burst_length=markovian_expected_burst_length,
+        )
+        save_pickle(
+            mask_train,
+            os.path.join(
+                save_dir_specific_data,
+                f"mask_Markov_AvgLen{markovian_expected_burst_length}_pnan{p_nan}_train.pkl",
+            ),
+        )
+        save_pickle(
+            mask_test,
+            os.path.join(
+                save_dir_specific_data,
+                f"mask_Markov_AvgLen{markovian_expected_burst_length}_pnan{p_nan}_test.pkl",
+            ),
+        )
+
+
+def load_pickle(path):
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+
+# Example: Load data with p_nan = 0.1
+p_nan = 0.1
+# load train data
+complete_train = load_pickle(
+    os.path.join(save_dir_specific_data, "complete_dataset_train.pkl")
+)
+mask_Bernoulli_train = load_pickle(
+    os.path.join(save_dir_specific_data, f"mask_Bernoulli_pnan{p_nan}_train.pkl")
+)
+train_data_with_Bernoulli_nan = np.where(mask_Bernoulli_train, np.nan, complete_train)
+
+mask_Markovian_train = load_pickle(
+    os.path.join(
+        save_dir_specific_data,
+        f"mask_Markov_AvgLen{markovian_expected_burst_length}_pnan{p_nan}_train.pkl",
+    )
+)
+train_data_with_Markovian_nan = np.where(mask_Markovian_train, np.nan, complete_train)
+
+# Load test data
+complete_test = load_pickle(
+    os.path.join(save_dir_specific_data, "complete_dataset_test.pkl")
+)
+mask_Bernoulli_test = load_pickle(
+    os.path.join(save_dir_specific_data, f"mask_Bernoulli_pnan{p_nan}_test.pkl")
+)
+test_data_with_Bernoulli_nan = np.where(mask_Bernoulli_test, np.nan, complete_test)
+
+mask_Markovian_test = load_pickle(
+    os.path.join(
+        save_dir_specific_data,
+        f"mask_Markov_AvgLen{markovian_expected_burst_length}_pnan{p_nan}_test.pkl",
+    )
+)
+test_data_with_Markovian_nan = np.where(mask_Markovian_test, np.nan, complete_test)
+
+plot_components_vs_time_plotly(
+    np.array(train_data_with_Bernoulli_nan),
+    time_step=1e-2,
+    explain=f"s{sigma}_r{rho}_b{beta_str}_Bernoulli_pnan{p_nan}_train",
+    save_dir=save_dir_plots,
+)
+plot_components_vs_time_plotly(
+    np.array(test_data_with_Bernoulli_nan),
+    time_step=1e-2,
+    explain=f"s{sigma}_r{rho}_b{beta_str}_Bernoulli_pnan{p_nan}_test",
+    save_dir=save_dir_plots,
+)
+plot_components_vs_time_plotly(
+    np.array(train_data_with_Markovian_nan),
+    time_step=1e-2,
+    explain=f"s{sigma}_r{rho}_b{beta_str}_Markov_AvgLen{markovian_expected_burst_length}_pnan{p_nan}_train",
+    save_dir=save_dir_plots,
+)
+plot_components_vs_time_plotly(
+    np.array(test_data_with_Markovian_nan),
+    time_step=1e-2,
+    explain=f"s{sigma}_r{rho}_b{beta_str}_Markov_AvgLen{markovian_expected_burst_length}_pnan{p_nan}_test",
+    save_dir=save_dir_plots,
+)
+# %%
 
 # calculate sampling rate
 sampling_rate = 1 / dt
 
 # Call the function to display the plot
 plot_power_spectrum_plotly(
-    np.array(l1.hist),
+    np.array(masked_train_data),
     sampling_rate,
-    explain="s10_r28_b8d3_train",
+    explain=f"s{sigma}_r{rho}_b{beta_str}_train",
     save_dir="temp_save/lorenz63",
 )
 plot_power_spectrum_plotly(
     np.array(l2.hist),
     sampling_rate,
-    explain="s10_r28_b8d3_test",
+    explain=f"s{sigma}_r{rho}_b{beta_str}_test",
     save_dir="temp_save/lorenz63",
 )
 
