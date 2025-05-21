@@ -549,7 +549,7 @@ if __name__ == "__main__":
         )
 
     metrics = {
-        "config": merged_config,
+        "params": params,
         "power_spectrum_error": power_spectrum_error_lst,
     }
 
