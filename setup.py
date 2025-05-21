@@ -46,6 +46,7 @@ setup(
         "pystoi",
         "python-dateutil",
         "pytz",
+        "pyyaml",
         "requests",
         "scikit-learn",
         "seaborn",

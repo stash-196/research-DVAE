@@ -9,7 +9,7 @@ import pickle
 
 
 # Define a build_dataloader function for lorenz63 dataset following the style of the above data_builder
-def build_dataloader(cfg, device, sequence_len):
+def build_dataloader(cfg, device, seq_len):
 
     # Load dataset params for Lorenz63
     data_dir = cfg.get("User", "data_dir")
@@ -38,10 +38,10 @@ def build_dataloader(cfg, device, sequence_len):
 
     # Load dataset
     train_dataset = Lorenz63(
-        path_to_data=data_dir,
+        data_dir=data_dir,
         dataset_label=dataset_label,
         split="train",
-        seq_len=sequence_len,
+        seq_len=seq_len,
         x_dim=x_dim,
         sample_rate=sample_rate,
         skip_rate=skip_rate,
@@ -52,10 +52,10 @@ def build_dataloader(cfg, device, sequence_len):
         with_nan=with_nan,
     )
     val_dataset = Lorenz63(
-        path_to_data=data_dir,
+        data_dir=data_dir,
         dataset_label=dataset_label,
         split="valid",
-        seq_len=sequence_len,
+        seq_len=seq_len,
         x_dim=x_dim,
         sample_rate=sample_rate,
         skip_rate=skip_rate,
@@ -92,7 +92,7 @@ def build_dataloader(cfg, device, sequence_len):
 class Lorenz63(Dataset):
     def __init__(
         self,
-        path_to_data,
+        data_dir,
         dataset_label,
         split,
         seq_len,
@@ -105,6 +105,7 @@ class Lorenz63(Dataset):
         overlap,
         with_nan,
         shuffle=True,
+        **kwargs,
     ):
         """
         :param path_to_data: path to the data folder
@@ -115,7 +116,7 @@ class Lorenz63(Dataset):
         :param val_indices: the number of slices used for validation
         """
 
-        self.path_to_data = path_to_data
+        self.path_to_data = data_dir
         self.dataset_label = dataset_label
         self.x_dim = x_dim
         self.seq_len = seq_len

@@ -16,10 +16,12 @@ from .eval_metric import (
     calculate_expected_accuracy,
     rmse,
     r_squared,
-    expand_autonomous_mode_selector
+    expand_autonomous_mode_selector,
 )
 from .loss import loss_ISD, loss_KLD, loss_JointNorm, loss_MPJPE, loss_MSE
 from .model_mode_selector import create_autonomous_mode_selector
 from .parallel_tasks_executers import run_parallel_visualizations
 from .profiler_utils import profile_execution
-from .config_utils import Options, merge_configs
+
+from .config_utils import Options  # merge_configs
+from .config_handler import load_device_paths

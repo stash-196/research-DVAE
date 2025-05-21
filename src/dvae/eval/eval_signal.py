@@ -4,25 +4,15 @@
 Copyright (c) 2020 by Inria
 Authoried by Xiaoyu BIE (xiaoyu.bie@inria.fr)
 License agreement in LICENSE.txt
-
-https://github.com/stash-196/research-DVAE
-
-# Evaluation on speech data
-python eval_wsj.py --cfg PATH_TO_CONFIG --saved_dict PATH_TO_PRETRAINED_DICT
-python eval_wsj.py --ss --cfg PATH_TO_CONFIG --saved_dict PATH_TO_PRETRAINED_DICT # schedule sampling
-
-# Evaluation on human motion data
-python eval_h36m.py --cfg PATH_TO_CONFIG --saved_dict PATH_TO_PRETRAINED_DICT
-python eval_h36m.py --ss --cfg PATH_TO_CONFIG --saved_dict PATH_TO_PRETRAINED_DICT # schedule sampling
 """
-
 import os
-import json
-import argparse
+import uuid
 import torch
+import argparse
+import json
+import sys
+import time
 import numpy as np
-from tqdm import tqdm
-import matplotlib.pyplot as plt
 from dvae.learning_algo import LearningAlgorithm
 from dvae.dataset import sinusoid_dataset, lorenz63_dataset
 from dvae.utils import (
@@ -35,6 +25,7 @@ from dvae.utils import (
     rmse,
     r_squared,
     expand_autonomous_mode_selector,
+    load_device_paths,
 )
 from dvae.visualizers import (
     visualize_variable_evolution,
@@ -51,8 +42,8 @@ from torch.nn.functional import mse_loss
 import plotly.graph_objects as go
 import plotly.express as px
 import pickle
-from dvae.utils import merge_configs
 import configparser
+from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
 
 
 class Options:
@@ -61,30 +52,19 @@ class Options:
         self.opt = None
 
     def _initial(self):
-        # Basic config file
-        self.parser.add_argument("--ss", action="store_true", help="schedule sampling")
         self.parser.add_argument("--cfg", type=str, default=None, help="config path")
         self.parser.add_argument(
-            "--device_cfg",
-            type=str,
-            default="config/cfg_device.ini",
-            help="device config path",
-        )
-        self.parser.add_argument(
-            "--saved_dict", type=str, default=None, help="trained model dict"
+            "--saved_dict", type=str, required=True, help="trained model dict"
         )
 
     def get_params(self):
         self._initial()
         self.opt = self.parser.parse_args()
         params = vars(self.opt)
-
-        # If cfg is not provided, set it based on the directory of saved_dict
         if params["cfg"] is None:
             params["cfg"] = os.path.join(
                 os.path.dirname(params["saved_dict"]), "config.ini"
             )
-
         return params
 
 
@@ -93,37 +73,17 @@ if __name__ == "__main__":
     np.random.seed(0)
 
     params = Options().get_params()
-    merged_config = merge_configs(params["device_cfg"], params["cfg"])
+    params["job_id"] = "eval_" + str(uuid.uuid4())[:8]  # Add a unique job_id for
 
-    # Update paths in the merged configuration
-    merged_config["User"]["data_dir"] = merged_config["Paths"]["data_dir"]
-    merged_config["User"]["saved_root"] = merged_config["Paths"]["saved_root"]
-
-    # Save the merged configuration temporarily
-    merged_config_path = os.path.join(
-        os.path.dirname(params["saved_dict"]), "merged_config.ini"
-    )
-    with open(merged_config_path, "w") as configfile:
-        config = configparser.ConfigParser()
-        for section, section_values in merged_config.items():
-            config[section] = section_values
-        config.write(configfile)
-
-    # Update params to use the merged configuration
-    params["cfg"] = merged_config_path
+    # Load device-specific paths
+    device_config = load_device_paths(os.path.join("config", "device_paths.yaml"))
+    params["device_config"] = device_config
 
     device = "cpu"
-
-    if params["ss"]:
-        # Learning Algo SS does not exist any more. Raise Error
-        raise ValueError(
-            "Learning Algorithm with schedule sampling does not exist. Please use the one without schedule sampling."
-        )
-    else:
-        learning_algo = LearningAlgorithm(params=params)
-        learning_algo.build_model(device=device)
-        dvae = learning_algo.model.to(device)
-        dvae.device = device
+    learning_algo = LearningAlgorithm(params=params)
+    learning_algo.build_model(device=device)
+    dvae = learning_algo.model.to(device)
+    dvae.device = device
     dvae.load_state_dict(torch.load(params["saved_dict"], map_location="cpu"))
 
     dvae.eval()
@@ -133,119 +93,30 @@ if __name__ == "__main__":
         % (sum(p.numel() for p in dvae.parameters()) / 1000000.0)
     )
 
-    data_dir = cfg.get("Paths", "data_dir")
-    x_dim = cfg.getint("Network", "x_dim")
-    dataset_label = cfg.get("DataFrame", "dataset_label", fallback=None)
-    num_workers = cfg.getint("DataFrame", "num_workers")
-    sample_rate = cfg.getint("DataFrame", "sample_rate")
-    skip_rate = cfg.getint("DataFrame", "skip_rate")
-    observation_process = cfg.get("DataFrame", "observation_process")
-    overlap = cfg.getboolean("DataFrame", "overlap")
-    seq_len = cfg.getint("DataFrame", "sequence_len")
-    s_dim = cfg.getint("DataFrame", "s_dim")
-    with_nan = cfg.getboolean("DataFrame", "with_nan", fallback=False)
+    # Create DatasetConfig for evaluation
+    dataset_config = DatasetConfig(
+        data_dir=learning_algo.data_dir,
+        x_dim=cfg.getint("Network", "x_dim"),
+        batch_size=cfg.getint("DataFrame", "batch_size"),
+        shuffle=cfg.getboolean("DataFrame", "shuffle"),
+        num_workers=cfg.getint("DataFrame", "num_workers"),
+        sample_rate=cfg.getint("DataFrame", "sample_rate"),
+        skip_rate=cfg.getint("DataFrame", "skip_rate"),
+        val_indices=cfg.getfloat("DataFrame", "val_indices"),
+        observation_process=cfg.get("DataFrame", "observation_process"),
+        overlap=cfg.getboolean("DataFrame", "overlap"),
+        with_nan=cfg.getboolean("DataFrame", "with_nan", fallback=False),
+        seq_len=None,
+        device=device,
+        dataset_label=cfg.get("DataFrame", "dataset_label", fallback=None),
+    )
 
-    # specify seq_len for the visualization
-    seq_len = min(1000, seq_len)
-
-    if cfg["DataFrame"]["dataset_name"] == "Sinusoid":
-        # Load test dataset
-        test_dataset = sinusoid_dataset.Sinusoid(
-            path_to_data=data_dir,
-            dataset_label=dataset_label,
-            split="test",
-            seq_len=seq_len,
-            x_dim=x_dim,
-            sample_rate=sample_rate,
-            observation_process=observation_process,
-            device=device,
-            overlap=overlap,
-            skip_rate=skip_rate,
-            val_indices=1,
-            shuffle=False,
-            s_dim=s_dim,
-        )
-        # Build test dataloader
-        test_dataloader = torch.utils.data.DataLoader(
-            test_dataset,
-            batch_size=len(test_dataset),
-            shuffle=False,
-            num_workers=num_workers,
-        )
-        # Load test dataset for long sequence
-        test_dataset_long = sinusoid_dataset.Sinusoid(
-            path_to_data=data_dir,
-            dataset_label=dataset_label,
-            split="test",
-            seq_len=None,
-            x_dim=x_dim,
-            sample_rate=sample_rate,
-            observation_process=observation_process,
-            device=device,
-            overlap=overlap,
-            skip_rate=skip_rate,
-            val_indices=1,
-            shuffle=False,
-            s_dim=s_dim,
-        )
-        # Build test dataloader
-        test_dataloader_long = torch.utils.data.DataLoader(
-            test_dataset_long, batch_size=1, shuffle=False, num_workers=num_workers
-        )
-    elif cfg["DataFrame"]["dataset_name"] == "Lorenz63":
-        # Load test dataset
-        test_dataset = lorenz63_dataset.Lorenz63(
-            dataset_label=dataset_label,
-            path_to_data=data_dir,
-            split="test",
-            seq_len=seq_len,
-            x_dim=x_dim,
-            sample_rate=sample_rate,
-            observation_process=observation_process,
-            device=device,
-            overlap=overlap,
-            skip_rate=skip_rate,
-            val_indices=1,
-            shuffle=False,
-            with_nan=with_nan,
-        )
-        # Build test dataloader
-        test_dataloader = torch.utils.data.DataLoader(
-            test_dataset,
-            batch_size=len(test_dataset),
-            shuffle=False,
-            num_workers=num_workers,
-        )
-
-        # Load test dataset for long sequence
-        test_dataset_long = lorenz63_dataset.Lorenz63(
-            path_to_data=data_dir,
-            dataset_label=dataset_label,
-            split="test",
-            seq_len=None,
-            x_dim=x_dim,
-            sample_rate=sample_rate,
-            observation_process=observation_process,
-            device=device,
-            overlap=overlap,
-            skip_rate=skip_rate,
-            val_indices=1,
-            shuffle=False,
-            with_nan=with_nan,
-        )
-        # Build test dataloader
-        test_dataloader_long = torch.utils.data.DataLoader(
-            test_dataset_long, batch_size=1, shuffle=False, num_workers=num_workers
-        )
-    else:
-        raise ValueError("Unsupported dataset_name in configuration file.")
+    # Build the test dataloader once
+    test_dataloader = build_dataloader(
+        learning_algo.dataset_name, dataset_config, split="test"
+    )
 
     overlap = cfg["DataFrame"].getboolean("overlap")
-
-    test_num = len(test_dataloader.dataset)
-    test_num_long = len(test_dataloader_long.dataset)
-
-    print("[Eval] Test samples: {}, {}".format(test_num, test_num_long))
 
     # Check if "alpha" exists in the config.ini under the [Network] section
     alphas_per_unit = None
@@ -282,13 +153,16 @@ if __name__ == "__main__":
 
         ############################################################################
 
+        new_seq_len = min(10000, len(test_dataloader.dataset.seq))
+        print(f"[Eval] New sequence length: {new_seq_len}")
+        test_dataloader.dataset.update_sequence_length(new_seq_len)
         # Prepare the long sequence data
-        for i, batch_data_long in enumerate(test_dataloader_long):
-            full_xyz_data = test_dataloader_long.dataset.get_full_xyz(
+        for i, batch_data_long in enumerate(test_dataloader):
+            full_xyz_data = test_dataloader.dataset.get_full_xyz(
                 i
             )  # Get full xyz data for the same index
 
-            # batch_data_long = next(iter(test_dataloader_long))  # Single batch for demonstration
+            # batch_data_long = next(iter(test_dataloader))  # Single batch for demonstration
             batch_data_long = batch_data_long.to(device)
             # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
             batch_data_long = batch_data_long.permute(1, 0, 2)
@@ -533,6 +407,8 @@ if __name__ == "__main__":
         ############################################################################
         # Prepare shorter sequence data
         # Single batch for demonstration
+        new_seq_len = min(1000, learning_algo.sequence_len)
+        test_dataloader.dataset.update_sequence_length(new_seq_len)
         batch_data = next(iter(test_dataloader))
         batch_data = batch_data.to(device)
         # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)

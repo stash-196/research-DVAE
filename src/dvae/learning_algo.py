@@ -7,8 +7,6 @@ Year 2020
 Contact : xiaoyu.bie@inria.fr
 License agreement in LICENSE.txt
 """
-
-
 import os
 import shutil
 import socket
@@ -46,6 +44,7 @@ from dvae.dataset import (
     sinusoid_dataset,
     xhro_dataset,
 )
+from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
 from dvae.model import (
     build_VRNN,
     build_RNN,
@@ -56,15 +55,8 @@ import subprocess
 
 
 class LearningAlgorithm:
-    """
-    Basical class for model building, including:
-    - read common paramters for different models
-    - define data loader
-    - define loss function as a class member
-    """
-
     def __init__(self, params):
-        # Load config parser
+        # Load parameters
         self.params = params
         self.config_file = self.params["cfg"]
         if not os.path.isfile(self.config_file):
@@ -72,7 +64,7 @@ class LearningAlgorithm:
         self.cfg = myconf()
         self.cfg.read(self.config_file)
         self.experiment_name = self.cfg.get("User", "experiment_name")
-        self.job_id = self.cfg.get("User", "slurm_job_id")
+        self.job_id = self.params["job_id"]
         print(f"[Learning Algo] Job ID: {self.job_id}")
         self.model_name = self.cfg.get("Network", "name")
         self.dataset_name = self.cfg.get("DataFrame", "dataset_name")
@@ -81,6 +73,12 @@ class LearningAlgorithm:
         self.shuffle = self.cfg.getboolean("DataFrame", "shuffle")
         self.num_workers = self.cfg.getint("DataFrame", "num_workers")
         self.batch_size = self.cfg.getint("DataFrame", "batch_size")
+
+        # Get device-specific paths
+        self.device_config = self.params["device_config"]
+        self.saved_root = self.device_config["saved_root"]
+        self.data_dir = self.device_config["data_dir"]
+        self.device_name = self.device_config["device_name"]
 
         # Get training parameters
         self.sampling_method = self.cfg.get("Training", "sampling_method")
@@ -98,7 +96,6 @@ class LearningAlgorithm:
 
         # Get host name and date
         self.hostname = socket.gethostname()
-        # Get current date
         self.datetime_str = datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
         self.date_str = datetime.datetime.now().strftime("%Y-%m-%d")
         self.time_str = datetime.datetime.now().strftime("%H:%M:%S")
@@ -112,13 +109,9 @@ class LearningAlgorithm:
         else:
             self.device = "cpu"
 
-        # if optimize_alphas is not '', turn into boolian
         try:
-            # Try to fetch the boolean value from the configuration.
             self.optimize_alphas = self.cfg.getboolean("Training", "optimize_alphas")
         except ValueError:
-            # If there is a ValueError, likely because the value is empty or invalid,
-            # set self.optimize_alphas to False.
             self.optimize_alphas = None
 
         if self.optimize_alphas is not None:
@@ -180,12 +173,7 @@ class LearningAlgorithm:
 
         return basic_info
 
-    # @profile_execution
     def train(self, profiler=None):
-        ############
-        ### Init ###
-        ############
-
         # Build model
         self.build_model()
 
@@ -197,7 +185,6 @@ class LearningAlgorithm:
 
         # Create directory for results
         if not self.params["reload"]:
-            saved_root = self.cfg.get("User", "saved_root")
             tag = self.cfg.get("Network", "tag")
             filename = "{}_{}_{}_{}_{}".format(
                 self.dataset_name,
@@ -212,32 +199,25 @@ class LearningAlgorithm:
                 )
                 filename += "_α{}".format(compressed_alphas)
 
-            # add job_id to the filename
-            filename += "_{}_{}".format(
-                self.job_id,
-                self.datetime_str,
+            filename += "_{}_{}".format(self.datetime_str, self.job_id)
+
+            save_dir = os.path.join(
+                self.saved_root,
+                self.date_str,
+                f"{self.device_name}",
+                f"{self.experiment_name}",
+                filename,
             )
-
-            if self.job_id is not None:
-                save_dir = os.path.join(
-                    saved_root, self.date_str, f"{self.experiment_name}", filename
-                )
-            else:
-                save_dir = os.path.join(
-                    saved_root, self.date_str, f"{self.experiment_name}", filename
-                )
-
             print(f"[Learning Algo] Saving to: {save_dir}")
             try:
                 os.makedirs(save_dir)
             except FileExistsError:
-                # The directory already exists, so you can either pass or handle it as needed
                 print(f"[Learning Algo] Directory already exists: {save_dir}")
         else:
             tag = self.cfg.get("Network", "tag")
             save_dir = self.params["model_dir"]
 
-        # Save the model configuration
+        # Save the experiment configuration
         save_cfg = os.path.join(save_dir, "config.ini")
         shutil.copy(self.config_file, save_cfg)
 
@@ -246,12 +226,12 @@ class LearningAlgorithm:
         logger_type = self.cfg.getint("User", "logger_type")
         logger = get_logger(log_file, logger_type)
 
-        # Print basical infomation
+        # Print basic information
         for log in self.get_basic_info():
             logger.info(log)
         logger.info("In this experiment, result will be saved in: " + save_dir)
 
-        # Print model infomation (optional)
+        # Print model information (optional)
         if self.cfg.getboolean("User", "print_model"):
             for log in self.model.get_info():
                 logger.info(log)
@@ -259,29 +239,38 @@ class LearningAlgorithm:
         # Init optimizer
         optimizer = self.init_optimizer()
 
-        def create_dataloader(sequence_len):
-            if self.dataset_name == "Lorenz63":
-                return lorenz63_dataset.build_dataloader(
-                    self.cfg, self.device, sequence_len
-                )
-            elif self.dataset_name == "Sinusoid":
-                return sinusoid_dataset.build_dataloader(
-                    self.cfg, self.device, sequence_len
-                )
-            elif self.dataset_name == "Xhro":
-                return xhro_dataset.build_dataloader(
-                    self.cfg, self.device, sequence_len
-                )
-            else:
-                logger.error("Unknown dataset!")
-
         # Create initial data loader with the starting sequence length
         initial_sequence_len = self.cfg.getint(
             "DataFrame", "initial_sequence_len", fallback=self.sequence_len // 10
         )
-        train_dataloader, val_dataloader, train_num, val_num = create_dataloader(
-            initial_sequence_len
+
+        # Define DatasetConfig with all parameters
+        dataset_config = DatasetConfig(
+            data_dir=self.data_dir,
+            x_dim=self.cfg.getint(
+                "Network", "x_dim"
+            ),  # Assume x_dim is set elsewhere in build_model or config
+            batch_size=self.batch_size,
+            shuffle=self.shuffle,
+            num_workers=self.num_workers,
+            sample_rate=self.cfg.getint(
+                "DataFrame", "sample_rate"
+            ),  # Assume these are set from cfg
+            skip_rate=self.cfg.getint("DataFrame", "skip_rate"),
+            val_indices=self.cfg.getfloat("DataFrame", "val_indices"),
+            observation_process=self.cfg.get("DataFrame", "observation_process"),
+            overlap=self.cfg.getboolean("DataFrame", "overlap"),
+            with_nan=self.cfg.getboolean("DataFrame", "with_nan", fallback=False),
+            seq_len=initial_sequence_len,  # Use initial_sequence_len here
+            device=self.device,
+            dataset_label=self.dataset_label,
         )
+
+        # Build data loaders (no need to pass sequence_len and device separately)
+        train_dataloader, val_dataloader, train_num, val_num = build_dataloader(
+            self.dataset_name, dataset_config
+        )
+
         current_sequence_len = initial_sequence_len
 
         logger.info("Training samples: {}".format(train_num))
