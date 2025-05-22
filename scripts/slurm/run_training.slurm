@@ -16,25 +16,8 @@ echo "Time BEGIN: `date`"
 echo "Running on host: `hostname`"
 echo "Under SLURM JobID: $SLURM_JOBID"
 
+
 cd ~/workspace/research-DVAE
-
-#!/bin/bash
-
-#SBATCH --job-name=dvae_training     # Job name
-#SBATCH --nodes=1                    # Use one node
-#SBATCH --ntasks=1                   # Run a single task
-#SBATCH --cpus-per-task=8            # Number of CPU cores per task
-#SBATCH --mem=16G                    # Total memory limit
-#SBATCH --time=10:00:00              # Time limit hrs:min:sec
-#SBATCH --output=./logs/%j_training.log     # Standard output and error log
-#SBATCH --error=./logs/%j_training.err      # Standard output and error log
-#SBATCH --partition=compute              # Specify the GPU partition
-
-
-# Print the time, hostname, and job ID
-echo "Time BEGIN: `date`"
-echo "Running on host: `hostname`"
-echo "Under SLURM JobID: $SLURM_JOBID"
 
 # Define paths
 CONTAINER_PATH=/bucket/DoyaU/stash/containers/generic_ml_container.sif
