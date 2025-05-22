@@ -268,7 +268,7 @@ class LearningAlgorithm:
 
         # Build data loaders (no need to pass sequence_len and device separately)
         train_dataloader, val_dataloader, train_num, val_num = build_dataloader(
-            self.dataset_name, dataset_config
+            self.dataset_name, dataset_config, "train"
         )
 
         current_sequence_len = initial_sequence_len

@@ -20,7 +20,7 @@ import matplotlib
 
 matplotlib.use("Agg")  # Set the backend to 'Agg' to avoid GUI issues
 
-plt.rcParams["font.family"] = "Times New Roman"
+plt.rcParams["font.family"] = "Liberation Serif"
 
 
 def visualize_model_parameters(model, explain, save_path=None, fixed_scale=None):

@@ -406,10 +406,10 @@ plt.rcParams.update(
         "xtick.labelsize": 18,  # X tick labels
         "ytick.labelsize": 18,  # Y tick labels
         "legend.fontsize": 18,  # Legend font size
-        # font times new roman
+        # font times new roman -> Liberation Serif
         "font.family": "serif",
-        "font.serif": ["Times New Roman"],
-        "font.sans-serif": ["Times New Roman"],
+        "font.serif": ["Liberation Serif"],
+        "font.sans-serif": ["Liberation Serif"],
     }
 )
 
