@@ -96,9 +96,9 @@ class LearningAlgorithm:
 
         # Get host name and date
         self.hostname = socket.gethostname()
-        self.datetime_str = datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
-        self.date_str = datetime.datetime.now().strftime("%Y-%m-%d")
-        self.time_str = datetime.datetime.now().strftime("%H:%M:%S")
+        self.datetime_str = datetime.datetime.now().strftime("%Y%m%d-%H.%M.%S")
+        self.date_str = datetime.datetime.now().strftime("%Y%m%d")
+        self.time_str = datetime.datetime.now().strftime("%H.%M.%S")
 
         # Load model parameters
         self.use_cuda = self.cfg.getboolean("Training", "use_cuda")
