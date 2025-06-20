@@ -1,4 +1,5 @@
 # %%
+import textwrap
 from sklearn.decomposition import PCA
 from plotly.subplots import make_subplots
 import plotly.io as pio
@@ -83,7 +84,11 @@ def plot_attractor_plotly(hists, save_dir=None, explain=None, format="pdf"):
             yaxis_title="y",
             zaxis_title="z",
         ),
-        title=f"Attractor Plot for {explain} set",
+        title=textwrap.fill(
+            f"Attractor Plot for {explain.replace('_', ' ')} set",
+            width=50,
+            break_long_words=True,
+        ),
     )
     fig.show()
     if save_dir is not None:
@@ -119,7 +124,9 @@ def plot_attractor_subplots(hists, explain, save_dir=None, format="pdf"):
         )
 
     fig.update_layout(
-        title_text="Timeseries Subplots for X, Y, and Z for {} set".format(explain)
+        title_text="Timeseries Subplots for X, Y, and Z for {} set".format(
+            explain.replace("_", " ")
+        )
     )
     fig.show()
     if save_dir is not None:
@@ -142,7 +149,11 @@ def plot_components_vs_time_plotly(
     fig.add_trace(go.Scatter(x=t, y=z, mode="lines", name="z", line=dict(color="red")))
 
     fig.update_layout(
-        title="Components of Lorenz63 System vs. Time for {} set".format(explain),
+        title=textwrap.fill(
+            f"Components of Lorenz63 System vs. Time for {explain.replace('_', ' ')} set",
+            width=50,
+            break_long_words=True,
+        ),
         xaxis_title="Time",
         yaxis_title="Values",
         showlegend=True,
@@ -368,13 +379,330 @@ if not os.path.exists(save_dir_plots):
 if not os.path.exists(save_dir_data):
     os.makedirs(save_dir_data)
 
+# %%
+# ================== For Dataset Generation ==================
+sigma = 10
+rho = 40
+beta = 8 / 3
+N = 15 * 60 * 24 * 5  # 5 days worth of data of frequency 0.25Hz (4s period)
+# N = 50000  # 50k samples, 5 days worth of data of frequency 0.25Hz (4s period)
+dt = 1e-2
+
+
+beta_frac = Fraction(beta).limit_denominator()
+beta_str = f"{beta_frac.numerator}d{beta_frac.denominator}"
+
+
+parameter_str = f"sigma{sigma}_rho{rho}_beta{beta_str}_N{human_format(N)}_dt{dt}"
+save_dir_specific_data = os.path.join(
+    save_dir_data,
+    parameter_str,
+)
+save_dir_specific_plots = os.path.join(
+    save_dir_plots,
+    parameter_str,
+)
+if not os.path.exists(save_dir_specific_data):
+    os.makedirs(save_dir_specific_data)
+if not os.path.exists(save_dir_specific_plots):
+    os.makedirs(save_dir_specific_plots)
+
+
+l1 = L63(sigma, rho, beta, init=[1, 10, 20], dt=dt)
+l2 = L63(sigma, rho, beta, init=[10, 1, 2], dt=dt)
+l1.integrate(int(N * 0.9))
+l2.integrate(int(N * 0.1))
+
+plot_attractor_plotly(
+    [l1.hist], save_dir=save_dir_specific_plots, explain=f"{parameter_str}_train"
+)
+plot_attractor_plotly(
+    [l2.hist], save_dir=save_dir_specific_plots, explain=f"{parameter_str}_test"
+)
+
+
+plot_attractor_subplots(
+    [l1.hist], save_dir=save_dir_specific_plots, explain=f"{parameter_str}_train"
+)
+plot_attractor_subplots(
+    [l2.hist], save_dir=save_dir_specific_plots, explain=f"{parameter_str}_test"
+)
+
+plot_components_vs_time_plotly(
+    np.array(l1.hist),
+    time_step=dt,
+    explain=f"{parameter_str}_train",
+    save_dir=save_dir_specific_plots,
+)
+plot_components_vs_time_plotly(
+    np.array(l2.hist),
+    time_step=dt,
+    explain=f"{parameter_str}_test",
+    save_dir=save_dir_specific_plots,
+)
+
+
+# store l.hist as pickle data for later use in pytorch dataloader
+def save_pickle(data, path):
+
+    with open(path, "wb") as f:
+        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        print(f"Saved data to {path}")
+
+
+save_pickle(l1.hist, os.path.join(save_dir_specific_data, "complete_dataset_train.pkl"))
+save_pickle(l2.hist, os.path.join(save_dir_specific_data, "complete_dataset_test.pkl"))
+# %%
+# ================== Generate Masks ==================
+missing_ratios = [
+    0.0,
+    0.1,
+    0.2,
+    0.3,
+    0.4,
+    0.5,
+    0.6,
+    0.7,
+    0.8,
+    0.85,
+    0.9,
+    0.92,
+    0.95,
+    0.99,
+    1.0,
+]
+# Generate masks
+np.random.seed(42)
+# Do the same for the list of missing data
+for p_nan in missing_ratios:
+    mask_train = np.random.binomial(1, p_nan, size=(len(l1.hist), 3))
+    mask_test = np.random.binomial(1, p_nan, size=(len(l2.hist), 3))
+
+    save_pickle(
+        mask_train,
+        os.path.join(save_dir_specific_data, f"mask_Bernoulli_pnan{p_nan}_train.pkl"),
+    )
+    save_pickle(
+        mask_test,
+        os.path.join(save_dir_specific_data, f"mask_Bernoulli_pnan{p_nan}_test.pkl"),
+    )
+
+    markovian_expected_burst_length = 15
+    if markovian_expected_burst_length * (1 - p_nan) >= p_nan:
+        mask_train = generate_markovian_burst_mask(
+            np.array(l1.hist).shape,
+            pi_1=p_nan,
+            exp_burst_length=markovian_expected_burst_length,
+        )
+        mask_test = generate_markovian_burst_mask(
+            np.array(l2.hist).shape,
+            pi_1=p_nan,
+            exp_burst_length=markovian_expected_burst_length,
+        )
+        save_pickle(
+            mask_train,
+            os.path.join(
+                save_dir_specific_data,
+                f"mask_Markov_AvgLen{markovian_expected_burst_length}_pnan{p_nan}_train.pkl",
+            ),
+        )
+        save_pickle(
+            mask_test,
+            os.path.join(
+                save_dir_specific_data,
+                f"mask_Markov_AvgLen{markovian_expected_burst_length}_pnan{p_nan}_test.pkl",
+            ),
+        )
+
+
+def load_pickle(path):
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+
+# Example: Load data with p_nan = 0.1
+p_nan = 0.1
+# load train data
+complete_train = load_pickle(
+    os.path.join(save_dir_specific_data, "complete_dataset_train.pkl")
+)
+mask_Bernoulli_train = load_pickle(
+    os.path.join(save_dir_specific_data, f"mask_Bernoulli_pnan{p_nan}_train.pkl")
+)
+train_data_with_Bernoulli_nan = np.where(mask_Bernoulli_train, np.nan, complete_train)
+
+mask_Markovian_train = load_pickle(
+    os.path.join(
+        save_dir_specific_data,
+        f"mask_Markov_AvgLen{markovian_expected_burst_length}_pnan{p_nan}_train.pkl",
+    )
+)
+train_data_with_Markovian_nan = np.where(mask_Markovian_train, np.nan, complete_train)
+
+# Load test data
+complete_test = load_pickle(
+    os.path.join(save_dir_specific_data, "complete_dataset_test.pkl")
+)
+mask_Bernoulli_test = load_pickle(
+    os.path.join(save_dir_specific_data, f"mask_Bernoulli_pnan{p_nan}_test.pkl")
+)
+test_data_with_Bernoulli_nan = np.where(mask_Bernoulli_test, np.nan, complete_test)
+
+mask_Markovian_test = load_pickle(
+    os.path.join(
+        save_dir_specific_data,
+        f"mask_Markov_AvgLen{markovian_expected_burst_length}_pnan{p_nan}_test.pkl",
+    )
+)
+test_data_with_Markovian_nan = np.where(mask_Markovian_test, np.nan, complete_test)
+
+plot_components_vs_time_plotly(
+    np.array(train_data_with_Bernoulli_nan),
+    time_step=dt,
+    explain=f"s{sigma}_r{rho}_b{beta_str}_Bernoulli_pnan{p_nan}_train",
+    save_dir=save_dir_plots,
+)
+plot_components_vs_time_plotly(
+    np.array(test_data_with_Bernoulli_nan),
+    time_step=dt,
+    explain=f"s{sigma}_r{rho}_b{beta_str}_Bernoulli_pnan{p_nan}_test",
+    save_dir=save_dir_plots,
+)
+plot_components_vs_time_plotly(
+    np.array(train_data_with_Markovian_nan),
+    time_step=dt,
+    explain=f"s{sigma}_r{rho}_b{beta_str}_Markov_AvgLen{markovian_expected_burst_length}_pnan{p_nan}_train",
+    save_dir=save_dir_plots,
+)
+plot_components_vs_time_plotly(
+    np.array(test_data_with_Markovian_nan),
+    time_step=dt,
+    explain=f"s{sigma}_r{rho}_b{beta_str}_Markov_AvgLen{markovian_expected_burst_length}_pnan{p_nan}_test",
+    save_dir=save_dir_plots,
+)
+# %%
+
+# calculate sampling rate
+sampling_rate = 1 / dt
+
+# Call the function to display the plot
+plot_power_spectrum_plotly(
+    np.array(masked_train_data),
+    sampling_rate,
+    explain=f"s{sigma}_r{rho}_b{beta_str}_train",
+    save_dir="temp_save/lorenz63",
+)
+plot_power_spectrum_plotly(
+    np.array(l2.hist),
+    sampling_rate,
+    explain=f"s{sigma}_r{rho}_b{beta_str}_test",
+    save_dir="temp_save/lorenz63",
+)
+
+
+# Call the function to display the plots
+# %%
+# Example usage for original XYZ data
+component_labels_xyz = ["X", "Y", "Z"]
+peaks_train, frequenciest_train, power_spectrum_train = (
+    plot_power_spectrum_subplots_loglog(
+        np.array(l1.hist),
+        sampling_rate,
+        "s10_r28_b8d3_train_xyz",
+        component_labels_xyz,
+        save_dir="temp_save/lorenz63",
+    )
+)
+peaks_test, frequencies_test, power_spectrum_test = plot_power_spectrum_subplots_loglog(
+    np.array(l2.hist),
+    sampling_rate,
+    "s10_r28_b8d3_train_xyz",
+    component_labels_xyz,
+    save_dir="temp_save/lorenz63",
+)
+
+# Example usage for PCA components
+
+# # calculate PCs from train and test data
+# pca = PCA(n_components=3)
+# PCs_train = pca.fit_transform(np.array(l1.hist))
+# PCs_test = pca.transform(np.array(l2.hist))
+
+# component_labels_pca = ["PC1", "PC2", "PC3"]
+# plot_power_spectrum_subplots_loglog(PCs_train, sampling_rate, 's10_r28_b8d3_train_pca', component_labels_pca, save_dir='temp_save/lorenz63')
+# plot_power_spectrum_subplots_loglog(PCs_test, sampling_rate, 's10_r28_b8d3_test_pca', component_labels_pca, save_dir='temp_save/lorenz63')
+alphas = dt * frequencies_test[peaks_test]
+# %%
+
+
+def plot_delay_embedding(observation, delay, dimensions):
+    """
+    Plots the delay embedding of a 1D observation with lines.
+
+    :param observation: 1D array of observations.
+    :param delay: Time delay for embedding.
+    :param dimensions: Number of embedding dimensions.
+    """
+    n = len(observation)
+    embedding_length = n - (dimensions - 1) * delay
+    if embedding_length <= 0:
+        raise ValueError(
+            "Delay and dimensions are too large for the length of the observation array."
+        )
+
+    # Create the delay-embedded matrix
+    embedded = np.empty((embedding_length, dimensions))
+    for i in range(dimensions):
+        embedded[:, i] = observation[i * delay : i * delay + embedding_length]
+
+    # Plotting
+    if dimensions == 2:
+        fig = go.Figure(
+            data=go.Scatter(x=embedded[:, 0], y=embedded[:, 1], mode="lines")
+        )
+        fig.update_layout(
+            title="2D Delay Embedding", xaxis_title="X(t)", yaxis_title="X(t + delay)"
+        )
+    elif dimensions == 3:
+        fig = go.Figure(
+            data=go.Scatter3d(
+                x=embedded[:, 0], y=embedded[:, 1], z=embedded[:, 2], mode="lines"
+            )
+        )
+        fig.update_layout(
+            title="3D Delay Embedding",
+            scene=dict(
+                xaxis_title="X(t)",
+                yaxis_title="X(t + delay)",
+                zaxis_title="X(t + 2 * delay)",
+            ),
+        )
+    else:
+        raise NotImplementedError(
+            "Plotting for dimensions higher than 3 is not implemented."
+        )
+
+    fig.show()
+
+
+# # Example usage
+# # Assuming you have an array `x` from the Lorenz system:
+# x = np.array(l1.hist)[:, 0]
+# plot_delay_embedding(x, delay=10, dimensions=3)
+
+# x_nan = np.array(l1_nan.hist)[:, 0]
+# plot_delay_embedding(x_nan, delay=10, dimensions=3)
+
+# %%
+
+
 # %% ================== For Presentation ==================
 sigma = 10
 rho = 28
 beta = 8 / 3
 N = 1000
 dt = 1e-2
-l_present = L63(sigma, rho, beta, init=[1, 10, 20], dt=1e-2)
+l_present = L63(sigma, rho, beta, init=[1, 10, 20], dt=dt)
 l_present.integrate(N)
 
 # mask 10-20, 30-50, 70-80
@@ -506,316 +834,5 @@ plt.show()
 # save to this file directory
 
 # ================== END ==================
-
-# %%
-sigma = 10
-rho = 28
-beta = 8 / 3
-N = 15 * 60 * 24 * 5  # 5 days worth of data of frequency 0.25Hz (4s period)
-dt = 1e-2
-
-beta_frac = Fraction(beta).limit_denominator()
-beta_str = f"{beta_frac.numerator}d{beta_frac.denominator}"
-
-
-parameter_str = f"sigma{sigma}_rho{rho}_beta{beta_str}_N{human_format(N)}_dt{dt}"
-save_dir_specific_data = os.path.join(
-    save_dir_data,
-    parameter_str,
-)
-save_dir_specific_plots = os.path.join(
-    save_dir_plots,
-    parameter_str,
-)
-if not os.path.exists(save_dir_specific_data):
-    os.makedirs(save_dir_specific_data)
-if not os.path.exists(save_dir_specific_plots):
-    os.makedirs(save_dir_specific_plots)
-
-
-l1 = L63(sigma, rho, beta, init=[1, 10, 20], dt=1e-2)
-l2 = L63(sigma, rho, beta, init=[10, 1, 2], dt=1e-2)
-l1.integrate(int(N * 0.9))
-l2.integrate(int(N * 0.1))
-
-plot_attractor_plotly(
-    [l1.hist], save_dir=save_dir_specific_plots, explain=f"{parameter_str}_train"
-)
-plot_attractor_plotly(
-    [l2.hist], save_dir=save_dir_specific_plots, explain=f"{parameter_str}_test"
-)
-
-
-plot_attractor_subplots(
-    [l1.hist], save_dir=save_dir_specific_plots, explain=f"{parameter_str}_train"
-)
-plot_attractor_subplots(
-    [l2.hist], save_dir=save_dir_specific_plots, explain=f"{parameter_str}_test"
-)
-
-plot_components_vs_time_plotly(
-    np.array(l1.hist),
-    time_step=1e-2,
-    explain=f"{parameter_str}_train",
-    save_dir=save_dir_specific_plots,
-)
-plot_components_vs_time_plotly(
-    np.array(l2.hist),
-    time_step=1e-2,
-    explain=f"{parameter_str}_test",
-    save_dir=save_dir_specific_plots,
-)
-
-
-# store l.hist as pickle data for later use in pytorch dataloader
-def save_pickle(data, path):
-
-    with open(path, "wb") as f:
-        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
-        print(f"Saved data to {path}")
-
-
-save_pickle(l1.hist, os.path.join(save_dir_specific_data, "complete_dataset_train.pkl"))
-save_pickle(l2.hist, os.path.join(save_dir_specific_data, "complete_dataset_test.pkl"))
-# %%
-
-missing_ratios = [
-    0.0,
-    0.1,
-    0.2,
-    0.3,
-    0.4,
-    0.5,
-    0.6,
-    0.7,
-    0.8,
-    0.85,
-    0.9,
-    0.92,
-    0.95,
-    0.99,
-    1.0,
-]
-# Generate masks
-np.random.seed(42)
-# Do the same for the list of missing data
-for p_nan in missing_ratios:
-    mask_train = np.random.binomial(1, p_nan, size=(len(l1.hist), 3))
-    mask_test = np.random.binomial(1, p_nan, size=(len(l2.hist), 3))
-
-    save_pickle(
-        mask_train,
-        os.path.join(save_dir_specific_data, f"mask_Bernoulli_pnan{p_nan}_train.pkl"),
-    )
-    save_pickle(
-        mask_test,
-        os.path.join(save_dir_specific_data, f"mask_Bernoulli_pnan{p_nan}_test.pkl"),
-    )
-
-    markovian_expected_burst_length = 15
-    if markovian_expected_burst_length * (1 - p_nan) >= p_nan:
-        mask_train = generate_markovian_burst_mask(
-            np.array(l1.hist).shape,
-            pi_1=p_nan,
-            exp_burst_length=markovian_expected_burst_length,
-        )
-        mask_test = generate_markovian_burst_mask(
-            np.array(l2.hist).shape,
-            pi_1=p_nan,
-            exp_burst_length=markovian_expected_burst_length,
-        )
-        save_pickle(
-            mask_train,
-            os.path.join(
-                save_dir_specific_data,
-                f"mask_Markov_AvgLen{markovian_expected_burst_length}_pnan{p_nan}_train.pkl",
-            ),
-        )
-        save_pickle(
-            mask_test,
-            os.path.join(
-                save_dir_specific_data,
-                f"mask_Markov_AvgLen{markovian_expected_burst_length}_pnan{p_nan}_test.pkl",
-            ),
-        )
-
-
-def load_pickle(path):
-    with open(path, "rb") as f:
-        return pickle.load(f)
-
-
-# Example: Load data with p_nan = 0.1
-p_nan = 0.1
-# load train data
-complete_train = load_pickle(
-    os.path.join(save_dir_specific_data, "complete_dataset_train.pkl")
-)
-mask_Bernoulli_train = load_pickle(
-    os.path.join(save_dir_specific_data, f"mask_Bernoulli_pnan{p_nan}_train.pkl")
-)
-train_data_with_Bernoulli_nan = np.where(mask_Bernoulli_train, np.nan, complete_train)
-
-mask_Markovian_train = load_pickle(
-    os.path.join(
-        save_dir_specific_data,
-        f"mask_Markov_AvgLen{markovian_expected_burst_length}_pnan{p_nan}_train.pkl",
-    )
-)
-train_data_with_Markovian_nan = np.where(mask_Markovian_train, np.nan, complete_train)
-
-# Load test data
-complete_test = load_pickle(
-    os.path.join(save_dir_specific_data, "complete_dataset_test.pkl")
-)
-mask_Bernoulli_test = load_pickle(
-    os.path.join(save_dir_specific_data, f"mask_Bernoulli_pnan{p_nan}_test.pkl")
-)
-test_data_with_Bernoulli_nan = np.where(mask_Bernoulli_test, np.nan, complete_test)
-
-mask_Markovian_test = load_pickle(
-    os.path.join(
-        save_dir_specific_data,
-        f"mask_Markov_AvgLen{markovian_expected_burst_length}_pnan{p_nan}_test.pkl",
-    )
-)
-test_data_with_Markovian_nan = np.where(mask_Markovian_test, np.nan, complete_test)
-
-plot_components_vs_time_plotly(
-    np.array(train_data_with_Bernoulli_nan),
-    time_step=1e-2,
-    explain=f"s{sigma}_r{rho}_b{beta_str}_Bernoulli_pnan{p_nan}_train",
-    save_dir=save_dir_plots,
-)
-plot_components_vs_time_plotly(
-    np.array(test_data_with_Bernoulli_nan),
-    time_step=1e-2,
-    explain=f"s{sigma}_r{rho}_b{beta_str}_Bernoulli_pnan{p_nan}_test",
-    save_dir=save_dir_plots,
-)
-plot_components_vs_time_plotly(
-    np.array(train_data_with_Markovian_nan),
-    time_step=1e-2,
-    explain=f"s{sigma}_r{rho}_b{beta_str}_Markov_AvgLen{markovian_expected_burst_length}_pnan{p_nan}_train",
-    save_dir=save_dir_plots,
-)
-plot_components_vs_time_plotly(
-    np.array(test_data_with_Markovian_nan),
-    time_step=1e-2,
-    explain=f"s{sigma}_r{rho}_b{beta_str}_Markov_AvgLen{markovian_expected_burst_length}_pnan{p_nan}_test",
-    save_dir=save_dir_plots,
-)
-# %%
-
-# calculate sampling rate
-sampling_rate = 1 / dt
-
-# Call the function to display the plot
-plot_power_spectrum_plotly(
-    np.array(masked_train_data),
-    sampling_rate,
-    explain=f"s{sigma}_r{rho}_b{beta_str}_train",
-    save_dir="temp_save/lorenz63",
-)
-plot_power_spectrum_plotly(
-    np.array(l2.hist),
-    sampling_rate,
-    explain=f"s{sigma}_r{rho}_b{beta_str}_test",
-    save_dir="temp_save/lorenz63",
-)
-
-
-# Call the function to display the plots
-# %%
-# Example usage for original XYZ data
-component_labels_xyz = ["X", "Y", "Z"]
-peaks_train, frequenciest_train, power_spectrum_train = (
-    plot_power_spectrum_subplots_loglog(
-        np.array(l1.hist),
-        sampling_rate,
-        "s10_r28_b8d3_train_xyz",
-        component_labels_xyz,
-        save_dir="temp_save/lorenz63",
-    )
-)
-peaks_test, frequencies_test, power_spectrum_test = plot_power_spectrum_subplots_loglog(
-    np.array(l2.hist),
-    sampling_rate,
-    "s10_r28_b8d3_train_xyz",
-    component_labels_xyz,
-    save_dir="temp_save/lorenz63",
-)
-
-# Example usage for PCA components
-
-# # calculate PCs from train and test data
-# pca = PCA(n_components=3)
-# PCs_train = pca.fit_transform(np.array(l1.hist))
-# PCs_test = pca.transform(np.array(l2.hist))
-
-# component_labels_pca = ["PC1", "PC2", "PC3"]
-# plot_power_spectrum_subplots_loglog(PCs_train, sampling_rate, 's10_r28_b8d3_train_pca', component_labels_pca, save_dir='temp_save/lorenz63')
-# plot_power_spectrum_subplots_loglog(PCs_test, sampling_rate, 's10_r28_b8d3_test_pca', component_labels_pca, save_dir='temp_save/lorenz63')
-alphas = dt * frequencies_test[peaks_test]
-# %%
-
-
-def plot_delay_embedding(observation, delay, dimensions):
-    """
-    Plots the delay embedding of a 1D observation with lines.
-
-    :param observation: 1D array of observations.
-    :param delay: Time delay for embedding.
-    :param dimensions: Number of embedding dimensions.
-    """
-    n = len(observation)
-    embedding_length = n - (dimensions - 1) * delay
-    if embedding_length <= 0:
-        raise ValueError(
-            "Delay and dimensions are too large for the length of the observation array."
-        )
-
-    # Create the delay-embedded matrix
-    embedded = np.empty((embedding_length, dimensions))
-    for i in range(dimensions):
-        embedded[:, i] = observation[i * delay : i * delay + embedding_length]
-
-    # Plotting
-    if dimensions == 2:
-        fig = go.Figure(
-            data=go.Scatter(x=embedded[:, 0], y=embedded[:, 1], mode="lines")
-        )
-        fig.update_layout(
-            title="2D Delay Embedding", xaxis_title="X(t)", yaxis_title="X(t + delay)"
-        )
-    elif dimensions == 3:
-        fig = go.Figure(
-            data=go.Scatter3d(
-                x=embedded[:, 0], y=embedded[:, 1], z=embedded[:, 2], mode="lines"
-            )
-        )
-        fig.update_layout(
-            title="3D Delay Embedding",
-            scene=dict(
-                xaxis_title="X(t)",
-                yaxis_title="X(t + delay)",
-                zaxis_title="X(t + 2 * delay)",
-            ),
-        )
-    else:
-        raise NotImplementedError(
-            "Plotting for dimensions higher than 3 is not implemented."
-        )
-
-    fig.show()
-
-
-# # Example usage
-# # Assuming you have an array `x` from the Lorenz system:
-# x = np.array(l1.hist)[:, 0]
-# plot_delay_embedding(x, delay=10, dimensions=3)
-
-# x_nan = np.array(l1_nan.hist)[:, 0]
-# plot_delay_embedding(x_nan, delay=10, dimensions=3)
 
 # %%

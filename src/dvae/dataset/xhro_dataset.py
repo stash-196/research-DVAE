@@ -6,92 +6,12 @@ from torch.utils.data import Dataset
 import os
 import numpy as np
 import pandas as pd
-from .utils import data_utils
-import pickle
-
-
-# Define a build_dataloader function for lorenz63 dataset following the style of the above data_builder
-def build_dataloader(cfg, device, seq_len):
-
-    # Load dataset params for Lorenz63
-    data_dir = cfg.get("User", "data_dir")
-    x_dim = cfg.getint("Network", "x_dim")
-    dataset_label = cfg.get("DataFrame", "dataset_label", fallback=None)
-    shuffle = cfg.getboolean("DataFrame", "shuffle")
-    batch_size = cfg.getint("DataFrame", "batch_size")
-    num_workers = cfg.getint("DataFrame", "num_workers")
-    sample_rate = cfg.getint("DataFrame", "sample_rate")
-    skip_rate = cfg.getint("DataFrame", "skip_rate")
-    val_indices = cfg.getfloat("DataFrame", "val_indices")
-    observation_process = cfg.get("DataFrame", "observation_process")
-    overlap = cfg.getboolean("DataFrame", "overlap")
-
-    data_cfgs = {}
-    # define long as a boolean if field exists
-    if cfg.has_option("DataFrame", "long"):
-        long = cfg.getboolean("DataFrame", "long")
-    else:
-        long = False
-
-    if cfg.has_option("DataFrame", "s_dim"):
-        data_cfgs["s_dim"] = cfg.getint("DataFrame", "s_dim")
-    else:
-        data_cfgs["s_dim"] = False
-
-    # Load dataset
-    train_dataset = Xhro(
-        path_to_data=data_dir,
-        dataset_label=dataset_label,
-        split="train",
-        seq_len=seq_len,
-        x_dim=x_dim,
-        sample_rate=sample_rate,
-        skip_rate=skip_rate,
-        val_indices=val_indices,
-        observation_process=observation_process,
-        device=device,
-        overlap=overlap,
-    )
-    val_dataset = Xhro(
-        path_to_data=data_dir,
-        dataset_label=dataset_label,
-        split="valid",
-        seq_len=seq_len,
-        x_dim=x_dim,
-        sample_rate=sample_rate,
-        skip_rate=skip_rate,
-        val_indices=val_indices,
-        observation_process=observation_process,
-        device=device,
-        overlap=overlap,
-    )
-
-    train_num = train_dataset.__len__()
-    val_num = val_dataset.__len__()
-
-    # Build dataloader
-    train_dataloader = torch.utils.data.DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        num_workers=num_workers,
-        pin_memory=True,
-    )
-    val_dataloader = torch.utils.data.DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        num_workers=num_workers,
-        pin_memory=True,
-    )
-
-    return train_dataloader, val_dataloader, train_num, val_num
 
 
 class Xhro(Dataset):
     def __init__(
         self,
-        path_to_data,
+        data_dir,
         dataset_label,
         split,
         seq_len,
@@ -120,7 +40,7 @@ class Xhro(Dataset):
         :param shuffle: whether to shuffle the data indices
         """
 
-        self.path_to_data = path_to_data
+        self.path_to_data = data_dir
         self.dataset_label = dataset_label
         self.x_dim = x_dim
         self.seq_len = seq_len
@@ -139,17 +59,18 @@ class Xhro(Dataset):
         # )
         filename = os.path.join(
             f"{self.path_to_data}",
-            "processed",
             "xhro",
+            "processed",
             f"{self.dataset_label}",
-            "filtered_data.parquet",
+            "coarse_features.parquet",
         )
         the_sequence = pd.read_parquet(filename)
+        # see if directory of filename exists
 
-        if self.split == "test":  # use the latter half of the data for testing
-            the_sequence = the_sequence[the_sequence.shape[0] // 2 :]
+        if self.split == "test":  # use the Latter 20% of the data for testing
+            the_sequence = the_sequence[-the_sequence.shape[0] // 5 :]
         else:
-            the_sequence = the_sequence[: the_sequence.shape[0] // 2]
+            the_sequence = the_sequence[: -the_sequence.shape[0] // 5]
 
         # Store the full sequence before applying any observation process
         self.full_sequence = the_sequence
@@ -170,7 +91,7 @@ class Xhro(Dataset):
             ]  # Trim data to fit sequences
             the_sequence = the_sequence.reshape(num_sequences, self.seq_len, -1)
 
-        self.seq = torch.from_numpy(the_sequence).float()
+        self.seq = the_sequence
 
         # Split dataset into training and validation indices
         num_sequences = self.seq.shape[0]
@@ -189,16 +110,12 @@ class Xhro(Dataset):
         """
         Applies an observation process to the sequence data.
         """
-        if self.observation_process == "only_ch1_normalize":
-            # Extract the desired channel (e.g., column 3)
-            data = sequence[:, 3].astype(np.float32)  # Convert to float
-            # Reshape to (num_samples, 1)
-            data = data.reshape(-1, 1)
-            return self.normalize(data)
-        elif self.observation_process == "select_columns_normalize":
-            # For example, select columns 3 to 9
-            data = sequence[:, 3:9].astype(np.float32)
-            return self.normalize(data)
+        if self.observation_process in select_columns.keys():
+            data = sequence[select_columns[self.observation_process]].to_numpy(
+                dtype=np.float32
+            )
+            normalized_data = self.normalize(data)
+            return torch.from_numpy(normalized_data)
         else:
             raise ValueError(f"Invalid observation process: {self.observation_process}")
 
@@ -267,3 +184,21 @@ class Xhro(Dataset):
             self.data_idx = train_indices
         else:
             self.data_idx = validation_indices
+
+
+select_columns = {
+    "ch4_relative_powers": [
+        ("ch4", "relative_alpha_power"),
+        ("ch4", "relative_beta_power"),
+        ("ch4", "relative_delta_power"),
+        ("ch4", "relative_theta_power"),
+        ("ch4", "relative_gamma_low_power"),
+        ("ch4", "relative_gamma_high_power"),
+        ("ch4", "total_power"),
+    ],
+    "ch4_3_vars": [
+        ("ch4", "relative_alpha_power"),
+        ("ch4", "relative_beta_power"),
+        ("ch4", "total_power"),
+    ],
+}
