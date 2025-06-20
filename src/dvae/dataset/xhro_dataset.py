@@ -13,6 +13,7 @@ class Xhro(Dataset):
         self,
         data_dir,
         dataset_label,
+        mask_label,
         split,
         seq_len,
         x_dim,
@@ -42,6 +43,7 @@ class Xhro(Dataset):
 
         self.path_to_data = data_dir
         self.dataset_label = dataset_label
+        self.mask_label = mask_label
         self.x_dim = x_dim
         self.seq_len = seq_len
         self.split = split

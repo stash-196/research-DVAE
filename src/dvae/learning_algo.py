@@ -69,6 +69,7 @@ class LearningAlgorithm:
         self.model_name = self.cfg.get("Network", "name")
         self.dataset_name = self.cfg.get("DataFrame", "dataset_name")
         self.dataset_label = self.cfg.get("DataFrame", "dataset_label", fallback="None")
+        self.mask_label = self.cfg.get("DataFrame", "mask_label", fallback="None")
         self.sequence_len = self.cfg.getint("DataFrame", "sequence_len")
         self.shuffle = self.cfg.getboolean("DataFrame", "shuffle")
         self.num_workers = self.cfg.getint("DataFrame", "num_workers")
@@ -186,13 +187,20 @@ class LearningAlgorithm:
         # Create directory for results
         if not self.params["reload"]:
             tag = self.cfg.get("Network", "tag")
-            filename = "{}_{}_{}_{}_{}".format(
+            # Define all the parts of the filename in a list
+            filename_parts = [
                 self.dataset_name,
                 self.dataset_label,
+                self.mask_label,
                 tag,
                 self.sampling_method,
                 self.sampling_ratio,
-            )
+            ]
+
+            # Convert all parts to strings and join them with an underscore
+            # This is dynamic, readable, and efficient.
+            filename = "_".join(str(part) for part in filename_parts if part is not None and part != '')
+
             if self.optimize_alphas:
                 compressed_alphas = ",".join(
                     ["{:.3f}".format(alpha) for alpha in self.alphas]
@@ -264,6 +272,7 @@ class LearningAlgorithm:
             seq_len=initial_sequence_len,  # Use initial_sequence_len here
             device=self.device,
             dataset_label=self.dataset_label,
+            mask_label=self.mask_label,
         )
 
         # Build data loaders (no need to pass sequence_len and device separately)

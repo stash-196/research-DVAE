@@ -73,7 +73,11 @@ if __name__ == "__main__":
         # [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
         # [0.1],
         # [0.1, 0.1, 0.1],
-    [0.09183, 0.64830, 0.73307], # [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
+        [
+            0.09183,
+            0.64830,
+            0.73307,
+        ],  # [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
     ]
     activation = ["relu"]
 
@@ -86,7 +90,7 @@ if __name__ == "__main__":
     gradient_clip = [0.0]
     optimize_alphas = [False]
     sampling_method = [
-        'ss',
+        "ss",
         # "ptf",
         # 'mtf',
     ]
@@ -99,10 +103,11 @@ if __name__ == "__main__":
     # DataFrame
     dataset_name = ["Lorenz63"]
     dataset_label = [
-        'None',
+        "None",
         # "Markov_AvgLen15_0.0",
         # "Markov_AvgLen15_0.5"
     ]
+    mask_label = ["None"]
     s_dim = [1]
     shuffle = [True]
     batch_size = [128]
@@ -134,6 +139,7 @@ if __name__ == "__main__":
             # DataFrame
             "dataset_name": dataset_name,
             "dataset_label": dataset_label,
+            "mask_label": mask_label,
             "s_dim": s_dim,
             "shuffle": shuffle,
             "batch_size": batch_size,

@@ -109,6 +109,7 @@ if __name__ == "__main__":
         seq_len=None,
         device=device,
         dataset_label=cfg.get("DataFrame", "dataset_label", fallback=None),
+        mask_label=cfg.get("DataFrame", "mask_label", fallback=None),
     )
 
     # Build the test dataloader once

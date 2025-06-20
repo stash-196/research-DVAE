@@ -14,6 +14,7 @@ class Lorenz63(Dataset):
         self,
         data_dir,
         dataset_label,
+        mask_label,
         split,
         seq_len,
         x_dim,
@@ -38,6 +39,7 @@ class Lorenz63(Dataset):
 
         self.path_to_data = data_dir
         self.dataset_label = dataset_label
+        self.mask_label = mask_label
         self.x_dim = x_dim
         self.seq_len = seq_len
         self.split = split
@@ -50,37 +52,37 @@ class Lorenz63(Dataset):
         self.device = device
         self.with_nan = with_nan
 
-        # read motion data from pickle file
-        # if self.dataset_label == None or self.dataset_label == "None":
-        #     if split == "test":
-        #         complete_data_filename = "{0}/lorenz63/dataset_test.pkl".format(self.path_to_data)
-        #     else:
-        #         complete_data_filename = "{0}/lorenz63/dataset_train.pkl".format(self.path_to_data)
-        # else:
-        #     if split == "test":
-        #         complete_data_filename = f"{self.path_to_data}/lorenz63/dataset_test_{self.dataset_label}.pkl"
-        #     else:
-        #         complete_data_filename = f"{self.path_to_data}/lorenz63/dataset_train_{self.dataset_label}.pkl"
+        dataset_label = (
+            self.dataset_label
+            if self.dataset_label != None and self.dataset_label != "None"
+            else "sigma10_rho28_beta8d3_N108k_dt0.01"
+        )
+
         if split == "test":
-            complete_data_filename = "{0}/lorenz63/data/sigma10_rho28_beta8d3_N108k_dt0.01/complete_dataset_test.pkl".format(
-                self.path_to_data
+            complete_data_filename = (
+                "{0}/lorenz63/data/{1}/complete_dataset_test.pkl".format(
+                    self.path_to_data, dataset_label
+                )
             )
         else:
-            complete_data_filename = "{0}/lorenz63/data/sigma10_rho28_beta8d3_N108k_dt0.01/complete_dataset_train.pkl".format(
-                self.path_to_data
+            complete_data_filename = (
+                "{0}/lorenz63/data/{1}/complete_dataset_train.pkl".format(
+                    self.path_to_data, dataset_label
+                )
             )
+
         # load the complete dataset
         with open(complete_data_filename, "rb") as f:
             complete_sequence = np.array(pickle.load(f))
 
         # load the mask
-        if self.dataset_label != None and self.dataset_label != "None":
-            # dataset_label should be {distribution}_{rate}
-            dataset_label = self.dataset_label.split("_")
-            distribution = dataset_label[0]
-            rate = dataset_label[-1]
+        if self.mask_label != None and self.mask_label != "None":
+            # mask_label should be {distribution}_{rate}
+            mask_label = self.mask_label.split("_")
+            distribution = mask_label[0]
+            rate = mask_label[-1]
             if distribution == "Markov":
-                average_burst_length = dataset_label[1]
+                average_burst_length = mask_label[1]
                 distribution_label = f"{distribution}_{average_burst_length}"
             else:
                 distribution_label = f"{distribution}"

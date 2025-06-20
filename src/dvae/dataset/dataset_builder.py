@@ -30,6 +30,7 @@ class DatasetConfig:
     device: str
     data_dir: str
     dataset_label: str | None = None
+    mask_label: str | None = None
 
 
 def build_dataloader(dataset_name: str, dataset_config: DatasetConfig, split: str):
