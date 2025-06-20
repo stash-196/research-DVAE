@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1                   # Run a single task
 #SBATCH --cpus-per-task=8            # Number of CPU cores per task
 #SBATCH --mem=16G                    # Total memory limit
-#SBATCH --time=10:00:00              # Time limit hrs:min:sec
+#SBATCH --time=2-00:00:00                # Time limit d-hrs:min:sec
 #SBATCH --output=./logs/%j_training.log     # Standard output and error log
 #SBATCH --error=./logs/%j_training.err      # Standard output and error log
 #SBATCH --partition=compute              # Specify the GPU partition

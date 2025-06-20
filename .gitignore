@@ -12,8 +12,9 @@ notebooks/*
 logs/*
 
 ## SLURM Job Logs & Temporary Files
-slurm/logs/*                  
-slurm/temp/*                  
+slurm/logs/*
+slurm/temp/*
+scripts/slurm/temp/*
 
 ## Configurations (Git-Ignored Generated Files)
 config/**/generated/*

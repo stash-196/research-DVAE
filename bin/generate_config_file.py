@@ -51,7 +51,8 @@ def get_configurations_for_model(params):
 if __name__ == "__main__":
 
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
-    experiment_name = "test-gpu"
+    experiment_name = "20250620_" + "lorenz63_dts_MT-RNN"
+    print("Experiment name:", experiment_name)
 
     models = [
         # "RNN",
@@ -63,60 +64,44 @@ if __name__ == "__main__":
     # Change to dictionary of lists
     # Network
     x_dim = [1]
-    dense_x = [100]
+    dense_x = [1]
     z_dim = [9]
     dense_z = [[16, 32]]
 
     dim_rnn = [64]
     alphas = [
-        # [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
-        [0.1]
+        # [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+        # [0.1],
+        # [0.1, 0.1, 0.1],
+    [0.09183, 0.64830, 0.73307], # [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
     ]
-    # [0.09183, 0.64830, 0.73307]]# [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
     activation = ["relu"]
 
     # Training
     lr = [0.001]
     alpha_lr = [0.01]
     epochs = [20000]
-    early_stop_patience = [50]
-    save_frequency = [100]
-    gradient_clip = [1]
-    optimize_alphas = [True]
+    early_stop_patience = [40]
+    save_frequency = [200]
+    gradient_clip = [0.0]
+    optimize_alphas = [False]
     sampling_method = [
-        # 'ss',
-        "ptf",
+        'ss',
+        # "ptf",
         # 'mtf',
     ]
     sampling_ratio = [
-        # 0.0, 0.001, 0.003, 0.01, 0.03, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99, 1.0
         0.0,
         0.2,
-        0.8,
     ]
     mask_autonomous_filled = [True]
 
     # DataFrame
     dataset_name = ["Lorenz63"]
     dataset_label = [
-        # 'None',
-        "nanBer0.0",
-        # 'nanBer0.1',
-        # 'nanBer0.2',
-        # 'nanBer0.3',
-        # 'nanBer0.4',
-        # 'nanBer0.5',
-        # 'nanBer0.6',
-        # 'nanBer0.7',
-        # 'nanBer0.8',
-        # 'nanBer0.85',
-        # 'nanBer0.9',
-        # 'nanBer0.92',
-        # 'nanBer0.95',
-        # 'nanBer0.99',
-        # 'nanBer1.0',
-        # 'nanBer0.5',
-        # 'nanBer0.7'
+        'None',
+        # "Markov_AvgLen15_0.0",
+        # "Markov_AvgLen15_0.5"
     ]
     s_dim = [1]
     shuffle = [True]
@@ -209,8 +194,8 @@ if __name__ == "__main__":
     # exclude models that are not in models. Don't run this before getting `params_being`
     model_params = {key: value for key, value in model_params.items() if key in models}
 
-    base_template = "config/sinusoid/cfg_base_template.ini"
-    output_dir = os.path.join("config/sinusoid/generated/", experiment_name)
+    base_template = "config/general_signal/cfg_base_template.ini"
+    output_dir = os.path.join("config/general_signal/generated/", experiment_name)
 
     all_configs = {
         model_name: get_configurations_for_model(params)
