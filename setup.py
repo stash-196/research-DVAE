@@ -19,6 +19,7 @@ setup(
         "contourpy",
         "cycler",
         "decorator",
+        "fastparquet",
         "filelock",
         "fonttools",
         "fsspec",
