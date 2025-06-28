@@ -61,11 +61,21 @@ class BaseModel(nn.Module):
             )
         elif mode_selector.dim() == 2:
             # mode_selector of shape (seq_len, batch_size)
+            assert mode_selector.shape == (
+                seq_len,
+                batch_size,
+            ), f"Expected shape (seq_len, batch_size), got {mode_selector.shape}"
             mode_selector = (
                 mode_selector.view(seq_len, batch_size, 1)
                 .expand(seq_len, batch_size, x_dim)
                 .float()
             )
+        elif mode_selector.dim() == 3:
+            assert mode_selector.shape == (
+                seq_len,
+                batch_size,
+                x_dim,
+            ), f"Expected shape (seq_len, batch_size, x_dim), got {mode_selector.shape}"
         else:
             raise ValueError(f"Unsupported mode_selector shape: {mode_selector.shape}")
 

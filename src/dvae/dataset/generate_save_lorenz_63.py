@@ -742,7 +742,7 @@ plt.rcParams.update(
 )
 
 # Plot Scheduled Sampling Learning
-linewidth = 4
+linewidth = 6
 plt.figure(figsize=(10, 7.5))
 offset = 20
 (line1,) = plt.plot(
@@ -763,10 +763,13 @@ line_auto_sample = mlines.Line2D(
 
 # Combine all legend handles
 handles = [line1, line2, line_auto_sample]
-plt.legend(handles=handles, loc="upper right")  # Single legend box
+# plt.legend(handles=handles, loc="upper right")  # Single legend box
+plt.legend(handles=handles, loc="upper left", bbox_to_anchor=(1, 1))
 # plt.title("Scheduled Sampling Learning for Lorenz63 System")
 plt.xlabel("Time")
 plt.ylabel("x variable of Lorenz63")
+
+
 # save to this file directory
 plt.savefig(os.path.join(file_dir, "Scheduled_Sampling_Learning.png"))
 plt.show()
@@ -827,11 +830,39 @@ line_auto_sample = mlines.Line2D(
 
 # Combine all legend handles
 handles = [line1, line2, line3, line_auto_sample, gray_patch]
-plt.legend(handles=handles, loc="upper right")  # Single legend box
+# plt.legend(handles=handles, loc="upper right")  # Single legend box
+# put legend outside the box
+plt.legend(handles=handles, loc="upper left", bbox_to_anchor=(1, 1))
 
 plt.savefig(os.path.join(file_dir, "Opportunistic_Teacher_Forced_Learning.png"))
 plt.show()
 # save to this file directory
+
+# Plot Generalized Teacher-Forced Learning
+
+plt.figure(figsize=(10, 7.5))
+offset = 20
+(line1,) = plt.plot(
+    x_signal + offset, color="blue", label="True Signal", linewidth=linewidth
+)
+(line2,) = plt.plot(
+    x_signal - offset, color="brown", label="GTF Output", linewidth=linewidth
+)
+
+
+# Combine all legend handles
+handles = [line1, line2, line_auto_sample]
+# plt.legend(handles=handles, loc="upper right")  # Single legend box
+plt.legend(handles=handles, loc="upper left", bbox_to_anchor=(1, 1))
+# plt.title("Scheduled Sampling Learning for Lorenz63 System")
+plt.xlabel("Time")
+plt.ylabel("x variable of Lorenz63")
+
+
+# save to this file directory
+plt.savefig(os.path.join(file_dir, "Generalized_Teacher_Forced_Learning.png"))
+plt.show()
+
 
 # ================== END ==================
 

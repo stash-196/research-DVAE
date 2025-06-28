@@ -64,6 +64,8 @@ class BaseRNN(BaseModel):
         elif self.type_rnn == "RNN":
             _, h_tp1 = self.rnn(feature_xt, h_t)
             return h_tp1, None
+        else:
+            raise ValueError("Unsupported RNN type for recurrence!")
 
     def forward(
         self,

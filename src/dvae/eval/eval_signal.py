@@ -171,11 +171,12 @@ if __name__ == "__main__":
             half_point_long = seq_len_long // 2
             # Plot the spectral analysis
             autonomous_mode_selector_long = create_autonomous_mode_selector(
-                seq_len_long, mode="even_bursts", autonomous_ratio=0.1
-            ).astype(bool)
-            # autonomous_mode_selector_long = create_autonomous_mode_selector(
-            #     seq_len_long, 'half_half').astype(bool)
-
+                seq_len_long,
+                mode="half_half",
+                autonomous_ratio=0.1,
+                batch_size=batch_size_long,
+                x_dim=dataset_config.x_dim,
+            )
             # turn input into tensor and send to GPU if needed
             batch_data_long_tensor = batch_data_long.clone().detach().to(device)
             recon_data_long = (
@@ -184,17 +185,26 @@ if __name__ == "__main__":
                     mode_selector=autonomous_mode_selector_long,
                     inference_mode=True,
                 )
+                .detach()
                 .cpu()
                 .numpy()
             )
+
+            if test_dataloader.dataset.is_segmented_1d:
+                x_data_long = batch_data_long[:, 0, :].reshape(-1)
+                recon_x_data_long = recon_data_long[:, 0, :].reshape(-1)
+            else:
+                x_data_long = batch_data_long[:, 0, 0]
+                recon_x_data_long = recon_data_long[:, 0, 0]
 
             # Visualize the spectral analysis
             long_data_lst = [
                 full_xyz_data[:, 1],
                 full_xyz_data[:, 2],
-                batch_data_long[:, 0, :].reshape(-1),
-                recon_data_long[~autonomous_mode_selector_long, 0, :].reshape(-1),
-                recon_data_long[autonomous_mode_selector_long, 0, :].reshape(-1),
+                # batch_data_long[:, 0, :].reshape(-1), update to interpolate linearly later
+                full_xyz_data[:, 0],
+                recon_data_long[~autonomous_mode_selector_long.bool()],
+                recon_data_long[autonomous_mode_selector_long.bool()],
             ]
             name_lst = ["y", "z", "observed_x", "teacher-forced", "autonomous"]
             true_signal_index = 2
@@ -224,7 +234,10 @@ if __name__ == "__main__":
             )
 
             # Visualize the alphas against the power spectral density
-            if learning_algo.optimize_alphas is not None:
+            if (
+                learning_algo.model_name == "MT_RNN"
+                or learning_algo.model_name == "MT_VRNN"
+            ):
                 sigmas_history = loaded_data["sigmas_history"]
                 kl_warm_epochs = loaded_data["kl_warm_epochs"]
                 # Visualize the alphas

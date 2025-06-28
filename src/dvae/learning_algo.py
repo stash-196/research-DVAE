@@ -91,7 +91,7 @@ class LearningAlgorithm:
             "Training", "auto_warm_start", fallback=0.0
         )
         self.auto_warm_limit = self.sampling_ratio
-        self.mask_autonomous_filled = self.cfg.getboolean(
+        self.mask_out_autonomous_from_loss = self.cfg.getboolean(
             "Training", "mask_autonomous_filled", fallback=False
         )
 
@@ -115,7 +115,7 @@ class LearningAlgorithm:
         except ValueError:
             self.optimize_alphas = None
 
-        if self.optimize_alphas is not None:
+        if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
             self.alphas = [
                 float(i)
                 for i in self.cfg.get("Network", "alphas").split(",")
@@ -199,12 +199,16 @@ class LearningAlgorithm:
 
             # Convert all parts to strings and join them with an underscore
             # This is dynamic, readable, and efficient.
-            filename = "_".join(str(part) for part in filename_parts if part is not None and part != '')
+            filename = "_".join(
+                str(part) for part in filename_parts if part is not None and part != ""
+            )
 
-            if self.optimize_alphas:
+            if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
                 compressed_alphas = ",".join(
-                    ["{:.3f}".format(alpha) for alpha in self.alphas]
+                    "{:.3f}".format(alpha) for alpha in self.alphas[:10]
                 )
+                if len(self.alphas) > 10:
+                    compressed_alphas += ",..."
                 filename += "_α{}".format(compressed_alphas)
 
             filename += "_{}_{}".format(self.datetime_str, self.job_id)
@@ -279,6 +283,8 @@ class LearningAlgorithm:
         train_dataloader, val_dataloader, train_num, val_num = build_dataloader(
             self.dataset_name, dataset_config, "train"
         )
+        if dataset_config.x_dim is None:
+            dataset_config.x_dim = train_dataloader.dataset.x_dim
 
         current_sequence_len = initial_sequence_len
 
@@ -309,7 +315,7 @@ class LearningAlgorithm:
             best_state_dict = self.model.state_dict()
             best_optim_dict = optimizer.state_dict()
             start_epoch = -1
-            if self.optimize_alphas:
+            if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
                 alphas_init = [
                     float(i)
                     for i in self.cfg.get("Network", "alphas").split(",")
@@ -367,7 +373,7 @@ class LearningAlgorithm:
             cur_best_epoch = start_epoch
             best_state_dict = self.model.state_dict()
             best_optim_dict = optimizer.state_dict()
-            if self.optimize_alphas:
+            if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
                 alphas_init = [
                     float(i)
                     for i in self.cfg.get("Network", "alphas").split(",")
@@ -429,20 +435,6 @@ class LearningAlgorithm:
                 },
             }
 
-            # Determine which sampling method to use
-            # if self.sampling_method in sampling_configs:
-            #     sampling_config = sampling_configs[self.sampling_method]
-            #     model_mode_selector = create_autonomous_mode_selector(
-            #         current_sequence_len,
-            #         mode=sampling_config["mode"],
-            #         autonomous_ratio=sampling_config["autonomous_ratio"](),
-            #         batch_size=(
-            #             self.batch_size if "batch_size" in sampling_config else None
-            #         ),
-            #     )
-            # else:
-            #     logger.error("Unknown sampling method")
-
             sampling_config = sampling_configs[self.sampling_method]
 
             torch.autograd.set_detect_anomaly(True)
@@ -460,6 +452,8 @@ class LearningAlgorithm:
                     mode=sampling_config["mode"],
                     autonomous_ratio=sampling_config["autonomous_ratio"](),
                     batch_size=batch_size,
+                    x_dim=dataset_config.x_dim,
+                    device=self.device,
                 )
 
                 # if nan is present in the batch data, overlay the mask to fill with autonomous mode
@@ -467,23 +461,24 @@ class LearningAlgorithm:
                     # ratio of nan
                     nan_ratio = batch_data.isnan().sum() / batch_data.numel()
                     logger.warning(
-                        f"[Learning Algo][epoch{epoch}][train] Nan detected in validation data: {nan_ratio}. Will overlay on mask"
+                        f"[Learning Algo][epoch{epoch}][train] NaN detected in training data: {nan_ratio*100}%. Will overlay on mask"
                     )
                     # replace where nan is present with 1 to fill with autonomous mode
-                    model_mode_selector[
-                        batch_data.squeeze().T.isnan().detach().cpu()
-                    ] = 1.0
-
-                # creating tensor mask for loss function
-                teacher_forcing_timepoints_mask = 1.0 - torch.tensor(
-                    model_mode_selector, device=self.device
-                ).unsqueeze(-1)
+                    model_mode_selector = torch.where(
+                        batch_data.permute(1, 0, 2).isnan().detach(),
+                        torch.tensor(1.0, device=self.device),
+                        model_mode_selector,
+                    )
 
                 print(
                     f"[Learning Algo][epoch{epoch}][train] sent to device: {self.device}"
                 )
 
-                if self.dataset_name == "Lorenz63" or self.dataset_name == "Sinusoid":
+                if (
+                    self.dataset_name == "Lorenz63"
+                    or self.dataset_name == "Sinusoid"
+                    or self.dataset_name == "Xhro"
+                ):
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
                     batch_data = batch_data.permute(1, 0, 2)
                     recon_batch_data = self.model(
@@ -493,25 +488,35 @@ class LearningAlgorithm:
                         from_instance=f"[Learning Algo][epoch{epoch}][train]",
                     )
 
-                    if self.mask_autonomous_filled:
-                        batch_data_masked = teacher_forcing_timepoints_mask * batch_data
-                        batch_data_masked[batch_data_masked.isnan()] = 0.0
-                        recon_batch_data_masked = (
-                            teacher_forcing_timepoints_mask * recon_batch_data
+                    if self.mask_out_autonomous_from_loss:
+                        # creating tensor mask for loss function
+                        timepoints_to_use_for_loss_func = (
+                            1.0 - model_mode_selector
+                        ).int()
+                        # Mask the data and replace NaNs with 0
+                        batch_data_masked_for_loss_func = torch.nan_to_num(
+                            batch_data * timepoints_to_use_for_loss_func, nan=0.0
                         )
-                        # Check that mask (==0.0 values) is identical
-                        unmatched_mask = (batch_data_masked == 0) != (
-                            recon_batch_data_masked == 0
+                        recon_batch_data_masked_for_loss_func = torch.nan_to_num(
+                            recon_batch_data * timepoints_to_use_for_loss_func, nan=0.0
                         )
-                        assert ~(
-                            unmatched_mask.any()
-                        ), f"[Learning Algo][epoch{epoch}][train] Mask (==0.0 values) is not identical. {unmatched_mask.sum()} mismatches"
+
+                        # check if there're any nan in batch_data_masked
+                        if batch_data_masked_for_loss_func.isnan().any():
+                            logger.warning(
+                                f"[Learning Algo][epoch{epoch}][train] NaN detected in batch_data_masked_for_loss_func!! This shouldn't happen."
+                            )
+                        recon_batch_data_masked_for_loss_func = (
+                            recon_batch_data * timepoints_to_use_for_loss_func
+                        )
+
                         # Log percentage of masked data in loss
                         logger.info(
-                            f"[Learning Algo][epoch{epoch}][train] Percentage of un-masked data in loss: {teacher_forcing_timepoints_mask.mean()}"
+                            f"[Learning Algo][epoch{epoch}][train] Percentage of un-masked data in loss: {timepoints_to_use_for_loss_func.float().mean()*100}%"
                         )
                         loss_recon = loss_MSE(
-                            batch_data_masked, recon_batch_data_masked
+                            batch_data_masked_for_loss_func,
+                            recon_batch_data_masked_for_loss_func,
                         )
                     else:
                         loss_recon = loss_MSE(batch_data, recon_batch_data)
@@ -617,7 +622,7 @@ class LearningAlgorithm:
                 train_loss[epoch] += loss_tot_avg.item() * bs
                 train_recon[epoch] += loss_recon_avg.item() * bs
                 train_kl[epoch] += loss_kl_avg.item() * bs
-                if self.optimize_alphas:
+                if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
                     sigmas_history[:, epoch] = self.model.sigmas.detach().cpu().numpy()
 
             # Validation
@@ -631,6 +636,8 @@ class LearningAlgorithm:
                     mode=sampling_config["mode"],
                     autonomous_ratio=sampling_config["autonomous_ratio"](),
                     batch_size=batch_size,
+                    x_dim=dataset_config.x_dim,
+                    device=self.device,
                 )
 
                 # if nan is present in the batch data, overlay the mask to fill with autonomous mode
@@ -641,46 +648,53 @@ class LearningAlgorithm:
                         f"[Learning Algo][epoch{epoch}][train] Nan detected in validation data: {nan_ratio}. Will overlay on mask"
                     )
                     # replace where nan is present with 1 to fill with autonomous mode
-                    model_mode_selector[
-                        batch_data.squeeze().T.isnan().detach().cpu()
-                    ] = 1.0
+                    model_mode_selector = torch.where(
+                        batch_data.permute(1, 0, 2).isnan().detach(),
+                        torch.tensor(1.0, device=self.device),
+                        model_mode_selector,
+                    )
 
-                # creating tensor mask for loss function
-                teacher_forcing_timepoints_mask = 1.0 - torch.tensor(
-                    model_mode_selector, device=self.device
-                ).unsqueeze(-1)
-
-                if self.dataset_name == "Lorenz63" or self.dataset_name == "Sinusoid":
+                if (
+                    self.dataset_name == "Lorenz63"
+                    or self.dataset_name == "Sinusoid"
+                    or self.dataset_name == "Xhro"
+                ):
+                    # Permute the batch data to match the expected input shape
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
                     batch_data = batch_data.permute(1, 0, 2)
-                    assert batch_data.shape[:2] == model_mode_selector.shape
+                    # Run the model in validation mode
                     recon_batch_data = self.model(
                         batch_data,
                         mode_selector=model_mode_selector,
                         logger=logger,
                         from_instance=f"[Learning Algo][epoch{epoch}][val]",
                     )
-                    if self.mask_autonomous_filled:
-                        batch_data_masked = teacher_forcing_timepoints_mask * batch_data
-                        batch_data_masked[batch_data_masked.isnan()] = 0.0
-                        recon_batch_data_masked = (
-                            teacher_forcing_timepoints_mask * recon_batch_data
+                    if self.mask_out_autonomous_from_loss:
+                        # creating tensor mask for loss function
+                        timepoints_to_use_for_loss_func = (
+                            1.0 - model_mode_selector
+                        ).int()
+                        # Mask the data and replace NaNs with 0
+                        batch_data_masked_for_loss_func = torch.nan_to_num(
+                            batch_data * timepoints_to_use_for_loss_func, nan=0.0
+                        )
+                        recon_batch_data_masked_for_loss_func = torch.nan_to_num(
+                            recon_batch_data * timepoints_to_use_for_loss_func, nan=0.0
                         )
 
-                        # Check that mask (==0.0 values) is identical
-                        unmatched_mask = (batch_data_masked == 0) != (
-                            recon_batch_data_masked == 0
-                        )
-                        assert ~(
-                            unmatched_mask.any()
-                        ), f"[Learning Algo][epoch{epoch}][train] Mask (==0.0 values) is not identical. {unmatched_mask.sum()} mismatches"
+                        # check if there're any nan in batch_data_masked
+                        if batch_data_masked_for_loss_func.isnan().any():
+                            logger.warning(
+                                f"[Learning Algo][epoch{epoch}][train] NaN detected in batch_data_masked_for_loss_func!! This shouldn't happen."
+                            )
 
                         # Log percentage of masked data in loss
                         logger.info(
-                            f"[Learning Algo][epoch{epoch}][val] Percentage of un-masked data in loss: {teacher_forcing_timepoints_mask.mean()}"
+                            f"[Learning Algo][epoch{epoch}][val] Percentage of un-masked data in loss: {timepoints_to_use_for_loss_func.float().mean()*100} %"
                         )
                         loss_recon = loss_MSE(
-                            batch_data_masked, recon_batch_data_masked
+                            batch_data_masked_for_loss_func,
+                            recon_batch_data_masked_for_loss_func,
                         )
                     else:
                         loss_recon = loss_MSE(batch_data, recon_batch_data)
@@ -1007,7 +1021,7 @@ class LearningAlgorithm:
                     tag,
                 )
 
-                if self.optimize_alphas:
+                if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
                     visualize_sigma_history(
                         sigmas_history[:, : epoch + 1],
                         kl_warm_epochs,
@@ -1078,6 +1092,14 @@ class LearningAlgorithm:
                     current_sequence_len,
                     mode=sampling_config["mode"],
                     autonomous_ratio=sampling_config["autonomous_ratio"](),
+                    device=self.device,
+                    batch_size=batch_size,
+                    x_dim=dataset_config.x_dim,
+                )
+                model_mode_selector = torch.where(
+                    batch_data.isnan().detach(),
+                    torch.tensor(1.0, device=self.device),
+                    model_mode_selector,
                 )
 
                 # Visualize teacher forcing and autonomous mode
@@ -1093,7 +1115,17 @@ class LearningAlgorithm:
                 )
 
                 model_mode_selector_flip_test = create_autonomous_mode_selector(
-                    current_sequence_len, mode="even_bursts", autonomous_ratio=0.1
+                    current_sequence_len,
+                    mode="even_bursts",
+                    autonomous_ratio=0.1,
+                    device=self.device,
+                    batch_size=batch_size,
+                    x_dim=dataset_config.x_dim,
+                )
+                model_mode_selector = torch.where(
+                    batch_data.isnan().detach(),
+                    torch.tensor(1.0, device=self.device),
+                    model_mode_selector,
                 )
 
                 visualize_teacherforcing_2_autonomous(
@@ -1108,7 +1140,16 @@ class LearningAlgorithm:
                 )
 
                 model_mode_selector_flip_test = create_autonomous_mode_selector(
-                    current_sequence_len, mode="even_bursts", autonomous_ratio=0.5
+                    current_sequence_len,
+                    mode="half_half",
+                    device=self.device,
+                    batch_size=batch_size,
+                    x_dim=dataset_config.x_dim,
+                )
+                model_mode_selector = torch.where(
+                    batch_data.isnan().detach(),
+                    torch.tensor(1.0, device=self.device),
+                    model_mode_selector,
                 )
 
                 visualize_teacherforcing_2_autonomous(
@@ -1122,7 +1163,7 @@ class LearningAlgorithm:
                     inference_mode=True,
                 )
 
-                if self.optimize_alphas:
+                if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
                     alphas = 1 / (1 + np.exp(-sigmas_history[:, epoch]))
                     logger.info(
                         "alphas: {}".format([f"{alpha:.5f}" for alpha in alphas])
@@ -1141,7 +1182,7 @@ class LearningAlgorithm:
         train_kl = train_kl[: epoch + 1]
         val_recon = val_recon[: epoch + 1]
         val_kl = val_kl[: epoch + 1]
-        if self.optimize_alphas:
+        if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
             sigmas_history = sigmas_history[:, : epoch + 1]
         loss_file = os.path.join(save_dir, "loss_model.pckl")
 
@@ -1155,14 +1196,10 @@ class LearningAlgorithm:
             "val_kl": val_kl,
             "kl_warm_epochs": kl_warm_epochs,
         }
-        if self.optimize_alphas:
+        if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
             pickle_dict["sigmas_history"] = sigmas_history
 
         with open(loss_file, "wb") as f:
-            # if self.optimize_alphas:
-            #     pickle.dump([train_loss, val_loss, train_recon, train_kl, val_recon, val_kl, sigmas_history], f)
-            # else:
-            #     pickle.dump([train_loss, val_loss, train_recon, train_kl, val_recon, val_kl], f)
             pickle.dump(pickle_dict, f)
             logger.info("Loss saved in: {}".format(loss_file))
 

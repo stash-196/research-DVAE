@@ -106,54 +106,65 @@ class Lorenz63(Dataset):
         # Process the sequence based on the observation process
         the_sequence = self.apply_observation_process(the_sequence)
 
+        # the_sequence should be squeezed before this takes place
+        the_sequence = the_sequence.squeeze()
+
+        if self.x_dim is None:
+            if the_sequence.ndim == 1:
+                self.x_dim = 1
+            elif the_sequence.ndim == 2:
+                self.x_dim = the_sequence.shape[1]
+            else:
+                raise ValueError(
+                    f"Expected x is {the_sequence.ndim} dimensions, got x_dim {self.x_dim} instead."
+                )
+
         # Generate sequences with or without overlap
-        if self.overlap:
-            the_sequence = self.create_moving_window_sequences(the_sequence, self.x_dim)
-        else:  # Remove the last sequence if it is not the correct length
-            the_sequence = np.array(
-                [
-                    the_sequence[i : i + x_dim]
-                    for i in range(0, len(the_sequence), x_dim)
-                    if i + x_dim <= len(the_sequence)
-                ]
-            )
+        self.is_segmented_1d = False
+        if the_sequence.ndim == 1:
+            if self.x_dim > 1:
+                self.is_segmented_1d = True
+            if self.overlap:
+                the_sequence = self.create_moving_window_sequences(
+                    the_sequence, self.x_dim
+                )
+            else:  # Remove the last sequence if it is not the correct length
+                the_sequence = np.array(
+                    [
+                        the_sequence[i : i + x_dim]
+                        for i in range(0, len(the_sequence), x_dim)
+                        if i + x_dim <= len(the_sequence)
+                    ]
+                )
+        # Now the_sequence is a 2D tensor
+        self.seq = the_sequence
+        #
 
-        self.seq = torch.from_numpy(the_sequence).float()
+        self.update_sequence_length(self.seq_len)
 
-        # Use entire sequence if seq_len is None
-        if seq_len is None:
-            self.seq_len = len(self.seq)
-            # Only one index representing the start of the entire sequence
-            self.data_idx = [0]
-        else:
-            # Determine indices for training and validation sets
-            num_frames = self.seq.shape[0]
-            all_indices = data_utils.find_indices(
-                num_frames, self.seq_len, num_frames // self.seq_len
-            )
-            train_indices, validation_indices = self.split_dataset(
-                all_indices, self.val_indices
-            )
-            # Select appropriate indices based on the split
-            if self.split == "train":  # for train and test
-                valid_frames = train_indices
-            else:  # for validation
-                valid_frames = validation_indices
-
-            self.data_idx = list(valid_frames)
-
-    def apply_observation_process(self, sequence):
+    def apply_observation_process(self, sequence) -> torch.Tensor:
         """
         Applies an observation process to the sequence data.
         """
-        if self.observation_process == "3dto3d":
-            pass  # For a 3D to 3D observation process
-        elif self.observation_process == "3dto3d_w_noise":
-            pass  # For a 3D to 3D observation process with noise
-        elif self.observation_process == "3dto1d":
+        if self.observation_process == "xyz_to_xyz":
+            # assert x_dim == 3, "xyz_to_xyz requires x_dim to be 3"
+            assert (
+                sequence.shape[-1] == 3
+            ), "xyz_to_xyz requires the last dimension of sequence to be 3"
+            # For a 3D to 3D observation process
+            sequence = sequence
+        elif self.observation_process == "xyz_to_xyz_w_noise":
+            # assert x_dim == 3, "xyz_to_xyz_w_noise requires x_dim to be 3"
+            assert (
+                sequence.shape[-1] == 3
+            ), "xyz_to_xyz_w_noise requires the last dimension of sequence to be 3"
+            # For a 3D to 3D observation process with noise
+            var = np.var(sequence, axis=0)
+            sequence += np.random.normal(0, np.sqrt(var), sequence.shape)
+        elif self.observation_process == "xyz_to_x":
             v = np.ones(sequence.shape[-1])
             sequence = sequence @ v  # Vector product to convert 3D to 1D
-        elif self.observation_process == "3dto1d_w_noise":
+        elif self.observation_process == "xyz_to_x_w_noise":
             v = np.ones(sequence.shape[-1])
             sequence = sequence @ v + np.random.normal(
                 0, 5.7, sequence.shape[0]
@@ -165,7 +176,7 @@ class Lorenz63(Dataset):
             sequence = sequence[:, 0] + np.random.normal(0, 5.7, sequence.shape[0])
         else:
             raise ValueError("Observation process not recognized.")
-        return sequence
+        return torch.tensor(sequence, dtype=torch.float32)
 
     @staticmethod
     def create_moving_window_sequences(sequence, window_size):
@@ -190,7 +201,6 @@ class Lorenz63(Dataset):
         return len(self.data_idx)
 
     def __getitem__(self, index):
-
         start_frame = self.data_idx[index]
         end_frame = min(start_frame + self.seq_len, len(self.seq))
         return self.seq[start_frame:end_frame]
@@ -210,18 +220,23 @@ class Lorenz63(Dataset):
         # Return the full (x, y, z) data
         return self.full_sequence[start_frame:end_frame]
 
-    def update_sequence_length(self, new_seq_len):
-        self.seq_len = new_seq_len
-        # Recalculate data_idx based on the new sequence length
-        num_frames = self.seq.shape[0]
-        all_indices = data_utils.find_indices(
-            num_frames, self.seq_len, num_frames // self.seq_len
-        )
-        train_indices, validation_indices = self.split_dataset(
-            all_indices, self.val_indices
-        )
-        if self.split == "train":
-            valid_frames = train_indices
+    def update_sequence_length(self, new_seq_len=None):
+        # Only one index representing the start of each sequence
+        if new_seq_len is not None:
+            self.seq_len = new_seq_len
+            # Recalculate data_idx based on the new sequence length
+            num_frames = self.seq.shape[0]
+            all_indices = data_utils.find_indices(
+                num_frames, self.seq_len, num_frames // self.seq_len
+            )
+            train_indices, validation_indices = self.split_dataset(
+                all_indices, self.val_indices
+            )
+            if self.split == "train":
+                valid_frames = train_indices
+            else:
+                valid_frames = validation_indices
+            self.data_idx = list(valid_frames)
         else:
-            valid_frames = validation_indices
-        self.data_idx = list(valid_frames)
+            # Use entire sequence if seq_len is None
+            self.data_idx = [0]

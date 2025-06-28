@@ -1,3 +1,4 @@
+import textwrap
 from matplotlib.animation import PillowWriter, FuncAnimation
 from umap import UMAP
 from sklearn.manifold import (
@@ -141,67 +142,82 @@ def visualize_combined_parameters(
 
 
 def visualize_sequences(true_data, recon_data, mode_selector, save_dir, explain=""):
-    plt.figure(figsize=(10, 6))
+    linewidth = 2
+    plt.rcParams["lines.linewidth"] = linewidth
 
-    # Plotting the true sequence in blue
-    plt.plot(true_data, label="True Sequence", color="blue")
+    # Determine number of dimensions
+    if true_data.ndim == 1:
+        true_data = true_data[:, np.newaxis]  # Reshape to (n_seq, 1)
+        recon_data = recon_data[:, np.newaxis]
+        mode_selector = mode_selector[:, np.newaxis]
 
-    for i in range(len(mode_selector)):
-        # Choose color based on mode
-        if mode_selector[i] == 0:
-            color = "green"  # Teacher-forced
-        elif mode_selector[i] == 1:
-            color = "red"  # Autonomous
-        else:
-            # Gradient between green (0) and red (1)
-            red_intensity = mode_selector[i]
-            green_intensity = 1 - mode_selector[i]
-            color = (red_intensity, green_intensity, 0)  # RGB color
+    n_seq, x_dim = true_data.shape
 
-        # Plotting the segment
-        if i < len(recon_data) - 1:
-            plt.plot([i, i + 1], recon_data[i : i + 2], color=color)
+    # Create subplots with constrained_layout to handle spacing
+    fig, axes = plt.subplots(
+        x_dim, 1, figsize=(10, 4 * x_dim), sharex=True, constrained_layout=True
+    )
 
-    # Creating custom legend
-    plt.plot([], [], color="green", label="Teacher-Forced Sequence")
-    plt.plot([], [], color="red", label="Autonomous Sequence")
+    # If x_dim == 1, axes is a single Axes object; make it iterable
+    if x_dim == 1:
+        axes = [axes]
 
-    plt.legend()
+    # Plot each dimension in its own subplot
+    for dim in range(x_dim):
+        ax = axes[dim]
+        # Plot true sequence
+        ax.plot(true_data[:, dim], label="True Sequence", color="blue")
 
-    plt.title("Comparison of True and Predicted Sequences {}".format(explain))
-    plt.xlabel("Time steps")
-    plt.ylabel("Value")
-    plt.grid(True)
+        # Plot reconstructed sequence with mode-based coloring
+        for i in range(n_seq - 1):
+            if np.isnan(true_data[i, dim]):
+                color = "red"
+            elif mode_selector[i, dim] == 0:
+                color = "green"  # Teacher-forced
+            elif mode_selector[i, dim] == 1:
+                color = "red"  # Autonomous
+            else:
+                red_intensity = mode_selector[i, dim]
+                green_intensity = 1 - mode_selector[i, dim]
+                color = (red_intensity, green_intensity, 0)
+            ax.plot([i, i + 1], recon_data[i : i + 2, dim], color=color)
 
-    plt.legend(loc="upper right")
-    # make directory if save_dir doesn't exist
+        # Customize subplot
+        if x_dim > 1:  # Only set subplot title if x_dim > 1
+            ax.set_title(f"Input Dimension {dim}")
+        ax.set_ylabel("Value")
+        if dim == x_dim - 1:  # Only label x-axis on the bottom subplot
+            ax.set_xlabel("Time steps")
+        ax.grid(True)
+
+    # Add a shared legend for the entire figure
+    handles = [
+        plt.Line2D([0], [0], color="blue", label="True Sequence"),
+        plt.Line2D([0], [0], color="green", label="Teacher-Forced"),
+        plt.Line2D([0], [0], color="red", label="Autonomous"),
+    ]
+    labels = [h.get_label() for h in handles]
+    fig.legend(handles, labels, loc="upper right")
+
+    # Add a super title with adjusted y-position
+    fig.suptitle(
+        textwrap.fill(
+            f"Comparison of True and Predicted Sequences {explain}",
+            width=50,
+            break_long_words=True,
+        ),
+        y=0.98,  # Adjust position to prevent cutoff
+    )
+
+    # Adjust the top margin to ensure the super title is not cut off
+    plt.subplots_adjust(top=0.9)
+
+    # Save figure
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
-
     fig_file = os.path.join(save_dir, f"vis_pred_true_series_{explain}.png")
-
     plt.savefig(fig_file)
     plt.close()
-
-
-# def visualize_sequences(true_data, recon_data, save_dir, n_gen_portion, name=''):
-#     recon_length = len(recon_data) - int(len(recon_data) * n_gen_portion)
-#     time_steps = list(range(len(true_data)))
-
-#     fig = go.Figure()
-
-#     # True Sequence
-#     fig.add_trace(go.Scatter(x=time_steps, y=true_data, mode='lines', name='True Sequence'))
-
-#     # Reconstructed Sequence
-#     fig.add_trace(go.Scatter(x=time_steps[:recon_length], y=recon_data[:recon_length], mode='lines', name='Reconstructed Sequence'))
-
-#     # Self-Generated Sequence
-#     fig.add_trace(go.Scatter(x=time_steps[recon_length:], y=recon_data[recon_length:], mode='lines', name='Self-Generated Sequence'))
-
-#     fig.update_layout(title='Comparison of True and Predicted Sequences', xaxis_title='Time steps', yaxis_title='Value')
-
-#     fig.write_image(os.path.join(save_dir, f'vis_pred_true_series{name}.svg'), format='svg')
 
 
 def visualize_spectral_analysis(
@@ -265,7 +281,13 @@ def visualize_spectral_analysis(
         # Set the same y-axis range for all plots
         axs[idx, 0].set_ylim(min_power, max_power)
         axs[idx, 0].set_xlim(freq_min, freq_max)
-        axs[idx, 0].set_title(f"{name_lst[idx]} Power Spectrum")
+        axs[idx, 0].set_title(
+            textwrap.fill(
+                f"{name_lst[idx]} Power Spectrum",
+                width=50,
+                break_long_words=True,
+            )
+        )
         axs[idx, 0].set_xlabel("Frequency (Hz)")
         axs[idx, 0].set_ylabel("Power")
         axs[idx, 0].grid(True)
@@ -286,7 +308,13 @@ def visualize_spectral_analysis(
             label=f"{name_lst[idx]} Phase Spectrum",
             color=dataset_color,
         )
-        axs[idx, 1].set_title(f"{name_lst[idx]} Phase Spectrum")
+        axs[idx, 1].set_title(
+            textwrap.fill(
+                f"{name_lst[idx]} Phase Spectrum",
+                width=50,
+                break_long_words=True,
+            )
+        )
         axs[idx, 1].set_xlabel("Frequency (Hz)")
         axs[idx, 1].set_ylabel("Phase (radians)")
         axs[idx, 1].grid(True)
@@ -336,7 +364,14 @@ def visualize_variable_evolution(
     str_alphas = (
         " α:" + str(set(alphas.cpu().detach().numpy())) if alphas is not None else ""
     )
-    axs[0].set_title(f"Evolution of {variable_name} States over Time" + str_alphas)
+    axs[0].set_title(
+        textwrap.fill(
+            f"Evolution of {variable_name} States over Time" + str_alphas,
+            width=50,
+            break_long_words=True,
+        )
+    )
+
     axs[0].set_xlabel("Time steps")
     axs[0].set_ylabel(f"{variable_name} state value")
     if num_dims <= 10:
@@ -345,7 +380,13 @@ def visualize_variable_evolution(
 
     # Plotting the true signal
     axs[1].plot(reshaped_batch_data, label="True Signal", color="blue")
-    axs[1].set_title(f"True Signal for {variable_name}")
+    axs[1].set_title(
+        textwrap.fill(
+            f"True Signal for {variable_name}",
+            width=50,
+            break_long_words=True,
+        )
+    )
     axs[1].set_xlabel("Time steps")
     axs[1].set_ylabel("Signal value")
     axs[1].legend()
@@ -358,32 +399,46 @@ def visualize_variable_evolution(
 
 
 def visualize_teacherforcing_2_autonomous(
-    batch_data, dvae, mode_selector, save_path, explain="", inference_mode=False
+    batch_data,
+    dvae,
+    mode_selector,
+    save_path,
+    explain="",
+    inference_mode=False,
+    seq_len=None,
+    is_segmented_1d=False,
 ):
-    seq_len, batch_size, x_dim = batch_data.shape
-    n_seq = seq_len  # Use the full sequence length for visualization
+    # Get sequence length and dimensions
+    seq_len_total, batch_size, x_dim = batch_data.shape
+    n_seq = seq_len if seq_len is None else min(seq_len, seq_len_total)
 
-    #
-    # Reconstruct the first n_seq sequences
+    # Move data to device and generate reconstruction
     batch_data = batch_data.to(dvae.device)
     recon_batch_data = (
         dvae(
             batch_data[:n_seq, :1, :],
-            mode_selector=mode_selector,
+            mode_selector=mode_selector[:n_seq, :1, :],
             inference_mode=inference_mode,
         )
         .detach()
         .clone()
     )
 
-    # Flattening the time series for true and reconstructed data
-    true_series = batch_data[:n_seq, 0, :].reshape(-1).cpu().numpy()
-    recon_series = recon_batch_data[:n_seq, 0, :].reshape(-1).cpu().numpy()
+    if is_segmented_1d:
+        # Scenario 1: Flatten segmented 1D data
+        true_series = batch_data[:n_seq, 0, :].reshape(-1).cpu().numpy()
+        recon_series = recon_batch_data[:n_seq, 0, :].reshape(-1).cpu().numpy()
+        # Expand mode_selector to match flattened length
+        expanded_mode_selector = mode_selector[:n_seq, 0, :].reshape(-1).cpu().numpy()
+    else:
+        # Scenario 2: Keep high-dimensional data as 2D
+        true_series = batch_data[:n_seq, 0, :].cpu().numpy()  # Shape: (n_seq, x_dim)
+        recon_series = (
+            recon_batch_data[:n_seq, 0, :].cpu().numpy()
+        )  # Shape: (n_seq, x_dim)
+        expanded_mode_selector = mode_selector[:n_seq, 0, :].cpu().numpy()
 
-    # Expanding the mode selector to match the flattened time series
-    expanded_mode_selector = np.repeat(mode_selector[:n_seq], x_dim)
-
-    # Plot the reconstruction vs true sequence
+    # Call visualization function
     visualize_sequences(
         true_series, recon_series, expanded_mode_selector, save_path, explain
     )
@@ -497,7 +552,11 @@ def visualize_embedding_space(
         ax.set_ylabel("Component 2", fontsize=14 * font_scale)
         ax.set_zlabel("Component 3", fontsize=14 * font_scale)
         ax.set_title(
-            f"Trajectory of {variable_name.capitalize()} {condition_name.capitalize()} in {explain} {technique.upper()} space",
+            textwrap.fill(
+                f"Trajectory of {variable_name.capitalize()} {condition_name.capitalize()} in {explain} {technique.upper()} space",
+                width=50,
+                break_long_words=True,
+            ),
             fontsize=16 * font_scale,
         )
         # Adjust tick label font sizes
@@ -578,7 +637,8 @@ def visualize_accuracy_over_time(
     plt.xlabel("Time Steps")
     plt.ylabel(measure.upper())
     title = f"Expected {measure.upper()} Over Time - {explain.capitalize()} (Nbatch={num_batches}, Niter={num_iter})"
-    plt.title(title)
+    plt.title(textwrap.fill(title, width=50, break_long_words=True))
+
     plt.grid(True)
 
     # Custom legend
@@ -642,8 +702,10 @@ def visualize_delay_embedding(
     # ax.set_xlabel("X(t)", fontsize=16 * font_scale)
     # ax.set_ylabel("X(t + delay)", fontsize=16 * font_scale)
     # ax.set_zlabel("X(t + 2 * delay)", fontsize=16 * font_scale)
-    title = (
-        f"Delay Embedding of {variable_name.capitalize()} {explain} (Delay: {delay})"
+    title = textwrap.fill(
+        f"Delay Embedding of {variable_name.capitalize()} {explain} (Delay: {delay})",
+        width=50,
+        break_long_words=True,
     )
     # plt.title(title, fontsize=16 * font_scale)
 
@@ -768,7 +830,10 @@ def visualize_alpha_history_and_spectrums(
             fontsize=15,
         )
 
-    ax1.set_title("α values during training", fontsize=18)
+    ax1.set_title(
+        textwrap.fill("α values during training", width=50, break_long_words=True),
+        fontsize=18,
+    )
     ax1.legend(fontsize=16, loc="upper left")
     ax1.set_xlabel("Epochs", fontsize=16)
     ax1.set_ylabel("Period (sec)", fontsize=16)
@@ -802,7 +867,14 @@ def visualize_alpha_history_and_spectrums(
     ax2_right.invert_yaxis()
 
     plt.suptitle(
-        f"α during training and Power Spectrum {explain}", fontsize=20, x=0.5, y=1.02
+        textwrap.fill(
+            f"α during training and Power Spectrum {explain}",
+            width=50,
+            break_long_words=True,
+        ),
+        fontsize=20,
+        x=0.5,
+        y=1.02,
     )
     plt.tight_layout()
     fig_file = os.path.join(save_dir, f"vis_alpha_vs_power_spectrum_{explain}.png")
@@ -820,7 +892,11 @@ def visualize_errors_from_lst(
     plt.bar(name_lst, error_lst, color=colors)
     plt.xlabel("Signals")
     plt.ylabel(f"{error_unit}")
-    plt.title(f"{explain} Error against True Signal")
+    plt.title(
+        textwrap.fill(
+            f"{explain} Error against True Signal", width=50, break_long_words=True
+        )
+    )
     plt.grid(True)
     fig_file = os.path.join(save_dir, f"vis_errors_{explain}.png")
     plt.savefig(fig_file)
