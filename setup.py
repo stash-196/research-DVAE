@@ -63,6 +63,7 @@ setup(
         "umap-learn",
         "urllib3",
         "nbformat",
+        "pyarrow",
         "ipykernel",
         "ipython",
         "kaleido",
