@@ -51,24 +51,24 @@ def get_configurations_for_model(params):
 if __name__ == "__main__":
 
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
-    experiment_name = "20250628_" + "XHRO-01-11_MT-RNN_obsx_ptf0.6_alpha3d_seqlen1000"
+    experiment_name = "20250628_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
     print("Experiment name:", experiment_name)
 
     models = [
         # "RNN",
         # "VRNN",
         "MT_RNN",
-        # "MT_VRNN"
+        "MT_VRNN"
     ]
 
     # Change to dictionary of lists
     # Network
-    x_dim = [1]
-    dense_x = [1]
+    x_dim = [4]
+    dense_x = [[16, 32]]
     z_dim = [9]
     dense_z = [[16, 32]]
 
-    dim_rnn = [64]
+    dim_rnn = [256]
     alphas = [
         # [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
         # [0.1],
@@ -147,15 +147,16 @@ if __name__ == "__main__":
     batch_size = [128]
     num_workers = [8]
     sequence_len = [1000]
-    val_indices = [0.8]
+    val_indices = [0.2]
     observation_process = [
         # "only_x",
-        "raw_all",
-        "raw_ch4",
-        "ch4_relative_powers",
-        "ch4_3_vars",
-        "ch4_alpha",
-        
+        # "raw_all",
+        # "raw_ch4",
+        # "ch4_relative_powers",
+        # "ch4_3_vars",
+        # "ch4_alpha",
+        "all_ch_relative_powers",
+
     ]
 
     model_params = {
