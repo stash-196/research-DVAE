@@ -4,7 +4,7 @@
 BASE_DIR=~/workspace/research-DVAE/config/general_signal/generated
 
 # Define a list of experiment names, each corresponding to a subdirectory under BASE_DIR
-declare -a experiments=("20250615-MT-VandVanillaRNN-optimize_alphas?-False")
+declare -a experiments=("20250621_lorenz63_MT-RNN_ptf0.6_alpha9d_seqlen300_vary-dts")
 
 # Get the current date in YYYY-MM-DD format
 today=$(date +%Y-%m-%d)
@@ -27,7 +27,7 @@ mkdir -p "$OUTPUT_TODAY_DIR"
 # Loop over each experiment name to process its configuration files
 for experiment in "${experiments[@]}"; do
     CONFIG_DIR="$BASE_DIR/$experiment"
-    LOG_DIR="$OUTPUT_TODAY_DIR/$experiment/logs"
+    LOG_DIR="$OUTPUT_TODAY_DIR/deigo_cluster/$experiment/logs"
     echo "[bash] LOG_DIR: $LOG_DIR"
     mkdir -p "$LOG_DIR"
 

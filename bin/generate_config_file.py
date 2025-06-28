@@ -51,7 +51,7 @@ def get_configurations_for_model(params):
 if __name__ == "__main__":
 
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
-    experiment_name = "20250620_" + "lorenz63_dts_MT-RNN"
+    experiment_name = "20250621_" + "lorenz63_MT-RNN_ptf0.6_alpha9d_seqlen300_vary-dts"
     print("Experiment name:", experiment_name)
 
     models = [
@@ -70,14 +70,11 @@ if __name__ == "__main__":
 
     dim_rnn = [64]
     alphas = [
-        # [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+        [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
         # [0.1],
         # [0.1, 0.1, 0.1],
-        [
-            0.09183,
-            0.64830,
-            0.73307,
-        ],  # [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
+        # [ 0.09183, 0.64830, 0.73307, ],  
+        # [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
     ]
     activation = ["relu"]
 
@@ -90,29 +87,44 @@ if __name__ == "__main__":
     gradient_clip = [0.0]
     optimize_alphas = [False]
     sampling_method = [
-        "ss",
-        # "ptf",
+        # "ss",
+        "ptf",
         # 'mtf',
     ]
     sampling_ratio = [
-        0.0,
-        0.2,
+        # 0.2,
+        0.6
     ]
     mask_autonomous_filled = [True]
 
     # DataFrame
     dataset_name = ["Lorenz63"]
     dataset_label = [
+        # "None",
+        "sigma10_rho28_beta8d3_N108k_dt0.01",
+        # "sigma10_rho24_beta8d3_N108k_dt0.01",
+        # "sigma10_rho25_beta8d3_N108k_dt0.01",
+        # "sigma10_rho26_beta8d3_N108k_dt0.01",
+        # "sigma10_rho27_beta8d3_N108k_dt0.01",
+        # "sigma10_rho30_beta8d3_N108k_dt0.01",
+        # "sigma10_rho35_beta8d3_N108k_dt0.01",
+        # "sigma10_rho40_beta8d3_N108k_dt0.01",
+        "sigma10_rho28_beta8d3_N108k_dt0.001",
+        "sigma10_rho28_beta8d3_N108k_dt0.02",
+        "sigma10_rho28_beta8d3_N108k_dt0.03",
+        "sigma10_rho28_beta8d3_N108k_dt0.04",
+
+    ]
+    mask_label = [
         "None",
         # "Markov_AvgLen15_0.0",
         # "Markov_AvgLen15_0.5"
-    ]
-    mask_label = ["None"]
+        ]
     s_dim = [1]
     shuffle = [True]
     batch_size = [128]
     num_workers = [8]
-    sequence_len = [1000]
+    sequence_len = [300]
     val_indices = [0.8]
     observation_process = ["only_x"]
 

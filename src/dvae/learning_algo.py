@@ -759,8 +759,8 @@ class LearningAlgorithm:
 
             # Training time
             end_time = datetime.datetime.now()
-            interval = (end_time - start_time).seconds / 60
-            logger.info("Epoch: {} training time {:.2f}m".format(epoch, interval))
+            interval = end_time - start_time
+            logger.info("Epoch: {} training time {}".format(epoch, str(interval).split('.')[0]))
             logger.info(
                 "Train => tot: {:.2f} recon {:.2f} KL {:.2f} Val => tot: {:.2f} recon {:.2f} KL {:.2f}".format(
                     train_loss[epoch],
