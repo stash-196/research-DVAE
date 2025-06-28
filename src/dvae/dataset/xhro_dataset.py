@@ -58,13 +58,20 @@ class Xhro(Dataset):
         self.sampling_freq = None
 
         # Read data from file
-        if self.observation_process not in select_columns_for_obs_conditions.keys():
+        if (
+            self.observation_process
+            in select_columns_for_obs_conditions["original"].keys()
+        ):
             filename = f"{self.path_to_data}/xhro/processed/{self.dataset_label}/filtered_data.parquet"
             the_sequence = pd.read_parquet(filename)
             max_data_length = 100000
             the_sequence = the_sequence[:max_data_length]  # Limit to max_data_length
             self.sampling_freq = 250
-        else:
+            print(f"Downloaded data from {filename}")
+        elif (
+            self.observation_process
+            in select_columns_for_obs_conditions["coarsed"].keys()
+        ):
             filename = os.path.join(
                 f"{self.path_to_data}",
                 "xhro",
@@ -74,6 +81,12 @@ class Xhro(Dataset):
             )
             the_sequence = pd.read_parquet(filename)
             self.sampling_freq = 1 / (60 * 5)
+            print(f"Downloaded data from {filename}")
+        else:
+            raise ValueError(
+                f"Invalid observation process: {self.observation_process}. "
+                "Must be one of the keys in select_columns_for_obs_conditions."
+            )
         # see if directory of filename exists
 
         if self.split == "test":  # use the Latter 20% of the data for testing
@@ -241,7 +254,7 @@ select_columns_for_obs_conditions = {
             ("ch4", "relative_delta_power"),
             ("ch4", "relative_theta_power"),
             ("ch4", "relative_gamma_low_power"),
-            ("ch4", "relative_gamma_high_power"),
+            ("ch4", "relative_gamma_mid_power"),
             ("ch4", "total_power"),
         ],
         "ch4_3_vars": [
@@ -256,28 +269,28 @@ select_columns_for_obs_conditions = {
             ("ch1", "relative_delta_power"),
             ("ch1", "relative_theta_power"),
             ("ch1", "relative_gamma_low_power"),
-            ("ch1", "relative_gamma_high_power"),
+            ("ch1", "relative_gamma_mid_power"),
             ("ch1", "total_power"),
             ("ch2", "relative_alpha_power"),
             ("ch2", "relative_beta_power"),
             ("ch2", "relative_delta_power"),
             ("ch2", "relative_theta_power"),
             ("ch2", "relative_gamma_low_power"),
-            ("ch2", "relative_gamma_high_power"),
+            ("ch2", "relative_gamma_mid_power"),
             ("ch2", "total_power"),
             ("ch3", "relative_alpha_power"),
             ("ch3", "relative_beta_power"),
             ("ch3", "relative_delta_power"),
             ("ch3", "relative_theta_power"),
             ("ch3", "relative_gamma_low_power"),
-            ("ch3", "relative_gamma_high_power"),
+            ("ch3", "relative_gamma_mid_power"),
             ("ch3", "total_power"),
             ("ch4", "relative_alpha_power"),
             ("ch4", "relative_beta_power"),
             ("ch4", "relative_delta_power"),
             ("ch4", "relative_theta_power"),
             ("ch4", "relative_gamma_low_power"),
-            ("ch4", "relative_gamma_high_power"),
+            ("ch4", "relative_gamma_mid_power"),
             ("ch4", "total_power"),
         ],
     },
