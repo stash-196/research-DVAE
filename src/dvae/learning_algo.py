@@ -1203,6 +1203,13 @@ class LearningAlgorithm:
             pickle.dump(pickle_dict, f)
             logger.info("Loss saved in: {}".format(loss_file))
 
+        # Log all final alpha values
+        if self.model_name in ["MT_RNN", "MT_VRNN"]:
+            alphas = 1 / (1 + np.exp(-sigmas_history[:, -1]))
+            logger.info(
+                "Final alphas: {}".format([f"{alpha:.5f}" for alpha in alphas])
+            )
+
         # run evaluation script
         eval_file = os.path.join(project_root, "src", "dvae", "eval", "eval_signal.py")
         subprocess.run(["python", eval_file, "--saved_dict", save_file])

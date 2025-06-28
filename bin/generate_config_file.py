@@ -51,7 +51,7 @@ def get_configurations_for_model(params):
 if __name__ == "__main__":
 
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
-    experiment_name = "20250621_" + "lorenz63_MT-RNN_ptf0.6_alpha9d_seqlen300_vary-dts"
+    experiment_name = "20250628_" + "XHRO-01-11_MT-RNN_obsx_ptf0.6_alpha3d_seqlen1000"
     print("Experiment name:", experiment_name)
 
     models = [
@@ -70,9 +70,9 @@ if __name__ == "__main__":
 
     dim_rnn = [64]
     alphas = [
-        [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+        # [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
         # [0.1],
-        # [0.1, 0.1, 0.1],
+        [0.1, 0.1, 0.1],
         # [ 0.09183, 0.64830, 0.73307, ],  
         # [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
     ]
@@ -85,23 +85,36 @@ if __name__ == "__main__":
     early_stop_patience = [40]
     save_frequency = [200]
     gradient_clip = [0.0]
-    optimize_alphas = [False]
+    optimize_alphas = [True]
     sampling_method = [
         # "ss",
         "ptf",
         # 'mtf',
     ]
     sampling_ratio = [
+        # 0.01,
+        # 0.05,
+        # 0.1,
         # 0.2,
-        0.6
+        # 0.3,
+        # 0.4,
+        # 0.5,
+        0.6,
+        # 0.7,
+        # 0.8,
+        # 0.9,
     ]
     mask_autonomous_filled = [True]
 
     # DataFrame
-    dataset_name = ["Lorenz63"]
+    dataset_name = [
+        "Xhro",
+        # "Lorenz63",
+
+        ]
     dataset_label = [
         # "None",
-        "sigma10_rho28_beta8d3_N108k_dt0.01",
+        # "sigma10_rho28_beta8d3_N108k_dt0.01",
         # "sigma10_rho24_beta8d3_N108k_dt0.01",
         # "sigma10_rho25_beta8d3_N108k_dt0.01",
         # "sigma10_rho26_beta8d3_N108k_dt0.01",
@@ -109,24 +122,41 @@ if __name__ == "__main__":
         # "sigma10_rho30_beta8d3_N108k_dt0.01",
         # "sigma10_rho35_beta8d3_N108k_dt0.01",
         # "sigma10_rho40_beta8d3_N108k_dt0.01",
-        "sigma10_rho28_beta8d3_N108k_dt0.001",
-        "sigma10_rho28_beta8d3_N108k_dt0.02",
-        "sigma10_rho28_beta8d3_N108k_dt0.03",
-        "sigma10_rho28_beta8d3_N108k_dt0.04",
+        # "sigma10_rho28_beta8d3_N108k_dt0.005",
+        # "sigma10_rho28_beta8d3_N108k_dt0.02",
+        # "sigma10_rho28_beta8d3_N108k_dt0.03",
+        # "sigma10_rho28_beta8d3_N108k_dt0.04",
+        "XHRO_01_XH011",
 
     ]
     mask_label = [
         "None",
         # "Markov_AvgLen15_0.0",
-        # "Markov_AvgLen15_0.5"
+        # "Markov_AvgLen15_0.1",
+        # "Markov_AvgLen15_0.2",
+        # "Markov_AvgLen15_0.3",
+        # "Markov_AvgLen15_0.4",
+        # "Markov_AvgLen15_0.5",
+        # "Markov_AvgLen15_0.6",
+        # "Markov_AvgLen15_0.7",
+        # "Markov_AvgLen15_0.8",
+        # "Markov_AvgLen15_0.9"
         ]
     s_dim = [1]
     shuffle = [True]
     batch_size = [128]
     num_workers = [8]
-    sequence_len = [300]
+    sequence_len = [1000]
     val_indices = [0.8]
-    observation_process = ["only_x"]
+    observation_process = [
+        # "only_x",
+        "raw_all",
+        "raw_ch4",
+        "ch4_relative_powers",
+        "ch4_3_vars",
+        "ch4_alpha",
+        
+    ]
 
     model_params = {
         "RNN": {
