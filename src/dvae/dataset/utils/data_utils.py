@@ -15,10 +15,10 @@ def readCSVasFloat(filename, with_key=False):
     """
     returnArray = []
     lines = open(filename).readlines()
-    if with_key: # skip first line
+    if with_key:  # skip first line
         lines = lines[1:]
     for line in lines:
-        line = line.strip().split(',')
+        line = line.strip().split(",")
         if len(line) > 0:
             returnArray.append(np.array([np.float32(x) for x in line]))
 
@@ -30,15 +30,14 @@ def writeCSVasFloat(filename, data_array, with_key=False, key=None):
     """
     Args
       filename: string. Path to the csv file
-      data_array: data 
+      data_array: data
     """
-    with open(filename, 'w') as f:
+    with open(filename, "w") as f:
         if with_key:
             f.write(key)
         for vec in data_array:
-            line_to_write = ','.join(map(str, vec)) + '\n'
+            line_to_write = ",".join(map(str, vec)) + "\n"
             f.write(line_to_write)
-
 
 
 def expmap2xyz_torch(expmap):
@@ -68,7 +67,7 @@ def expmap2rotmat(r):
     r0 = np.divide(r, theta + np.finfo(np.float32).eps)
     r0x = np.array([0, -r0[2], r0[1], 0, 0, -r0[0], 0, 0, 0]).reshape(3, 3)
     r0x = r0x - r0x.T
-    R = np.eye(3, 3) + np.sin(theta) * r0x + (1 - np.cos(theta)) * (r0x).dot(r0x);
+    R = np.eye(3, 3) + np.sin(theta) * r0x + (1 - np.cos(theta)) * (r0x).dot(r0x)
     return R
 
 
@@ -88,9 +87,14 @@ def expmap2rotmat_torch(r):
     r1 = r1.view(-1, 3, 3)
     r1 = r1 - r1.transpose(1, 2)
     n = r1.data.shape[0]
-    R = torch.eye(3, 3).repeat(n, 1, 1).float().cuda() + torch.mul(
-        torch.sin(theta).unsqueeze(1).repeat(1, 9).view(-1, 3, 3), r1) + torch.mul(
-        (1 - torch.cos(theta).unsqueeze(1).repeat(1, 9).view(-1, 3, 3)), torch.matmul(r1, r1))
+    R = (
+        torch.eye(3, 3).repeat(n, 1, 1).float().cuda()
+        + torch.mul(torch.sin(theta).unsqueeze(1).repeat(1, 9).view(-1, 3, 3), r1)
+        + torch.mul(
+            (1 - torch.cos(theta).unsqueeze(1).repeat(1, 9).view(-1, 3, 3)),
+            torch.matmul(r1, r1),
+        )
+    )
     return R
 
 
@@ -137,7 +141,7 @@ def quat2expmap(q):
     Raises
       ValueError if the l2 norm of the quaternion is not close to 1
     """
-    if (np.abs(np.linalg.norm(q) - 1) > 1e-3):
+    if np.abs(np.linalg.norm(q) - 1) > 1e-3:
         raise (ValueError, "quat2expmap: input quaternion is not norm 1")
 
     sinhalftheta = np.linalg.norm(q[1:])
@@ -158,7 +162,7 @@ def quat2expmap(q):
 def rotmat2expmap(R):
     return quat2expmap(rotmat2quat(R))
 
-    
+
 def find_indices_srnn(frame_num1, frame_num2, seq_len, input_n=10):
     """
     Adapted from https://github.com/una-dinosauria/human-motion-prediction/blob/master/src/seq2seq_model.py#L478
@@ -194,16 +198,16 @@ def find_indices_srnn(frame_num1, frame_num2, seq_len, input_n=10):
 
 
 def find_indices(num_frames, seq_len, num_indices):
-    
+
     SEED = 1234567890
     np.random.seed(SEED)
 
     T = num_frames - seq_len + 1
     n = int(T / num_indices)
     list0 = np.arange(0, T)
-    list1 = np.arange(0, T, (n+1))
+    list1 = np.arange(0, T, (n + 1))
     t = num_indices - len(list1)
-    if t == 0: 
+    if t == 0:
         listf = list1
     else:
         list2 = np.setdiff1d(list0, list1)
@@ -215,7 +219,7 @@ def find_indices(num_frames, seq_len, num_indices):
     return listf
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # file_name = '/mnt/beegfs/perception/xbie/h3.6m/dataset/S1/walking_1.txt'
     # the_sequence = readCSVasFloat(file_name)
     # print(the_sequence.shape)
