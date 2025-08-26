@@ -69,8 +69,8 @@ class MixedSHO:
 # %%
 # Define the default parameters values
 
-save_dir_plots = os.path.join(project_root, "data/mixsin", "plots")
-save_dir_data = os.path.join(project_root, "data/mixsin", "data")
+save_dir_plots = os.path.join(project_root, "data/sho", "plots")
+save_dir_data = os.path.join(project_root, "data/sho", "data")
 if not os.path.exists(save_dir_plots):
     os.makedirs(save_dir_plots)
 if not os.path.exists(save_dir_data):
@@ -79,9 +79,9 @@ if not os.path.exists(save_dir_data):
 # %%
 # ================== For Dataset Generation ==================
 # Parameters for two sinusoids
-amplitudes = [1, 2]
-frequencies = [1, 0.5]
-phases = [0, np.pi / 2]  # Starting phases
+amplitudes = [1, 2, 0.5]
+frequencies = [1, 0.5, 20]
+phases = [0, np.pi / 2, 0]  # Starting phases
 
 dt = 0.01  # Time step for the generation
 N = 10000  # Number of time steps to generate
