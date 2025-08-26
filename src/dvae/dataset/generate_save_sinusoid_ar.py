@@ -5,17 +5,23 @@ import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 import matplotlib.patches as mpatches
 import pickle
-from fractions import Fraction
 
 # %matplotlib inline
 from torch.autograd import Variable
 from tqdm import tqdm_notebook as tqdm
+from dvae.dataset.utils.data_utils import save_pickle
 
 import os
 import numpy as np
 
+from dvae.utils import (
+    find_project_root,
+    num2str,
+    phase2str,
+    lst2str,
+    phaselst2str,
+)
 
-from dvae.utils import find_project_root
 from dvae.dataset.utils.visualizers import (
     plot_attractor_plotly,
     plot_attractor_subplots,
@@ -34,46 +40,6 @@ project_root = find_project_root(__file__)
 # Handy function stolen from the fast.ai library
 # Get location of current files directory
 file_dir = os.path.dirname(os.path.realpath(__file__))
-
-
-def num2str(num):
-    if not isinstance(num, float):
-        return str(num)
-    if num >= 1_000_000:
-        return f"{num/1_000_000:.0f}M"
-    elif num >= 1_000:
-        return f"{num/1_000:.0f}k"
-    else:
-        return str(num)
-
-
-def phase2str(phase):
-    if phase == 0:
-        return "0"
-    sign = "-" if phase < 0 else ""
-    phase = abs(phase)
-    multiplier = phase / np.pi
-    frac = Fraction(multiplier).limit_denominator()
-    if frac.denominator == 1 and frac.numerator == 1:
-        frac_str = f"{sign}pi"
-    elif frac.denominator == 1:
-        frac_str = f"{sign}{frac.numerator}pi"
-    elif frac.numerator == 1:
-        frac_str = f"{sign}piD{frac.denominator}"
-    else:
-        frac_str = f"{sign}{frac.numerator}D{frac.denominator}"
-    return frac_str
-
-
-def lst2str(list):
-    return ",".join([num2str(x) for x in list])
-
-
-def phaselst2str(list):
-    return ",".join([phase2str(x) for x in list])
-
-
-import numpy as np
 
 
 class MixedSHO:
@@ -198,14 +164,6 @@ plot_delay_embedding(
     # explain=f"{parameter_str}_test",
     # save_dir=save_dir_specific_plots,
 )
-
-
-# store l.hist as pickle data for later use in pytorch dataloader
-def save_pickle(data, path):
-
-    with open(path, "wb") as f:
-        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
-        print(f"Saved data to {path}")
 
 
 save_pickle(
