@@ -85,14 +85,6 @@ def build_MT_VRNN(cfg, device="cpu"):
     return model
 
 
-def sigmoid(x):
-    return 1 / (1 + math.exp(-x))
-
-
-def inverse_sigmoid(y):
-    return -math.log((1 / y) - 1)
-
-
 class MT_VRNN(BaseVRNN):
     def __init__(
         self,
@@ -133,21 +125,27 @@ class MT_VRNN(BaseVRNN):
         self.alphas = alphas
         self.sigmas = nn.Parameter(
             torch.tensor(
-                [inverse_sigmoid(alpha) for alpha in alphas], dtype=torch.float32
+                [self.inverse_sigmoid_10(alpha) for alpha in alphas],
+                dtype=torch.float32,
             ),
             requires_grad=True,
         )
 
     @staticmethod
-    def inverse_sigmoid(y):
-        return -math.log((1 / y) - 1)
+    def inverse_sigmoid_10(y):
+        y = torch.as_tensor(y)
+        return -torch.log10((1 / y) - 1)
+
+    @staticmethod
+    def sigmoid_10(x):
+        return 1 / (1 + 10 ** (-x))
 
     def base_parameters(self):
         return (p for name, p in self.named_parameters() if "sigmas" not in name)
 
     def alphas_per_unit(self):
         # Convert sigma to alpha using sigmoid
-        alphas = torch.sigmoid(self.sigmas)
+        alphas = self.sigmoid_10(self.sigmas)
         # If the number of hidden units is greater than the number of alphas,
         # distribute the alphas evenly among the hidden units.
         if self.dim_rnn > len(alphas):

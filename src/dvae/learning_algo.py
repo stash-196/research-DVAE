@@ -37,13 +37,7 @@ from dvae.visualizers import (
     visualize_sigma_history,
     visualize_alpha_history,
 )
-from dvae.dataset import (
-    h36m_dataset,
-    speech_dataset,
-    lorenz63_dataset,
-    sinusoid_dataset,
-    xhro_dataset,
-)
+
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
 from dvae.model import (
     build_VRNN,
@@ -323,7 +317,7 @@ class LearningAlgorithm:
                 ]
                 sigmas_history = np.zeros((len(alphas_init), epochs))
                 # set initial values of sigmas_history with alphas_init
-                sigmas_history[:, 0] = sigmoid_reverse(alphas_init)
+                sigmas_history[:, 0] = sigmoid_reverse_10(alphas_init)
         else:
             cp_file = os.path.join(save_dir, "{}_checkpoint.pt".format(self.model_name))
             checkpoint = torch.load(cp_file)
@@ -381,7 +375,7 @@ class LearningAlgorithm:
                 ]
                 sigmas_history = np.zeros((len(alphas_init), epochs))
                 # set initial values of sigmas_history with alphas_init
-                sigmas_history[:, 0] = sigmoid_reverse(alphas_init)
+                sigmas_history[:, 0] = sigmoid_reverse_10(alphas_init)
 
         auto_warm = self.auto_warm_start
         if self.sampling_method == "ss":
@@ -478,6 +472,7 @@ class LearningAlgorithm:
                     self.dataset_name == "Lorenz63"
                     or self.dataset_name == "Sinusoid"
                     or self.dataset_name == "Xhro"
+                    or self.dataset_name == "SHO"
                 ):
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
                     batch_data = batch_data.permute(1, 0, 2)
@@ -658,6 +653,7 @@ class LearningAlgorithm:
                     self.dataset_name == "Lorenz63"
                     or self.dataset_name == "Sinusoid"
                     or self.dataset_name == "Xhro"
+                    or self.dataset_name == "SHO"
                 ):
                     # Permute the batch data to match the expected input shape
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
@@ -760,7 +756,9 @@ class LearningAlgorithm:
             # Training time
             end_time = datetime.datetime.now()
             interval = end_time - start_time
-            logger.info("Epoch: {} training time {}".format(epoch, str(interval).split('.')[0]))
+            logger.info(
+                "Epoch: {} training time {}".format(epoch, str(interval).split(".")[0])
+            )
             logger.info(
                 "Train => tot: {:.2f} recon {:.2f} KL {:.2f} Val => tot: {:.2f} recon {:.2f} KL {:.2f}".format(
                     train_loss[epoch],
@@ -1024,19 +1022,21 @@ class LearningAlgorithm:
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
                     visualize_sigma_history(
                         sigmas_history[:, : epoch + 1],
-                        kl_warm_epochs,
-                        auto_warm_epochs,
                         self.model_name,
                         save_figures_dir,
                         tag,
+                        kl_warm_epochs,
+                        auto_warm_epochs if self.sampling_method == "ss" else None,
+                        sequence_len_epochs,
                     )
                     visualize_alpha_history(
                         sigmas_history[:, : epoch + 1],
-                        kl_warm_epochs,
-                        auto_warm_epochs,
                         self.model_name,
                         save_figures_dir,
                         tag,
+                        kl_warm_epochs,
+                        auto_warm_epochs if self.sampling_method == "ss" else None,
+                        sequence_len_epochs,
                     )
 
                 # Visualize model parameters
@@ -1206,9 +1206,7 @@ class LearningAlgorithm:
         # Log all final alpha values
         if self.model_name in ["MT_RNN", "MT_VRNN"]:
             alphas = 1 / (1 + np.exp(-sigmas_history[:, -1]))
-            logger.info(
-                "Final alphas: {}".format([f"{alpha:.5f}" for alpha in alphas])
-            )
+            logger.info("Final alphas: {}".format([f"{alpha:.5f}" for alpha in alphas]))
 
         # run evaluation script
         eval_file = os.path.join(project_root, "src", "dvae", "eval", "eval_signal.py")
@@ -1216,17 +1214,17 @@ class LearningAlgorithm:
 
 
 # sigmoid function for arrays
-def sigmoid(x):
+def sigmoid_10(x):
     x = np.array(x)
-    return 1 / (1 + np.exp(-x))
+    return 1 / (1 + 10 ** (-x))
 
 
 # reverse of sigmoid function for arrays
 
 
-def sigmoid_reverse(x):
-    x = np.array(x)
-    return np.log(x / (1 - x))
+def sigmoid_reverse_10(y):
+    y = np.array(y)
+    return -np.log10((1 / y) - 1)
 
 
 def get_norm_from_named_params(named_params):

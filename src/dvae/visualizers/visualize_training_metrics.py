@@ -222,16 +222,27 @@ def visualize_combined_metrics(
 
 
 def visualize_sigma_history(
-    sigmas_history, kl_warm_epochs, auto_warm_epochs, model_name, save_figures_dir, tag
+    sigmas_history,
+    model_name,
+    save_figures_dir,
+    tag,
+    kl_warm_epochs=None,
+    auto_warm_epochs=None,
+    sequence_len_epochs=None,
 ):
     plt.clf()
     fig = plt.figure(figsize=(8, 6))
     plt.rcParams["font.size"] = 12
-    if model_name in ["VRNN", "MT_VRNN"]:
+    if model_name in ["VRNN", "MT_VRNN"] and kl_warm_epochs is not None:
         for kl_warm_epoch in kl_warm_epochs:
             plt.axvline(x=kl_warm_epoch, color="c", linestyle="--")
-    for auto_warm_epoch in auto_warm_epochs:
-        plt.axvline(x=auto_warm_epoch, color="r", linestyle=":")
+    if auto_warm_epochs is not None:
+        for auto_warm_epoch in auto_warm_epochs:
+            plt.axvline(x=auto_warm_epoch, color="r", linestyle=":")
+    if sequence_len_epochs is not None:
+        for sequence_len_epoch in sequence_len_epochs:
+            plt.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
+
     for i in range(sigmas_history.shape[0]):
         plt.plot(sigmas_history[i], label=f"Sigma {i+1}")
     plt.legend(fontsize=16, title="Sigma values", title_fontsize=20)
@@ -246,16 +257,27 @@ def visualize_sigma_history(
 
 
 def visualize_alpha_history(
-    sigmas_history, kl_warm_epochs, auto_warm_epochs, model_name, save_figures_dir, tag
+    sigmas_history,
+    model_name,
+    save_figures_dir,
+    tag,
+    kl_warm_epochs=None,
+    auto_warm_epochs=None,
+    sequence_len_epochs=None,
 ):
     plt.clf()
     fig = plt.figure(figsize=(8, 6))
     plt.rcParams["font.size"] = 12
-    if model_name in ["VRNN", "MT_VRNN"]:
+    if model_name in ["VRNN", "MT_VRNN"] and kl_warm_epochs is not None:
         for kl_warm_epoch in kl_warm_epochs:
             plt.axvline(x=kl_warm_epoch, color="c", linestyle="--")
-    for auto_warm_epoch in auto_warm_epochs:
-        plt.axvline(x=auto_warm_epoch, color="r", linestyle=":")
+    if auto_warm_epochs is not None:
+        for auto_warm_epoch in auto_warm_epochs:
+            plt.axvline(x=auto_warm_epoch, color="r", linestyle=":")
+    if sequence_len_epochs is not None:
+        for sequence_len_epoch in sequence_len_epochs:
+            plt.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
+
     for i in range(sigmas_history.shape[0]):
         alphas = 1 / (1 + np.exp(-sigmas_history[i]))
         plt.plot(alphas, label=f"Alpha {i+1}")
@@ -264,6 +286,7 @@ def visualize_alpha_history(
     plt.ylabel("alpha", fontdict={"size": 16})
     plt.grid(True)
     plt.yscale("log")
+    plt.ylim(1e-2, 1e1)
     fig_file = os.path.join(
         save_figures_dir, f"vis_training_history_of_alpha_{tag}.png"
     )

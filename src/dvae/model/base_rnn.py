@@ -48,6 +48,8 @@ class BaseRNN(BaseModel):
             return nn.LSTM(input_dim, self.dim_rnn, self.num_rnn)
         elif self.type_rnn == "RNN":
             return nn.RNN(input_dim, self.dim_rnn, self.num_rnn)
+        elif self.type_rnn == "PLRNN":
+            return nn.RNN(input_dim, self.dim_rnn)
         else:
             raise ValueError("Unsupported RNN type!")
 

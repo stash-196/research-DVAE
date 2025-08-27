@@ -3,8 +3,8 @@ devices:
     matcher:
       type: hostname
       value: Stash-Mac-Studio.local
-    saved_root: /Volumes/bucket/DoyaU/stash/research-DVAE/saved_model
-    data_dir: /Volumes/bucket/DoyaU/stash/research-DVAE/data
+    saved_root: /Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model
+    data_dir: /Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/data
   deigo_cluster:
     matcher:
       type: substring

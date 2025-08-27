@@ -2,6 +2,16 @@ import numpy as np
 import torch
 from . import forward_kinematics
 
+import pickle
+
+
+# store l.hist as pickle data for later use in pytorch dataloader
+def save_pickle(data, path):
+
+    with open(path, "wb") as f:
+        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        print(f"Saved data to {path}")
+
 
 def readCSVasFloat(filename, with_key=False):
     """
