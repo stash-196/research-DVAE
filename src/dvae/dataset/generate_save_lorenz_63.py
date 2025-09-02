@@ -138,9 +138,17 @@ plot_components_vs_time_plotly(
 
 # store l.hist as pickle data for later use in pytorch dataloader
 def save_pickle(data, path):
+    dataset = {
+        "data": data,
+        "dt": dt,
+        "parameter_str": parameter_str,
+        "sigma": sigma,
+        "rho": rho,
+        "beta": beta,
+    }
 
     with open(path, "wb") as f:
-        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        pickle.dump(dataset, f, protocol=pickle.HIGHEST_PROTOCOL)
         print(f"Saved data to {path}")
 
 

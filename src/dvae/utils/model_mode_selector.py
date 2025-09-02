@@ -74,7 +74,7 @@ def create_autonomous_mode_selector(
 
     :param seq_len: Length of the sequence.
     :param mode: The mode of operation - 'all_1', 'all_0', 'half_half', 'flip_at_middle',
-                 'even_sampling', 'even_bursts', 'mix_sampling', or 'bernoulli_sampling'.
+                'even_sampling', 'even_bursts', 'mix_sampling', or 'bernoulli_sampling'.
     :param autonomous_ratio: Ratio of autonomous steps for applicable modes.
     :param batch_size: Number of sequences in a batch. If None, batch dimension is not added.
     :param x_dim: Dimensionality of the input features. If None, x_dim dimension is not added.

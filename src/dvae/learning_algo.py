@@ -473,6 +473,7 @@ class LearningAlgorithm:
                     or self.dataset_name == "Sinusoid"
                     or self.dataset_name == "Xhro"
                     or self.dataset_name == "SHO"
+                    or self.dataset_name == "DampedSHO"
                 ):
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
                     batch_data = batch_data.permute(1, 0, 2)
@@ -654,6 +655,7 @@ class LearningAlgorithm:
                     or self.dataset_name == "Sinusoid"
                     or self.dataset_name == "Xhro"
                     or self.dataset_name == "SHO"
+                    or self.dataset_name == "DampedSHO"
                 ):
                     # Permute the batch data to match the expected input shape
                     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)

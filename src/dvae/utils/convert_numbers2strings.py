@@ -3,8 +3,6 @@ import numpy as np
 
 
 def num2str(num):
-    if not isinstance(num, float):
-        return str(num)
     if num >= 1_000_000:
         return f"{num/1_000_000:.0f}M"
     elif num >= 1_000:

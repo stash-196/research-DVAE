@@ -38,6 +38,8 @@ from dvae.visualizers import (
     visualize_alpha_history_and_spectrums,
     visualize_errors_from_lst,
 )
+from dvae.eval.utils.frequency_analysis import run_spectrum_analysis
+
 from torch.nn.functional import mse_loss
 import plotly.graph_objects as go
 import plotly.express as px
@@ -159,10 +161,6 @@ if __name__ == "__main__":
         test_dataloader.dataset.update_sequence_length(new_seq_len)
         # Prepare the long sequence data
         for i, batch_data_long in enumerate(test_dataloader):
-            full_xyz_data = test_dataloader.dataset.get_full_xyz(
-                i
-            )  # Get full xyz data for the same index
-
             # batch_data_long = next(iter(test_dataloader))  # Single batch for demonstration
             batch_data_long = batch_data_long.to(device)
             # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
@@ -173,7 +171,6 @@ if __name__ == "__main__":
             autonomous_mode_selector_long = create_autonomous_mode_selector(
                 seq_len_long,
                 mode="half_half",
-                autonomous_ratio=0.1,
                 batch_size=batch_size_long,
                 x_dim=dataset_config.x_dim,
             )
@@ -197,77 +194,17 @@ if __name__ == "__main__":
                 x_data_long = batch_data_long[:, 0, 0]
                 recon_x_data_long = recon_data_long[:, 0, 0]
 
-            # Visualize the spectral analysis
-            long_data_lst = [
-                full_xyz_data[:, 1],
-                full_xyz_data[:, 2],
-                # batch_data_long[:, 0, :].reshape(-1), update to interpolate linearly later
-                full_xyz_data[:, 0],
-                recon_data_long[~autonomous_mode_selector_long.bool()],
-                recon_data_long[autonomous_mode_selector_long.bool()],
-            ]
-            name_lst = ["y", "z", "observed_x", "teacher-forced", "autonomous"]
-            true_signal_index = 2
-            colors_lst = ["orange", "magenta", "blue", "green", "red"]
-
-            dt = 1e-2
-            sampling_rate = 1 / dt
-            power_spectrum_lst, frequencies, periods = visualize_spectral_analysis(
-                data_lst=long_data_lst,
-                name_lst=name_lst,
-                colors_lst=colors_lst,
-                save_dir=save_fig_dir,
-                sampling_rate=sampling_rate,
-                max_sequences=50000,
+            run_spectrum_analysis(
+                test_dataloader=test_dataloader,
+                recon_data_long=recon_data_long,
+                save_fig_dir=save_fig_dir,
+                i=i,
+                autonomous_mode_selector_long=autonomous_mode_selector_long,
+                dataset_name=learning_algo.dataset_name,
+                model_name=learning_algo.model_name,
+                loaded_data=loaded_data,
+                cfg=cfg,
             )
-
-            power_spectrum_error_lst = calculate_power_spectrum_error(
-                power_spectrum_lst, true_signal_index, filter_std=3
-            )
-            visualize_errors_from_lst(
-                power_spectrum_error_lst,
-                name_lst=name_lst,
-                save_dir=save_fig_dir,
-                explain="power_spectrum_error",
-                error_unit="dB",
-                colors=colors_lst,
-            )
-
-            # Visualize the alphas against the power spectral density
-            if (
-                learning_algo.model_name == "MT_RNN"
-                or learning_algo.model_name == "MT_VRNN"
-            ):
-                sigmas_history = loaded_data["sigmas_history"]
-                kl_warm_epochs = loaded_data["kl_warm_epochs"]
-                # Visualize the alphas
-                # if lorenz63, true_alphas = [0.00490695, 0.02916397, 0.01453569]
-                if cfg["DataFrame"]["dataset_name"] == "Lorenz63":
-                    true_alphas = [0.00490695, 0.02916397, 0.01453569]
-                elif cfg["DataFrame"]["dataset_name"] == "Sinusoid":
-                    if s_dim == 1:
-                        true_alphas = [dt * 2 * np.pi]
-                    elif s_dim == 2:
-                        true_alphas = [dt * 2 * np.pi, dt * 2 * np.pi / 100]
-                    elif s_dim == 3:
-                        true_alphas = [
-                            dt * 2 * np.pi,
-                            dt * 2 * np.pi / 100,
-                            2 * np.pi / 1000,
-                        ]
-                else:
-                    raise ValueError("Unsupported dataset_name in configuration file.")
-                visualize_alpha_history_and_spectrums(
-                    sigmas_history=sigmas_history,
-                    power_spectrum_lst=power_spectrum_lst[:3],
-                    spectrum_color_lst=colors_lst[:3],
-                    spectrum_name_lst=name_lst,
-                    frequencies=frequencies,
-                    dt=dt,
-                    save_dir=save_fig_dir,
-                    kl_warm_epochs=kl_warm_epochs,
-                    true_alphas=true_alphas,
-                )
 
             # Plot the reconstruction vs true sequence
             visualize_teacherforcing_2_autonomous(

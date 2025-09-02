@@ -8,8 +8,8 @@ from .utils import data_utils
 import pickle
 
 
-# define a class for SimpleHarmonicOscillator dataset in the same style as the above HumanPoseXYZ, dataset
-class SimpleHarmonicOscillator(Dataset):
+# define a class for DampedSimpleHarmonicOscillator dataset in the same style as the above HumanPoseXYZ, dataset
+class DampedSimpleHarmonicOscillator(Dataset):
     def __init__(
         self,
         data_dir,
@@ -35,6 +35,11 @@ class SimpleHarmonicOscillator(Dataset):
         :param sample_rate: downsampling rate
         :param skip_rate: the skip length to get example, only used for train and test
         :param val_indices: the number of slices used for validation
+        :param observation_process: the observation process to apply
+        :param device: the device to use
+        :param overlap: whether to use overlapping windows
+        :param with_nan: whether to use nan in the data
+        :param shuffle: whether to shuffle the data
         """
 
         self.path_to_data = data_dir
@@ -55,20 +60,20 @@ class SimpleHarmonicOscillator(Dataset):
         dataset_label = (
             self.dataset_label
             if self.dataset_label != None and self.dataset_label != "None"
-            else "amp1,2,0.5_freq1,0.5,20_phas0,piD2,0_N10000_dt0.01"
+            else "omegas2pi,pi_gammas0.5,0.2_inst100_N1k_dt0.01"
         )
 
         self.true_alphas = None
 
         if split == "test":
             complete_data_filename = (
-                "{0}/sho/data/{1}/complete_dataset_test.pkl".format(
+                "{0}/damped_sho/data/{1}/complete_dataset_test.pkl".format(
                     self.path_to_data, dataset_label
                 )
             )
         else:
             complete_data_filename = (
-                "{0}/sho/data/{1}/complete_dataset_train.pkl".format(
+                "{0}/damped_sho/data/{1}/complete_dataset_train.pkl".format(
                     self.path_to_data, dataset_label
                 )
             )
@@ -94,9 +99,9 @@ class SimpleHarmonicOscillator(Dataset):
                 distribution_label = f"{distribution}"
 
             if split == "test":
-                mask_filename = f"{self.path_to_data}/sho/data/amp1,2,0.5_freq1,0.5,20_phas0,piD2,0_N10000_dt0.01/mask_{distribution_label}_pnan{rate}_test.pkl"
+                mask_filename = f"{self.path_to_data}/damped_sho/data/{dataset_label}/mask_{distribution_label}_pnan{rate}_test.pkl"
             else:
-                mask_filename = f"{self.path_to_data}/sho/data/amp1,2,0.5_freq1,0.5,20_phas0,piD2,0_N10000_dt0.01/mask_{distribution_label}_pnan{rate}_train.pkl"
+                mask_filename = f"{self.path_to_data}/damped_sho/data/{dataset_label}/mask_{distribution_label}_pnan{rate}_train.pkl"
 
             with open(mask_filename, "rb") as f:
                 mask_sequence = np.array(pickle.load(f))
@@ -115,36 +120,17 @@ class SimpleHarmonicOscillator(Dataset):
         # the_sequence should be squeezed before this takes place
         the_sequence = the_sequence.squeeze()
 
-        if self.x_dim is None:
-            if the_sequence.ndim == 1:
-                self.x_dim = 1
-            elif the_sequence.ndim == 2:
-                self.x_dim = the_sequence.shape[1]
-            else:
-                raise ValueError(
-                    f"Expected x is {the_sequence.ndim} dimensions, got x_dim {self.x_dim} instead."
-                )
+        # Special handling for damped_sho datasets
+        self.is_damped_sho = "damped_sho" in self.dataset_label.lower()
+
+        # For damped SHO, treat as multiple 1D instances
+        self.N, self.n_instances = the_sequence.shape
+        self.x_dim = 1
 
         # Generate sequences with or without overlap
         self.is_segmented_1d = False
-        if the_sequence.ndim == 1:
-            if self.x_dim > 1:
-                self.is_segmented_1d = True
-            if self.overlap:
-                the_sequence = self.create_moving_window_sequences(
-                    the_sequence, self.x_dim
-                )
-            else:  # Remove the last sequence if it is not the correct length
-                the_sequence = np.array(
-                    [
-                        the_sequence[i : i + x_dim]
-                        for i in range(0, len(the_sequence), x_dim)
-                        if i + x_dim <= len(the_sequence)
-                    ]
-                )
         # Now the_sequence is a 2D tensor
         self.seq = the_sequence
-        #
 
         self.update_sequence_length(self.seq_len)
 
@@ -200,33 +186,43 @@ class SimpleHarmonicOscillator(Dataset):
         return len(self.data_idx)
 
     def __getitem__(self, index):
-        start_frame = self.data_idx[index]
-        end_frame = min(start_frame + self.seq_len, len(self.seq))
-        return self.seq[start_frame:end_frame]
+        instance, start_frame = self.data_idx[index]
+        end_frame = min(start_frame + self.seq_len, self.N)
+        return self.seq[start_frame:end_frame, instance].unsqueeze(-1)
 
     def update_sequence_length(self, new_seq_len=None):
-        # Only one index representing the start of each sequence
         if new_seq_len is not None:
             self.seq_len = new_seq_len
-            # Recalculate data_idx based on the new sequence length
-            num_frames = self.seq.shape[0]
-            all_indices = data_utils.find_indices(
-                num_frames, self.seq_len, num_frames // self.seq_len
-            )
-            if self.split == "test":
-                valid_frames = all_indices
-            else:
-                train_indices, validation_indices = self.split_dataset(
-                    all_indices, self.val_indices
-                )
-                if self.split == "train":
-                    valid_frames = train_indices
-                elif self.split == "valid":
-                    valid_frames = validation_indices
-                else:
-                    raise ValueError("Split not recognized.")
-
-            self.data_idx = list(valid_frames)
         else:
-            # Use entire sequence if seq_len is None
-            self.data_idx = [0]
+            self.seq_len = self.N
+
+        # Special handling for damped_sho: windows per instance
+        all_indices = []
+        for instance in range(self.n_instances):
+            local_num_samples = self.N // self.seq_len
+            if local_num_samples == 0:
+                local_num_samples = 1
+
+            if local_num_samples == 1:
+                start = np.random.randint(0, max(1, self.N - self.seq_len + 1))
+                local_indices = [start]
+            else:
+                # Evenly spaced windows
+                step = (self.N - self.seq_len) // (local_num_samples - 1)
+                local_indices = [i * step for i in range(local_num_samples)]
+
+            for local_idx in local_indices:
+                all_indices.append((instance, local_idx))
+
+        if self.split == "test":
+            self.data_idx = all_indices
+        else:
+            train_indices, validation_indices = self.split_dataset(
+                all_indices, self.val_indices
+            )
+            if self.split == "train":
+                self.data_idx = train_indices
+            elif self.split == "valid":
+                self.data_idx = validation_indices
+            else:
+                raise ValueError("Split not recognized.")

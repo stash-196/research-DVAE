@@ -91,9 +91,10 @@ class DampedSHO:
 
 # %%
 # Define parameters
-omegas = [2 * np.pi * 1, 2 * np.pi * 0.5]  # Natural frequencies (1 Hz, 0.5 Hz)
-gammas = [0.5, 0.2]  # Damping coefficients (tau = 2 s, 5 s)
-n_instances = 80  # Number of trajectories
+rad = 2 * np.pi
+omegas = [rad * 1, rad * 0.5, rad * 10]  # Natural frequencies (1 Hz, 0.5 Hz)
+gammas = [1 / 2, 1 / 5, 10 / 1]  # Damping coefficients (tau = 2 s, 5 s)
+n_instances = 100  # Number of trajectories
 dt = 0.01  # Time step
 N = 1000  # Steps per trajectory
 
@@ -106,16 +107,45 @@ if not os.path.exists(save_dir_data):
 if not os.path.exists(save_dir_plots):
     os.makedirs(save_dir_plots)
 # %%
+train_test_ratio = 0.8  # 80% train, 20% test
 # Generate dataset
-data1 = DampedSHO(omegas=omegas, gammas=gammas, n_instances=n_instances, dt=dt)
-data1.integrate(N)  # Shape: (1000, 80)
+train_instances = int(n_instances * train_test_ratio)
+test_instances = int(n_instances * (1 - train_test_ratio))
+data_train = DampedSHO(omegas=omegas, gammas=gammas, n_instances=train_instances, dt=dt)
+data_test = DampedSHO(omegas=omegas, gammas=gammas, n_instances=test_instances, dt=dt)
+data_train.integrate(N)  # Shape: (1000, train_instances)
+data_test.integrate(N)  # Shape: (1000, test_instances)
+
 
 # Save dataset
-save_pickle(data1.hist, os.path.join(save_dir_data, "complete_dataset_train.pkl"))
+dataset_train = {
+    "data": data_train.hist,
+    "dt": dt,
+    "parameter_str": parameter_str,
+    "description": "Sum of damped harmonic oscillators with different frequencies and damping coefficients.",
+    "omegas": omegas,
+    "gammas": gammas,
+}
+
+dataset_test = {
+    "data": data_test.hist,
+    "dt": dt,
+    "parameter_str": parameter_str,
+    "description": "Sum of damped harmonic oscillators with different frequencies and damping coefficients.",
+    "omegas": omegas,
+    "gammas": gammas,
+}
+
+# save_pickle(
+#     data_train.hist, os.path.join(save_dir_data, "complete_dataset_train.pkl")
+# )
+# save_pickle(
+#     data_test.hist, os.path.join(save_dir_data, "complete_dataset_test.pkl")
+# )
 
 # %%
 # Visualize (select first 3 instances for plotting to avoid clutter)
-plot_subset = data1.hist[:, :3]  # Shape: (1000, 3)
+plot_subset = data_train.hist[:, :3]  # Shape: (1000, 3)
 
 plot_components_vs_time_plotly(
     plot_subset,
@@ -141,7 +171,7 @@ plot_power_spectrum_subplots_loglog(
 
 # Delay embedding for first instance (1D input)
 plot_delay_embedding(
-    data1.hist[:, 0],  # First trajectory
+    data_train.hist[:, 0],  # First trajectory
     delay=5,
     dimensions=3,
 )

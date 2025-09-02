@@ -58,6 +58,8 @@ class Lorenz63(Dataset):
             else "sigma10_rho28_beta8d3_N108k_dt0.01"
         )
 
+        self.true_alphas = [0.00490695, 0.02916397, 0.01453569]
+
         if split == "test":
             complete_data_filename = (
                 "{0}/lorenz63/data/{1}/complete_dataset_test.pkl".format(
@@ -229,13 +231,19 @@ class Lorenz63(Dataset):
             all_indices = data_utils.find_indices(
                 num_frames, self.seq_len, num_frames // self.seq_len
             )
-            train_indices, validation_indices = self.split_dataset(
-                all_indices, self.val_indices
-            )
-            if self.split == "train":
-                valid_frames = train_indices
+            if self.split == "test":
+                valid_frames = all_indices
             else:
-                valid_frames = validation_indices
+                train_indices, validation_indices = self.split_dataset(
+                    all_indices, self.val_indices
+                )
+                if self.split == "train":
+                    valid_frames = train_indices
+                elif self.split == "valid":
+                    valid_frames = validation_indices
+                else:
+                    raise ValueError("Split not recognized.")
+
             self.data_idx = list(valid_frames)
         else:
             # Use entire sequence if seq_len is None
