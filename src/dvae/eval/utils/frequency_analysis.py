@@ -19,6 +19,7 @@ def run_spectrum_analysis(
     model_name,
     loaded_data,
     cfg,
+    dvae_model,
 ):
     if dataset_name == "Lorenz63":
         full_xyz_data = test_dataloader.dataset.get_full_xyz(i)

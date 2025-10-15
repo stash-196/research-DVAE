@@ -9,6 +9,7 @@ import torch
 from collections import OrderedDict
 from dvae.utils.model_mode_selector import prepare_mode_selector
 from dvae.model.base_model import BaseModel
+from dvae.model.plrnn import PLRNN, shPLRNN
 
 
 class BaseRNN(BaseModel):
@@ -49,9 +50,12 @@ class BaseRNN(BaseModel):
         elif self.type_rnn == "RNN":
             return nn.RNN(input_dim, self.dim_rnn, self.num_rnn)
         elif self.type_rnn == "PLRNN":
-            return nn.RNN(input_dim, self.dim_rnn)
+            return PLRNN(input_dim, self.dim_rnn, self.num_rnn)
+        elif self.type_rnn == "shPLRNN":
+            hidden_sh_size = self.dim_rnn  # You can modify this as needed
+            return shPLRNN(input_dim, self.dim_rnn, hidden_sh_size, self.num_rnn)
         else:
-            raise ValueError("Unsupported RNN type!")
+            raise ValueError(f"Unsupported RNN type!: {self.type_rnn}")
 
     def generation_x(self, h_t):
         dec_output = self.mlp_h_x(h_t)
@@ -63,7 +67,7 @@ class BaseRNN(BaseModel):
         if self.type_rnn == "LSTM":
             _, (h_tp1, c_tp1) = self.rnn(feature_xt, (h_t, c_t))
             return h_tp1, c_tp1
-        elif self.type_rnn == "RNN":
+        elif self.type_rnn in ["RNN", "PLRNN", "shPLRNN"]:
             _, h_tp1 = self.rnn(feature_xt, h_t)
             return h_tp1, None
         else:
@@ -134,8 +138,10 @@ class BaseRNN(BaseModel):
             # Recurrence
             if self.type_rnn == "LSTM":
                 h_t, c_t = self.recurrence(feature_xt.unsqueeze(0), h_t, c_t)
-            elif self.type_rnn == "RNN":
+            elif self.type_rnn in ["RNN", "PLRNN", "shPLRNN"]:
                 h_t, _ = self.recurrence(feature_xt.unsqueeze(0), h_t)
+            else:
+                raise ValueError("Unsupported RNN type for recurrence!")
 
         # Save states
         self.y = y

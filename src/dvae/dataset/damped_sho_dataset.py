@@ -60,7 +60,7 @@ class DampedSimpleHarmonicOscillator(Dataset):
         dataset_label = (
             self.dataset_label
             if self.dataset_label != None and self.dataset_label != "None"
-            else "omegas2pi,pi_gammas0.5,0.2_inst100_N1k_dt0.01"
+            else "omegas2pi,pi_gammas0.5,0.2_inst100_N1k_dtx0.01"
         )
 
         self.true_alphas = None

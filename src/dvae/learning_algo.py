@@ -99,7 +99,7 @@ class LearningAlgorithm:
         self.use_cuda = self.cfg.getboolean("Training", "use_cuda")
         if torch.cuda.is_available() and self.use_cuda:
             self.device = "cuda"
-        elif torch.backends.mps.is_available():
+        elif torch.backends.mps.is_available() and self.use_cuda:
             self.device = "mps"
         else:
             self.device = "cpu"

@@ -78,7 +78,11 @@ class Lorenz63(Dataset):
             complete_sequence = np.array(pickle.load(f))
 
         # load the mask
-        if self.mask_label != None and self.mask_label != "None":
+        if (
+            self.mask_label != None
+            and self.mask_label != "None"
+            and self.mask_label != ""
+        ):
             # mask_label should be {distribution}_{rate}
             mask_label = self.mask_label.split("_")
             distribution = mask_label[0]

@@ -204,6 +204,7 @@ if __name__ == "__main__":
                 model_name=learning_algo.model_name,
                 loaded_data=loaded_data,
                 cfg=cfg,
+                dvae_model=dvae,
             )
 
             # Plot the reconstruction vs true sequence

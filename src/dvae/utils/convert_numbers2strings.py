@@ -3,7 +3,11 @@ import numpy as np
 
 
 def num2str(num):
-    if num >= 1_000_000:
+    if num >= 1_000_000_000_000:
+        return f"{num/1_000_000_000_000:.0f}T"
+    elif num >= 1_000_000_000:
+        return f"{num/1_000_000_000:.0f}B"
+    elif num >= 1_000_000:
         return f"{num/1_000_000:.0f}M"
     elif num >= 1_000:
         return f"{num/1_000:.0f}k"

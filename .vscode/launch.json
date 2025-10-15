@@ -33,7 +33,8 @@
                 // "--saved_dict", "/Users/stashtomonaga/workspace/research-DVAE/saved_model/2024-12-06/41206784_Lorenz63_2024-08-15-15:38:51_MT_RNN_SM-ss_α-[0.00490695, 0.02916397, 0.01453569]/MT_RNN_final_epoch11046.pt",
                 // "--saved_dict", "/Volumes/bucket/DoyaU/stash/research-DVAE/saved_model/2025-05-21/mac_studio/debug_test/Lorenz63_Markov_AvgLen15_0.5_MT_RNN_ss_0.0_α0.092,0.648,0.733_2025-05-21-15:35:46_b62ef615/MT_RNN_final_epoch2.pt",
                 // "--saved_dict", "/Volumes/bucket/DoyaU/stash/research-DVAE/saved_model/2025-06-21/deigo_cluster/20250621_lorenz63_MT-RNN_ptf0.6_alpha9d_seqlen300_vary-rhos/logs/63618311_training_cfg_20250621_lorenz63_MT-RNN_ptf0.6_alpha9d_seqlen300_vary-rhos_MT_RNN_dataset_label-sigma10_rho25_beta8d3_N108k_dt0.01.err"
-                "--saved_dict", "/Volumes/bucket/DoyaU/stash/research-DVAE/saved_model/2025-06-21/deigo_cluster/20250621_lorenz63_MT-RNN_ptf0.6_alpha9d_seqlen300_vary-rhos/Lorenz63_sigma10_rho25_beta8d3_N108k_dt0.01_None_MT_RNN_ptf_0.6_20250621-17.34.25_63618311/MT_RNN_final_epoch8706.pt"
+                "--saved_dict", "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2025-06-21/deigo_cluster/20250621_lorenz63_MT-RNN_ptf0.6_alpha9d_seqlen300_vary-rhos/Lorenz63_sigma10_rho25_beta8d3_N108k_dt0.01_None_MT_RNN_ptf_0.6_20250621-17.34.25_63618311/MT_RNN_final_epoch8706.pt",
+                // "--saved_dict", "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2025-08-27/mac_studio/debug_test/DampedSHO_omegas2pi,pi_gammas0.5,0.2_inst100_N1k_dt0.01_MT_RNN_ss_0.0_α0.100,0.100,0.100_20250827-17.46.53_dfb93047/MT_RNN_final_epoch2.pt"
 
             ]
         },
@@ -51,8 +52,10 @@
             "args": [
                 // "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/saved_model/2024-09-18/h27_ep2000_SampMeths_RNNs_0/c9b35073_Lorenz63_2024-09-18-17:05:35_MT_RNN_SM-ss_α-[0.00490695, 0.02916397, 0.01453569]/config.ini"
                 // "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/sinusoid/generated/debug_test/cfg_debug_test_RNN.ini",
-                "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/general_signal/generated/debug_test/cfg_debug_test_MT_RNN_sho.ini",
+                // "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/general_signal/generated/debug_test/cfg_debug_test_MT_RNN_sho.ini",
+                // "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/general_signal/generated/debug_test/cfg_mt_rnn_xhro_test_multi_dim.ini",
                 // "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/general_signal/generated/debug_test/cfg_mt_rnn_xhro_test.ini",
+                "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/general_signal/generated/debug_test/cfg_debug_test_PLRNN.ini",
 
 
 
