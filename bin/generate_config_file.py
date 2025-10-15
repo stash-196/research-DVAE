@@ -51,27 +51,33 @@ def get_configurations_for_model(params):
 if __name__ == "__main__":
 
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
-    experiment_name = "20250628_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
+    # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
+    experiment_name = "20251015_" + "Lorenz_ss0.9_PLRNNs"
     print("Experiment name:", experiment_name)
 
     models = [
-        # "RNN",
+        "RNN",
         # "VRNN",
-        "MT_RNN",
-        "MT_VRNN"
+        # "MT_RNN",
+        # "MT_VRNN"
+    ]
+    rnn_types = [
+        "PLRNN",
+        "shPLRNN",
     ]
 
     # Change to dictionary of lists
     # Network
-    x_dim = [4]
-    dense_x = [[16, 32]]
+    x_dim = [1]
+    dense_x = [1]
     z_dim = [9]
     dense_z = [[16, 32]]
 
-    dim_rnn = [256]
+    dim_rnn = [64]
     alphas = [
         # [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
-        # [0.1],
+        [0.1],
+        [0.1, 0.1],
         [0.1, 0.1, 0.1],
         # [ 0.09183, 0.64830, 0.73307, ],  
         # [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
@@ -81,14 +87,14 @@ if __name__ == "__main__":
     # Training
     lr = [0.001]
     alpha_lr = [0.01]
-    epochs = [20000]
+    epochs = [10000]
     early_stop_patience = [40]
-    save_frequency = [200]
+    save_frequency = [100]
     gradient_clip = [0.0]
     optimize_alphas = [True]
     sampling_method = [
-        # "ss",
-        "ptf",
+        "ss",
+        # "ptf",
         # 'mtf',
     ]
     sampling_ratio = [
@@ -99,22 +105,24 @@ if __name__ == "__main__":
         # 0.3,
         # 0.4,
         # 0.5,
-        0.6,
+        # 0.6,
         # 0.7,
         # 0.8,
-        # 0.9,
+        0.9,
     ]
     mask_autonomous_filled = [True]
 
     # DataFrame
     dataset_name = [
-        "Xhro",
-        # "Lorenz63",
+        # "Xhro",
+        "Lorenz63",
+        # "SHO",
+        # "DampedSHO"
+    ]
 
-        ]
     dataset_label = [
         # "None",
-        # "sigma10_rho28_beta8d3_N108k_dt0.01",
+        "sigma10_rho28_beta8d3_N108k_dt0.01",
         # "sigma10_rho24_beta8d3_N108k_dt0.01",
         # "sigma10_rho25_beta8d3_N108k_dt0.01",
         # "sigma10_rho26_beta8d3_N108k_dt0.01",
@@ -126,9 +134,20 @@ if __name__ == "__main__":
         # "sigma10_rho28_beta8d3_N108k_dt0.02",
         # "sigma10_rho28_beta8d3_N108k_dt0.03",
         # "sigma10_rho28_beta8d3_N108k_dt0.04",
-        "XHRO_01_XH011",
+
+        # "XHRO_01_XH011",
+
+        # "amp1,2,0.5_freq1,0.5,20_phas0,piD2,0_N10000_dt0.01"
+
+        # "omegas2pi,pi_gammas0.5,0.2_inst100_N1k_dt0.01",
+        # "omegas2pi_gammas0.5_inst100_N1k_dt0.01"
+
+        # "amp1,2,0.1_freq1,0.5,20_phas0,piD2,0_N10000_dt0.01",
+        # "amp1,2,0.5_freq1,0.5,20_phas0,piD2,0_N10000_dt0.01",
+        # "amp1,2_freq1,0.5_phas0,piD2_N10000_dt0.01",
 
     ]
+
     mask_label = [
         "None",
         # "Markov_AvgLen15_0.0",
@@ -149,14 +168,15 @@ if __name__ == "__main__":
     sequence_len = [1000]
     val_indices = [0.2]
     observation_process = [
-        # "only_x",
+        "only_x",
         # "raw_all",
         # "raw_ch4",
         # "ch4_relative_powers",
         # "ch4_3_vars",
         # "ch4_alpha",
-        "all_ch_relative_powers",
 
+        # "all_ch_relative_powers",
+        # "mixed_1d",        
     ]
 
     model_params = {
@@ -166,6 +186,7 @@ if __name__ == "__main__":
             # Network
             "name": ["RNN"],
             "tag": ["RNN"],
+            "type_rnn": rnn_types,
             "x_dim": x_dim,
             "dense_x": dense_x,
             "dim_rnn": dim_rnn,
@@ -252,6 +273,7 @@ if __name__ == "__main__":
     }
 
     for model_name, configs in all_configs.items():
+        print(f"Number of configurations for {model_name}: {len(configs)}")
         for config in configs:
             generate_config_file(
                 base_template, output_dir, experiment_name, keys_being_compared, config
