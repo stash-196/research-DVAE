@@ -90,11 +90,3 @@ class RNN(BaseRNN):
 
     def base_parameters(self):
         return (p for name, p in self.named_parameters() if "sigmas" not in name)
-        
-    def recurrence(self, feature_xt, h_t, c_t=None):
-        if self.type_rnn == "LSTM":
-            _, (h_tp1, c_tp1) = self.rnn(feature_xt, (h_t, c_t))
-            return h_tp1, c_tp1
-        elif self.type_rnn == "RNN":
-            _, h_tp1 = self.rnn(feature_xt, h_t)
-            return h_tp1, None
