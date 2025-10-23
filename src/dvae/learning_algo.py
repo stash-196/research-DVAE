@@ -88,6 +88,9 @@ class LearningAlgorithm:
         self.mask_out_autonomous_from_loss = self.cfg.getboolean(
             "Training", "mask_autonomous_filled", fallback=False
         )
+        self.loss_mask_mode = self.cfg.get(
+            "Training", "loss_mask_mode", fallback="none"
+        )
 
         # Get host name and date
         self.hostname = socket.gethostname()
@@ -378,7 +381,7 @@ class LearningAlgorithm:
                 sigmas_history[:, 0] = sigmoid_reverse_10(alphas_init)
 
         auto_warm = self.auto_warm_start
-        if self.sampling_method == "ss":
+        if self.sampling_method in ["ss", "sm"]:
             auto_warm = self.auto_warm_start
         else:
             auto_warm = self.auto_warm_limit
@@ -421,6 +424,10 @@ class LearningAlgorithm:
                     "mode": "mix_sampling",
                     "autonomous_ratio": lambda: self.sampling_ratio,
                 },
+                "sm": {
+                    "mode": "mix_sampling",
+                    "autonomous_ratio": lambda: auto_warm,
+                },
                 "even_bursts": {
                     "mode": "even_bursts",
                     "autonomous_ratio": lambda: self.sampling_ratio
@@ -441,7 +448,7 @@ class LearningAlgorithm:
                         f"[Learning Algo][epoch{epoch}][train] batch_size: {batch_size}, expected: {self.batch_size}"
                     )
 
-                model_mode_selector = create_autonomous_mode_selector(
+                base_mode_selector = create_autonomous_mode_selector(
                     current_sequence_len,
                     mode=sampling_config["mode"],
                     autonomous_ratio=sampling_config["autonomous_ratio"](),
@@ -461,8 +468,10 @@ class LearningAlgorithm:
                     model_mode_selector = torch.where(
                         batch_data.permute(1, 0, 2).isnan().detach(),
                         torch.tensor(1.0, device=self.device),
-                        model_mode_selector,
+                        base_mode_selector,
                     )
+                else:
+                    model_mode_selector = base_mode_selector
 
                 print(
                     f"[Learning Algo][epoch{epoch}][train] sent to device: {self.device}"
@@ -484,38 +493,50 @@ class LearningAlgorithm:
                         from_instance=f"[Learning Algo][epoch{epoch}][train]",
                     )
 
-                    if self.mask_out_autonomous_from_loss:
-                        # creating tensor mask for loss function
-                        timepoints_to_use_for_loss_func = (
-                            1.0 - model_mode_selector
-                        ).int()
-                        # Mask the data and replace NaNs with 0
-                        batch_data_masked_for_loss_func = torch.nan_to_num(
-                            batch_data * timepoints_to_use_for_loss_func, nan=0.0
-                        )
-                        recon_batch_data_masked_for_loss_func = torch.nan_to_num(
-                            recon_batch_data * timepoints_to_use_for_loss_func, nan=0.0
-                        )
+                    # Now, prepare masked data for loss
+                    is_observed = (
+                        ~batch_data.isnan().detach()
+                    ).float()  # 1 where GT available
 
-                        # check if there're any nan in batch_data_masked
-                        if batch_data_masked_for_loss_func.isnan().any():
-                            logger.warning(
-                                f"[Learning Algo][epoch{epoch}][train] NaN detected in batch_data_masked_for_loss_func!! This shouldn't happen."
-                            )
-                        recon_batch_data_masked_for_loss_func = (
-                            recon_batch_data * timepoints_to_use_for_loss_func
+                    if self.loss_mask_mode == "none":
+                        loss_mask = (
+                            is_observed  # Loss on all observed, ignore input mode
                         )
-
-                        # Log percentage of masked data in loss
-                        logger.info(
-                            f"[Learning Algo][epoch{epoch}][train] Percentage of un-masked data in loss: {timepoints_to_use_for_loss_func.float().mean()*100}%"
-                        )
-                        loss_recon = loss_MSE(
-                            batch_data_masked_for_loss_func,
-                            recon_batch_data_masked_for_loss_func,
-                        )
+                    elif self.loss_mask_mode == "strict":
+                        pure_tf = (
+                            base_mode_selector == 0
+                        ).float()  # 1 only if base was pure TF
+                        loss_mask = (
+                            is_observed * pure_tf
+                        )  # Exclude scheduled autonomous/mixed
+                    elif self.loss_mask_mode == "weighted":
+                        tf_weight = (1.0 - base_mode_selector).clamp(
+                            0.0, 1.0
+                        )  # TF ratio, for interpolation
+                        loss_mask = (
+                            is_observed * tf_weight
+                        )  # Weight loss by TF contribution
                     else:
-                        loss_recon = loss_MSE(batch_data, recon_batch_data)
+                        raise ValueError(
+                            f"Invalid loss_mask_mode: {self.loss_mask_mode}"
+                        )
+
+                    # Apply mask and handle NaNs
+                    batch_data_masked_for_loss_func = batch_data * loss_mask
+                    batch_data_masked_for_loss_func = torch.nan_to_num(
+                        batch_data_masked_for_loss_func, nan=0.0
+                    )
+                    recon_batch_data_masked_for_loss_func = recon_batch_data * loss_mask
+                    # Sanity check for NaNs (shouldn't happen after nan_to_num)
+                    if batch_data_masked_for_loss_func.isnan().any():
+                        logger.warning(
+                            f"[Learning Algo][epoch{epoch}][train] NaN detected in batch_data_masked_for_loss_func!! This shouldn't happen."
+                        )
+
+                    loss_recon = loss_MSE(
+                        batch_data_masked_for_loss_func,
+                        recon_batch_data_masked_for_loss_func,
+                    )
 
                     # Raise warning if nan is detected in recon loss
                     assert not torch.isnan(
@@ -598,7 +619,9 @@ class LearningAlgorithm:
                         f"[Learning Algo][epoch{epoch}] Gradient clipping: {self.gradient_clip}"
                     )
                     # Actually perform gradient clipping
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.gradient_clip)
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), self.gradient_clip
+                    )
 
                     # store the clipped gradients
                     clipped_named_params_grad = [
@@ -628,7 +651,7 @@ class LearningAlgorithm:
                 batch_data = batch_data.to(self.device)
                 batch_size = batch_data.size(0)
 
-                model_mode_selector = create_autonomous_mode_selector(
+                base_mode_selector = create_autonomous_mode_selector(
                     current_sequence_len,
                     mode=sampling_config["mode"],
                     autonomous_ratio=sampling_config["autonomous_ratio"](),
@@ -648,8 +671,10 @@ class LearningAlgorithm:
                     model_mode_selector = torch.where(
                         batch_data.permute(1, 0, 2).isnan().detach(),
                         torch.tensor(1.0, device=self.device),
-                        model_mode_selector,
+                        base_mode_selector,
                     )
+                else:
+                    model_mode_selector = base_mode_selector
 
                 if (
                     self.dataset_name == "Lorenz63"
@@ -668,35 +693,51 @@ class LearningAlgorithm:
                         logger=logger,
                         from_instance=f"[Learning Algo][epoch{epoch}][val]",
                     )
-                    if self.mask_out_autonomous_from_loss:
-                        # creating tensor mask for loss function
-                        timepoints_to_use_for_loss_func = (
-                            1.0 - model_mode_selector
-                        ).int()
-                        # Mask the data and replace NaNs with 0
-                        batch_data_masked_for_loss_func = torch.nan_to_num(
-                            batch_data * timepoints_to_use_for_loss_func, nan=0.0
-                        )
-                        recon_batch_data_masked_for_loss_func = torch.nan_to_num(
-                            recon_batch_data * timepoints_to_use_for_loss_func, nan=0.0
-                        )
 
-                        # check if there're any nan in batch_data_masked
-                        if batch_data_masked_for_loss_func.isnan().any():
-                            logger.warning(
-                                f"[Learning Algo][epoch{epoch}][train] NaN detected in batch_data_masked_for_loss_func!! This shouldn't happen."
-                            )
+                    # Now, prepare masked data for loss
+                    is_observed = (
+                        ~batch_data.isnan().detach()
+                    ).float()  # 1 where GT available
 
-                        # Log percentage of masked data in loss
-                        logger.info(
-                            f"[Learning Algo][epoch{epoch}][val] Percentage of un-masked data in loss: {timepoints_to_use_for_loss_func.float().mean()*100} %"
+                    if self.loss_mask_mode == "none":
+                        loss_mask = (
+                            is_observed  # Loss on all observed, ignore input mode
                         )
-                        loss_recon = loss_MSE(
-                            batch_data_masked_for_loss_func,
-                            recon_batch_data_masked_for_loss_func,
-                        )
+                    elif self.loss_mask_mode == "strict":
+                        pure_tf = (
+                            base_mode_selector == 0
+                        ).float()  # 1 only if base was pure TF
+                        loss_mask = (
+                            is_observed * pure_tf
+                        )  # Exclude scheduled autonomous/mixed
+                    elif self.loss_mask_mode == "weighted":
+                        tf_weight = (1.0 - base_mode_selector).clamp(
+                            0.0, 1.0
+                        )  # TF ratio, for interpolation
+                        loss_mask = (
+                            is_observed * tf_weight
+                        )  # Weight loss by TF contribution
                     else:
-                        loss_recon = loss_MSE(batch_data, recon_batch_data)
+                        raise ValueError(
+                            f"Invalid loss_mask_mode: {self.loss_mask_mode}"
+                        )
+
+                    # Apply mask and handle NaNs
+                    batch_data_masked_for_loss_func = batch_data * loss_mask
+                    batch_data_masked_for_loss_func = torch.nan_to_num(
+                        batch_data_masked_for_loss_func, nan=0.0
+                    )
+                    recon_batch_data_masked_for_loss_func = recon_batch_data * loss_mask
+                    # Sanity check for NaNs (shouldn't happen after nan_to_num)
+                    if batch_data_masked_for_loss_func.isnan().any():
+                        logger.warning(
+                            f"[Learning Algo][epoch{epoch}][train] NaN detected in batch_data_masked_for_loss_func!! This shouldn't happen."
+                        )
+
+                    loss_recon = loss_MSE(
+                        batch_data_masked_for_loss_func,
+                        recon_batch_data_masked_for_loss_func,
+                    )
 
                     # Raise warning if nan is detected in recon loss
                     assert not torch.isnan(
@@ -1029,7 +1070,11 @@ class LearningAlgorithm:
                         save_figures_dir,
                         tag,
                         kl_warm_epochs,
-                        auto_warm_epochs if self.sampling_method == "ss" else None,
+                        (
+                            auto_warm_epochs
+                            if self.sampling_method in ["ss", "sm"]
+                            else None
+                        ),
                         sequence_len_epochs,
                     )
                     visualize_alpha_history(
@@ -1038,7 +1083,11 @@ class LearningAlgorithm:
                         save_figures_dir,
                         tag,
                         kl_warm_epochs,
-                        auto_warm_epochs if self.sampling_method == "ss" else None,
+                        (
+                            auto_warm_epochs
+                            if self.sampling_method in ["ss", "sm"]
+                            else None
+                        ),
                         sequence_len_epochs,
                     )
 
@@ -1090,24 +1139,32 @@ class LearningAlgorithm:
                         showing_gradient=True,
                         gradient_clip_value=self.gradient_clip,
                     )
+                # Test with longer sequence length (1000)
+                # Update dataset sequence length to 1000 temporarily
+                train_dataloader.dataset.update_sequence_length(1000)
+                first_batch = next(iter(train_dataloader))
+                temp_batch_data = first_batch.permute(1, 0, 2).to(self.device)
+                # Reset sequence length back to current_sequence_len
+                train_dataloader.dataset.update_sequence_length(current_sequence_len)
 
                 model_mode_selector = create_autonomous_mode_selector(
-                    current_sequence_len,
+                    temp_batch_data.size(0),
                     mode=sampling_config["mode"],
                     autonomous_ratio=sampling_config["autonomous_ratio"](),
-                    device=self.device,
-                    batch_size=batch_size,
+                    batch_size=temp_batch_data.size(1),
                     x_dim=dataset_config.x_dim,
+                    device=self.device,
                 )
+                # replace where nan is present with 1 to fill with autonomous mode
                 model_mode_selector = torch.where(
-                    batch_data.isnan().detach(),
+                    temp_batch_data.isnan().detach(),
                     torch.tensor(1.0, device=self.device),
                     model_mode_selector,
                 )
 
                 # Visualize teacher forcing and autonomous mode
                 visualize_teacherforcing_2_autonomous(
-                    batch_data,
+                    temp_batch_data,
                     self.model,
                     mode_selector=model_mode_selector,
                     save_path=os.path.join(
@@ -1118,21 +1175,21 @@ class LearningAlgorithm:
                 )
 
                 model_mode_selector_flip_test = create_autonomous_mode_selector(
-                    current_sequence_len,
+                    temp_batch_data.size(0),
                     mode="even_bursts",
                     autonomous_ratio=0.1,
                     device=self.device,
-                    batch_size=batch_size,
+                    batch_size=temp_batch_data.size(1),
                     x_dim=dataset_config.x_dim,
                 )
                 model_mode_selector = torch.where(
-                    batch_data.isnan().detach(),
+                    temp_batch_data.isnan().detach(),
                     torch.tensor(1.0, device=self.device),
                     model_mode_selector,
                 )
 
                 visualize_teacherforcing_2_autonomous(
-                    batch_data,
+                    temp_batch_data,
                     self.model,
                     mode_selector=model_mode_selector_flip_test,
                     save_path=os.path.join(
@@ -1143,20 +1200,20 @@ class LearningAlgorithm:
                 )
 
                 model_mode_selector_flip_test = create_autonomous_mode_selector(
-                    current_sequence_len,
+                    temp_batch_data.size(0),
                     mode="half_half",
                     device=self.device,
-                    batch_size=batch_size,
+                    batch_size=temp_batch_data.size(1),
                     x_dim=dataset_config.x_dim,
                 )
                 model_mode_selector = torch.where(
-                    batch_data.isnan().detach(),
+                    temp_batch_data.isnan().detach(),
                     torch.tensor(1.0, device=self.device),
                     model_mode_selector,
                 )
 
                 visualize_teacherforcing_2_autonomous(
-                    batch_data,
+                    temp_batch_data,
                     self.model,
                     mode_selector=model_mode_selector_flip_test,
                     save_path=os.path.join(
