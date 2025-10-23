@@ -570,7 +570,6 @@ class LearningAlgorithm:
                 loss_tot_avg.backward()
 
                 # temporarily store detatched parameters
-
                 current_named_params_grad = [
                     (name, param.grad.detach().cpu().numpy().copy())
                     for name, param in self.model.named_parameters()
@@ -598,6 +597,8 @@ class LearningAlgorithm:
                     logger.info(
                         f"[Learning Algo][epoch{epoch}] Gradient clipping: {self.gradient_clip}"
                     )
+                    # Actually perform gradient clipping
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.gradient_clip)
 
                     # store the clipped gradients
                     clipped_named_params_grad = [

@@ -52,8 +52,9 @@ if __name__ == "__main__":
 
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
-    experiment_name = "20251015_" + "Lorenz_ss0.9_PLRNNs"
+    experiment_name = "20251022_" + "Lorenz_ss0.8_shPL_MarkovMiss_GradClip"
     print("Experiment name:", experiment_name)
+
 
     models = [
         "RNN",
@@ -62,7 +63,8 @@ if __name__ == "__main__":
         # "MT_VRNN"
     ]
     rnn_types = [
-        "PLRNN",
+        # "PLRNN",
+        # "RNN",
         "shPLRNN",
     ]
 
@@ -77,8 +79,8 @@ if __name__ == "__main__":
     alphas = [
         # [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
         [0.1],
-        [0.1, 0.1],
-        [0.1, 0.1, 0.1],
+        # [0.1, 0.1],
+        # [0.1, 0.1, 0.1],
         # [ 0.09183, 0.64830, 0.73307, ],  
         # [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
     ]
@@ -87,10 +89,10 @@ if __name__ == "__main__":
     # Training
     lr = [0.001]
     alpha_lr = [0.01]
-    epochs = [10000]
-    early_stop_patience = [40]
-    save_frequency = [100]
-    gradient_clip = [0.0]
+    epochs = [20000]
+    early_stop_patience = [50]
+    save_frequency = [50]
+    gradient_clip = [100.0, 5]
     optimize_alphas = [True]
     sampling_method = [
         "ss",
@@ -101,15 +103,21 @@ if __name__ == "__main__":
         # 0.01,
         # 0.05,
         # 0.1,
-        # 0.2,
-        # 0.3,
+        0.2,
+        0.3,
         # 0.4,
         # 0.5,
         # 0.6,
         # 0.7,
         # 0.8,
-        0.9,
+        # 0.9,
     ]
+    auto_warm_start = [
+        0.0,
+        # 0.1,
+        # 0.2,
+    ]
+
     mask_autonomous_filled = [True]
 
     # DataFrame
@@ -149,7 +157,7 @@ if __name__ == "__main__":
     ]
 
     mask_label = [
-        "None",
+        # "None",
         # "Markov_AvgLen15_0.0",
         # "Markov_AvgLen15_0.1",
         # "Markov_AvgLen15_0.2",
@@ -157,8 +165,8 @@ if __name__ == "__main__":
         # "Markov_AvgLen15_0.4",
         # "Markov_AvgLen15_0.5",
         # "Markov_AvgLen15_0.6",
-        # "Markov_AvgLen15_0.7",
-        # "Markov_AvgLen15_0.8",
+        "Markov_AvgLen15_0.7",
+        "Markov_AvgLen15_0.8",
         # "Markov_AvgLen15_0.9"
         ]
     s_dim = [1]
@@ -200,6 +208,7 @@ if __name__ == "__main__":
             "sampling_method": sampling_method,
             "sampling_ratio": sampling_ratio,
             "mask_autonomous_filled": mask_autonomous_filled,
+            "auto_warm_start": auto_warm_start,
             # DataFrame
             "dataset_name": dataset_name,
             "dataset_label": dataset_label,
