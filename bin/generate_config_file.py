@@ -92,19 +92,20 @@ if __name__ == "__main__":
     epochs = [20000]
     early_stop_patience = [50]
     save_frequency = [50]
-    gradient_clip = [100.0, 5]
+    gradient_clip = [0.0]
     optimize_alphas = [True]
     sampling_method = [
-        "ss",
+        # "ss",
         # "ptf",
         # 'mtf',
+        "sm"
     ]
     sampling_ratio = [
         # 0.01,
         # 0.05,
-        # 0.1,
+        0.1,
         0.2,
-        0.3,
+        # 0.3,
         # 0.4,
         # 0.5,
         # 0.6,
@@ -118,7 +119,13 @@ if __name__ == "__main__":
         # 0.2,
     ]
 
-    mask_autonomous_filled = [True]
+    mask_autonomous_filled = [False]
+    loss_mask_mode = [
+        "none",
+        # "weighted",
+        # "strict"
+    ]
+
 
     # DataFrame
     dataset_name = [
@@ -163,10 +170,10 @@ if __name__ == "__main__":
         # "Markov_AvgLen15_0.2",
         # "Markov_AvgLen15_0.3",
         # "Markov_AvgLen15_0.4",
-        # "Markov_AvgLen15_0.5",
+        "Markov_AvgLen15_0.5",
         # "Markov_AvgLen15_0.6",
         "Markov_AvgLen15_0.7",
-        "Markov_AvgLen15_0.8",
+        # "Markov_AvgLen15_0.8",
         # "Markov_AvgLen15_0.9"
         ]
     s_dim = [1]
