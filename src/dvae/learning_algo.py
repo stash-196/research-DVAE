@@ -897,7 +897,7 @@ class LearningAlgorithm:
                             + int(warm_up_value * self.sequence_len),
                         )
                         train_dataloader.dataset.update_sequence_length(
-                            current_sequence_len
+                            current_sequence_len,
                         )
                         val_dataloader.dataset.update_sequence_length(
                             current_sequence_len
@@ -1141,7 +1141,9 @@ class LearningAlgorithm:
                     )
                 # Test with longer sequence length (1000)
                 # Update dataset sequence length to 1000 temporarily
-                train_dataloader.dataset.update_sequence_length(1000)
+                train_dataloader.dataset.update_sequence_length(
+                    1000, minimum_nan_ratio=0.3
+                )
                 first_batch = next(iter(train_dataloader))
                 temp_batch_data = first_batch.permute(1, 0, 2).to(self.device)
                 # Reset sequence length back to current_sequence_len

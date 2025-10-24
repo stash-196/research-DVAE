@@ -64,8 +64,6 @@ class Xhro(Dataset):
         ):
             filename = f"{self.path_to_data}/xhro/processed/{self.dataset_label}/filtered_data.parquet"
             the_sequence = pd.read_parquet(filename)
-            max_data_length = 100000
-            the_sequence = the_sequence[:max_data_length]  # Limit to max_data_length
             self.sampling_freq = 250
             print(f"Downloaded data from {filename}")
         elif (
@@ -88,6 +86,7 @@ class Xhro(Dataset):
                 "Must be one of the keys in select_columns_for_obs_conditions."
             )
         # see if directory of filename exists
+        the_sequence = select_observation_window_slice(self.dataset_label, the_sequence)
 
         if self.split == "test":  # use the Latter 20% of the data for testing
             the_sequence = the_sequence[-the_sequence.shape[0] // 5 :]
@@ -211,7 +210,7 @@ class Xhro(Dataset):
         end_frame = min(start_frame + self.seq_len, len(self.seq))
         return self.seq[start_frame:end_frame]
 
-    def update_sequence_length(self, new_seq_len=None):
+    def update_sequence_length(self, new_seq_len=None, minimum_nan_ratio=None):
         # Only one index representing the start of each sequence
         if new_seq_len is not None:
             self.seq_len = new_seq_len
@@ -220,8 +219,35 @@ class Xhro(Dataset):
             all_indices = data_utils.find_indices(
                 num_frames, self.seq_len, num_frames // self.seq_len
             )
+
+            if minimum_nan_ratio is not None:
+                total_frames_before = len(all_indices)  # Total frames before filtering
+                print(f"[Dataset] Total frames before filtering: {total_frames_before}")
+                valid_frames = []
+                for idx in all_indices:
+                    seq_slice = self.seq[idx : idx + self.seq_len]
+                    nan_ratio = np.float16(np.isnan(seq_slice)).mean()
+                    if nan_ratio <= minimum_nan_ratio:
+                        valid_frames.append(idx)
+                valid_frames = np.array(valid_frames)
+                total_frames_after = len(valid_frames)  # Total frames after filtering
+                disregarded_frames = (
+                    total_frames_before - total_frames_after
+                )  # Disregarded frames
+                print(f"[Dataset] Total frames after filtering: {total_frames_after}")
+                print(
+                    f"[Dataset] Disregarded frames (due to NaN ratio > {minimum_nan_ratio}): {disregarded_frames}"
+                )
+            else:
+                valid_frames = all_indices
+                total_frames_after = len(valid_frames)
+                disregarded_frames = 0
+                print(
+                    f"[Dataset] No filtering applied (minimum_nan_ratio is None). Total frames: {total_frames_after}"
+                )
+
             train_indices, validation_indices = self.split_dataset(
-                all_indices, self.val_indices
+                valid_frames, self.val_indices
             )
             if self.split == "train":
                 valid_frames = train_indices
@@ -231,12 +257,24 @@ class Xhro(Dataset):
         else:
             # Use entire sequence if seq_len is None
             self.data_idx = [0]
+            print("[Dataset] Using entire sequence (seq_len is None). Total frames: 1")
 
         return
 
 
 select_columns_for_obs_conditions = {
     "original": {
+        "raw_ch1": [
+            "ch1",
+        ],
+        "raw_ecg": [
+            "ch1",
+            "ch2",
+        ],
+        "raw_eeg": [
+            "ch3",
+            "ch4",
+        ],
         "raw_ch4": [
             "ch4",
         ],
@@ -295,3 +333,48 @@ select_columns_for_obs_conditions = {
         ],
     },
 }
+
+
+def select_observation_window_slice(dataset_exp_label, the_sequence):
+    """
+    Slices the data based on the dataset experiment label to select a specific time window.
+
+    :param dataset_exp_label: The label for the dataset (e.g., "XHRO_04_XH-15").
+    :param the_sequence: The pandas DataFrame with a datetime index.
+    :return: The sliced DataFrame.
+    """
+    if dataset_exp_label == "XHRO_01_XH006":
+        # Slice from Oct 6 2023 15:53 to 16:03
+        start_time = pd.Timestamp("2023-10-06 15:53:00").tz_localize("Asia/Tokyo")
+        end_time = pd.Timestamp("2023-10-06 16:03:00").tz_localize("Asia/Tokyo")
+        # Filter rows where 'datetime' is within the range
+        mask = (the_sequence["datetime"] >= start_time) & (
+            the_sequence["datetime"] <= end_time
+        )
+        return the_sequence[mask]
+    elif dataset_exp_label == "XHRO_04_XH057":
+        # Slice from Nov 10 2023 14:52 to 15:02
+        start_time = pd.Timestamp("2023-11-10 14:52:00").tz_localize("Asia/Tokyo")
+        end_time = pd.Timestamp("2023-11-10 15:02:00").tz_localize("Asia/Tokyo")
+        # Filter rows where 'datetime' is within the range
+        mask = (the_sequence["datetime"] >= start_time) & (
+            the_sequence["datetime"] <= end_time
+        )
+        return the_sequence[mask]
+    elif dataset_exp_label == "XHRO_02_XH070":
+        # Slice from Oct 29 2023 22:12 to 22:22
+        start_time = pd.Timestamp("2023-10-29 22:12:00").tz_localize("Asia/Tokyo")
+        end_time = pd.Timestamp("2023-10-29 22:22:00").tz_localize("Asia/Tokyo")
+        # Filter rows where 'datetime' is within the range
+        mask = (the_sequence["datetime"] >= start_time) & (
+            the_sequence["datetime"] <= end_time
+        )
+        return the_sequence[mask]
+    # Add more cases here for other labels if needed
+    # elif dataset_exp_label == "another_label":
+    #     start_time = pd.Timestamp('...')
+    #     end_time = pd.Timestamp('...')
+    #     return the_sequence.loc[start_time:end_time]
+    else:
+        # For other labels, return the full sequence
+        return the_sequence
