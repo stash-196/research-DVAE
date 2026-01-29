@@ -9,7 +9,8 @@ import torch
 from collections import OrderedDict
 from dvae.utils.model_mode_selector import prepare_mode_selector
 from dvae.model.base_model import BaseModel
-from dvae.model.plrnn import PLRNN, shPLRNN
+from dvae.model.plrnn import PLRNN, shPLRNN, shPLRNN_wo_A
+from collections import deque
 
 
 class BaseRNN(BaseModel):
@@ -24,13 +25,28 @@ class BaseRNN(BaseModel):
         type_rnn,
         dropout_p,
         device,
+        cfg,
     ):
-        super().__init__(x_dim, activation, dropout_p, device)
+        super().__init__(x_dim, activation, dropout_p, device, cfg)
         self.dense_x = dense_x
         self.dense_h_x = dense_h_x
         self.dim_rnn = dim_rnn
         self.num_rnn = num_rnn
         self.type_rnn = type_rnn
+
+        self.noise_std_factor = cfg.getfloat(
+            "Training", "noise_std_factor", fallback=0.1
+        )
+        self.noise_window_size = cfg.getint(
+            "Training", "noise_window_size", fallback=100
+        )
+
+        self.noise_target = self.cfg.get("Training", "noise_target", fallback="both")
+
+        self.impute_with_which = cfg.get("Training", "impute_strategy", fallback="auto")
+
+        self.var_decay = cfg.getfloat("Training", "var_decay", fallback=0.9)
+
         self.build()
 
     def build(self):
@@ -73,11 +89,21 @@ class BaseRNN(BaseModel):
         else:
             raise ValueError("Unsupported RNN type for recurrence!")
 
+    def _update_running_stats(self, stat_input, running_mean_t, running_var_t):
+        diff = stat_input - running_mean_t
+        running_mean_t = running_mean_t + self.var_decay * diff
+        running_var_t = (1 - self.var_decay) * (
+            running_var_t + self.var_decay * diff.pow(2)
+        )
+        local_std = torch.sqrt(running_var_t + 1e-6)
+        return running_mean_t, running_var_t, local_std
+
     def forward(
         self,
         x,
         initialize_states=True,
         mode_selector=None,
+        noise_selector=None,
         inference_mode=False,
         logger=None,
         from_instance=None,
@@ -99,6 +125,10 @@ class BaseRNN(BaseModel):
                 (seq_len, batch_size, self.dense_x[-1] if self.dense_x else self.x_dim),
                 device=self.device,
             )
+            running_mean_vals = torch.zeros_like(x, device=self.device)
+            running_var_vals = torch.ones_like(x, device=self.device)
+            noise_vals = torch.zeros_like(x, device=self.device)
+
         else:
             y = self.y
             h = self.h
@@ -112,28 +142,71 @@ class BaseRNN(BaseModel):
             mode_selector, seq_len, batch_size, self.x_dim, self.device
         )
 
+        # Prepare noise selector
+        noise_selector = self.prepare_mode_selector(
+            noise_selector, seq_len, batch_size, self.x_dim, self.device
+        )
+
+        # Init running stats for EMA noise
+        running_mean_t = torch.zeros(
+            batch_size, self.x_dim, device=self.device
+        )  # Shape: (B, D)
+        running_var_t = torch.ones(
+            batch_size, self.x_dim, device=self.device
+        )  # Shape: (B, D)
+        local_std = torch.sqrt(running_var_t + 1e-6)  # Initial local_std
+        # Pre-generate standard Gaussian noise for speed (B, T, D) -> (T, B, D)
+        # We scale this by the calculated std inside the loop
+        base_noise = torch.randn(seq_len, batch_size, self.x_dim, device=self.device)
+
         for t in range(seq_len):
             input_t = x[t, :, :]  # Shape: (batch_size, x_dim)
             mode_selector_t = mode_selector[t, :, :]  # Shape: (batch_size, x_dim)
+            noise_selector_t = noise_selector[t, :, :]
 
-            # Impute NaNs with previous output
+            noise_t = base_noise[t] * local_std * self.noise_std_factor
+
+            if self.impute_with_which == "auto":
+                fill_value = y_t if t > 0 else torch.zeros_like(input_t)
+            elif self.impute_with_which == "noise":
+                fill_value = noise_t
+
+            # Impute NaNs with fill_value (either previous output or noise)
             imputed_input_t = self.impute_inputs_nans_with_output(
-                input_t, y_t if t > 0 else None, t
+                input_t, fill_value, t
             )
 
+            # Update running stats for EMA noise based on imputed input
+            running_mean_t, running_var_t, local_std = self._update_running_stats(
+                imputed_input_t, running_mean_t, running_var_t
+            )
+
+            # 3. Hierarchical Mixing
+            # Stage 1: Signal Mix (GT vs Model)
             # Mix inputs based on mode_selector and extract features
             mixed_input_t = self.mix_inputs_with_outputs(
-                imputed_input_t, y_t if t > 0 else None, mode_selector_t, t
+                imputed_input_t,
+                y_t if t > 0 else torch.zeros_like(input_t),
+                mode_selector_t,
+                t,
+            )
+            # Stage 2: Uncertainty Mix (Signal vs Noise)
+            # Note: We pass 'noise_t' as the "output" argument to mix it in
+            final_input_t = self.mix_inputs_with_outputs(
+                mixed_input_t, noise_t, noise_selector_t, t
             )
 
-            feature_xt = self.feature_extractor_x(mixed_input_t)
-
+            feature_xt = self.feature_extractor_x(final_input_t)
             # Proceed with model-specific methods
             h_t_last = h_t[-1]  # Shape: (batch_size, dim_rnn)
             y_t = self.generation_x(h_t_last)  # Expects h_t_last: (batch_size, dim_rnn)
             y[t, :, :] = y_t
             h[t, :, :] = h_t_last
             feature_x[t, :, :] = feature_xt
+
+            noise_vals[t, :, :] = noise_t
+            running_mean_vals[t, :, :] = running_mean_t
+            running_var_vals[t, :, :] = running_var_t
 
             # Recurrence
             if self.type_rnn == "LSTM":
@@ -150,6 +223,12 @@ class BaseRNN(BaseModel):
         self.h_t = h_t
         if self.type_rnn == "LSTM":
             self.c_t = c_t
+
+        self.auto_selector = mode_selector
+        self.noise_selector = noise_selector
+        self.noise_vals = noise_vals
+        self.running_mean_vals = running_mean_vals
+        self.running_var_vals = running_var_vals
 
         return y
 

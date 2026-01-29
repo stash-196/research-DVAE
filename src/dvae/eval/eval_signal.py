@@ -38,7 +38,11 @@ from dvae.visualizers import (
     visualize_alpha_history_and_spectrums,
     visualize_errors_from_lst,
 )
-from dvae.eval.utils.frequency_analysis import run_spectrum_analysis
+from dvae.eval.utils import (
+    run_spectrum_analysis,
+    compute_delay_embedding,
+    state_space_kl,
+)
 
 from torch.nn.functional import mse_loss
 import plotly.graph_objects as go
@@ -86,7 +90,18 @@ if __name__ == "__main__":
     learning_algo.build_model(device=device)
     dvae = learning_algo.model.to(device)
     dvae.device = device
-    dvae.load_state_dict(torch.load(params["saved_dict"], map_location="cpu"))
+    if "final" in params["saved_dict"]:
+        loaded_model = torch.load(params["saved_dict"], map_location="cpu")
+        dvae.load_state_dict(loaded_model)
+    elif "checkpoint" in params["saved_dict"]:
+        loaded_model = torch.load(
+            params["saved_dict"], weights_only=False, map_location="cpu"
+        )
+        dvae.load_state_dict(loaded_model["model_state_dict"])
+    else:
+        print(
+            "[Eval] Warning: Unrecognized model file name format. (final or checkpoint expected)"
+        )
 
     dvae.eval()
     cfg = learning_algo.cfg
@@ -116,7 +131,7 @@ if __name__ == "__main__":
 
     # Build the test dataloader once
     test_dataloader = build_dataloader(
-        learning_algo.dataset_name, dataset_config, split="test"
+        learning_algo.dataset_name, dataset_config, split="test", eval_mode=True
     )
 
     overlap = cfg["DataFrame"].getboolean("overlap")
@@ -139,7 +154,7 @@ if __name__ == "__main__":
             loaded_data = pickle.load(f)
 
     else:
-        print(f"[Eval] No loss data file found at {loss_file}")
+        print(f"[Eval][Warning] No loss data file found at {loss_file}")
 
     ############################################################################
 
@@ -155,9 +170,15 @@ if __name__ == "__main__":
             os.makedirs(save_fig_dir)
 
         ############################################################################
-
-        new_seq_len = min(10000, len(test_dataloader.dataset.seq))
+        # For shorter sequence
+        ############################################################################
+        if learning_algo.dataset_name == "Lorenz63":
+            new_seq_len = 1000
+        else:
+            new_seq_len = min(1000, len(test_dataloader.dataset.seq))
         print(f"[Eval] New sequence length: {new_seq_len}")
+        # set random seed
+        torch.manual_seed(42)
         test_dataloader.dataset.update_sequence_length(new_seq_len)
         # Prepare the long sequence data
         for i, batch_data_long in enumerate(test_dataloader):
@@ -194,6 +215,81 @@ if __name__ == "__main__":
                 x_data_long = batch_data_long[:, 0, 0]
                 recon_x_data_long = recon_data_long[:, 0, 0]
 
+            # Plot the reconstruction vs true sequence
+            visualize_teacherforcing_2_autonomous(
+                batch_data_long[:, 1:, :],
+                dvae,
+                auto_mode_selector=autonomous_mode_selector_long[:, 1:, :],
+                save_path=save_fig_dir,
+                explain=f"final_short_inference_mode_half_half_short",
+                inference_mode=True,
+            )
+
+        ############################################################################
+        # For longer sequence
+        ############################################################################
+
+        if learning_algo.dataset_name == "Lorenz63":
+            new_seq_len = 10000
+        else:
+            new_seq_len = min(10000, len(test_dataloader.dataset.seq))
+        print(f"[Eval] New sequence length: {new_seq_len}")
+        test_dataloader.dataset.update_sequence_length(new_seq_len)
+        # Prepare the long sequence data
+        for i, batch_data_long in enumerate(test_dataloader):
+            # batch_data_long = next(iter(test_dataloader))  # Single batch for demonstration
+            batch_data_long = batch_data_long.to(device)
+            # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
+            batch_data_long = batch_data_long.permute(1, 0, 2)
+            seq_len_long, batch_size_long, _ = batch_data_long.shape
+            half_point_long = seq_len_long // 2
+            # Plot the spectral analysis
+            autonomous_mode_selector_long = create_autonomous_mode_selector(
+                seq_len_long,
+                # mode="half_half",
+                mode="even_bursts",
+                autonomous_ratio=0.1,
+                batch_size=batch_size_long,
+                x_dim=dataset_config.x_dim,
+            )
+            # turn input into tensor and send to GPU if needed
+            batch_data_long_tensor = batch_data_long.clone().detach().to(device)
+            recon_data_long = (
+                dvae(
+                    batch_data_long_tensor,
+                    mode_selector=autonomous_mode_selector_long,
+                    inference_mode=True,
+                )
+                .detach()
+                .cpu()
+                .numpy()
+            )
+
+            if test_dataloader.dataset.is_segmented_1d:
+                x_data_long = batch_data_long[:, 0, :].reshape(-1)
+                recon_x_data_long = recon_data_long[:, 0, :].reshape(-1)
+            else:
+                x_data_long = batch_data_long[:, 0, 0]
+                recon_x_data_long = recon_data_long[:, 0, 0]
+
+            visualize_teacherforcing_2_autonomous(
+                batch_data_long,
+                dvae,
+                auto_mode_selector=autonomous_mode_selector_long,
+                save_path=save_fig_dir,
+                explain="final_long_inference_mode_even_burst",
+                inference_mode=True,
+            )
+            visualize_teacherforcing_2_autonomous(
+                batch_data_long,
+                dvae,
+                auto_mode_selector=autonomous_mode_selector_long,
+                save_path=save_fig_dir,
+                explain="final_long_generative_mode",
+                inference_mode=False,
+            )
+
+            # Run spectrum analysis and visualization
             run_spectrum_analysis(
                 test_dataloader=test_dataloader,
                 recon_data_long=recon_data_long,
@@ -202,66 +298,85 @@ if __name__ == "__main__":
                 autonomous_mode_selector_long=autonomous_mode_selector_long,
                 dataset_name=learning_algo.dataset_name,
                 model_name=learning_algo.model_name,
-                loaded_data=loaded_data,
                 cfg=cfg,
                 dvae_model=dvae,
             )
 
-            # Plot the reconstruction vs true sequence
-            visualize_teacherforcing_2_autonomous(
-                batch_data_long,
-                dvae,
-                mode_selector=autonomous_mode_selector_long,
-                save_path=save_fig_dir,
-                explain="final_long_inference_mode",
-                inference_mode=True,
-            )
-            visualize_teacherforcing_2_autonomous(
-                batch_data_long,
-                dvae,
-                mode_selector=autonomous_mode_selector_long,
-                save_path=save_fig_dir,
-                explain="final_long_generative_mode",
-                inference_mode=False,
-            )
+            if learning_algo.dataset_name == "Lorenz63":
+                time_delay = 10
+                delay_embedding_dimensions = 3
+            elif learning_algo.dataset_name in ["Xhro", "SHO", "DampedSHO"]:
+                time_delay = 5
+                delay_embedding_dimensions = 3
 
-            time_delay = 10
-            delay_emedding_dimensions = 3
             if VISUALIZE_3D:
-                embedded_true_x = visualize_delay_embedding(
-                    observation=batch_data_long[:, 0, :].reshape(-1),
+                embedded_true_x = compute_delay_embedding(
+                    observation=batch_data_long[:, 0, :].reshape(-1).numpy(),
                     delay=time_delay,
-                    dimensions=delay_emedding_dimensions,
-                    save_dir=save_fig_dir,
-                    variable_name="true_signal_inference_mode",
-                    base_color="Blues",
+                    dimensions=delay_embedding_dimensions,
                 )
-                embedded_ = visualize_delay_embedding(
-                    observation=recon_data_long[
-                        ~autonomous_mode_selector_long, 0, :
-                    ].reshape(-1),
-                    delay=time_delay,
-                    dimensions=delay_emedding_dimensions,
-                    save_dir=save_fig_dir,
-                    variable_name="teacher-forced_reconstruction_inference_mode",
-                    base_color="Greens",
-                )
-                visualize_delay_embedding(
-                    observation=recon_data_long[
-                        autonomous_mode_selector_long, 0, :
-                    ].reshape(-1),
-                    delay=time_delay,
-                    dimensions=delay_emedding_dimensions,
-                    save_dir=save_fig_dir,
-                    variable_name="autonomous_reconstruction_inference_mode",
-                    base_color="Reds",
-                )
+                # visualize_delay_embedding(
+                #     embedded=embedded_true_x,
+                #     save_dir=save_fig_dir,
+                #     variable_name=f"true_signal_inference_mode_τ{time_delay}_d{delay_embedding_dimensions}",
+                #     base_color="Blues",
+                # )
 
-            teacherforced_states = dvae.h[~autonomous_mode_selector_long, 0, :]
-            autonomous_states = dvae.h[autonomous_mode_selector_long, 0, :]
-            embedding_states_list = [teacherforced_states, autonomous_states]
-            embedding_states_conditions = ["teacher-forced", "autonomous"]
-            embedding_states_colors = ["Greens", "Reds"]
+                embedded_recon_teacher = compute_delay_embedding(
+                    observation=recon_data_long[
+                        ~autonomous_mode_selector_long.bool()  # , 0, :
+                    ].reshape(-1),
+                    delay=time_delay,
+                    dimensions=delay_embedding_dimensions,
+                )
+                # visualize_delay_embedding(
+                #     embedded=embedded_recon_teacher,
+                #     save_dir=save_fig_dir,
+                #     variable_name=f"teacher-forced_reconstruction_inference_mode_τ{time_delay}_d{delay_embedding_dimensions}",
+                #     base_color="Greens",
+                # )
+                embedded_recon_auto = compute_delay_embedding(
+                    observation=recon_data_long[
+                        autonomous_mode_selector_long.bool(),  # , 0, :
+                    ].reshape(-1),
+                    delay=time_delay,
+                    dimensions=delay_embedding_dimensions,
+                )
+                # visualize_delay_embedding(
+                #     embedded=embedded_recon_auto,
+                #     save_dir=save_fig_dir,
+                #     variable_name=f"autonomous_reconstruction_inference_mode_τ{time_delay}_d{delay_embedding_dimensions}",
+                #     base_color="Reds",
+                # )
+
+                kl_tf_error = state_space_kl(
+                    true_traj=embedded_true_x,
+                    gen_traj=embedded_recon_teacher,
+                    use_gmm=True,
+                )
+                print(f"[Eval] KL Teacher-forced: {kl_tf_error:.4f}")
+                kl_auto_error = state_space_kl(
+                    true_traj=embedded_true_x,
+                    gen_traj=embedded_recon_auto,
+                    use_gmm=True,
+                )
+                print(f"[Eval] KL Autonomous: {kl_auto_error:.4f}")
+                # state_space_kl(
+                #     true_traj=embedded_true_x,
+                #     # against random noise as baseline with same variance
+                #     gen_traj=np.random.normal(
+                #         loc=0.0,
+                #         scale=np.std(embedded_true_x),
+                #         size=embedded_true_x.shape,
+                #     ),
+                #     use_gmm=True,
+                # )
+
+            # teacherforced_states = dvae.h[~autonomous_mode_selector_long, 0, :]
+            # autonomous_states = dvae.h[autonomous_mode_selector_long, 0, :]
+            # embedding_states_list = [teacherforced_states, autonomous_states]
+            # embedding_states_conditions = ["teacher-forced", "autonomous"]
+            # embedding_states_colors = ["Greens", "Reds"]
 
             # # visualize the hidden states 3d
             # # vis_embedding_space_params = [
@@ -356,161 +471,161 @@ if __name__ == "__main__":
             # break after the first batch
             break
 
-        ############################################################################
-        # Prepare shorter sequence data
-        # Single batch for demonstration
-        new_seq_len = min(1000, learning_algo.sequence_len)
-        test_dataloader.dataset.update_sequence_length(new_seq_len)
-        batch_data = next(iter(test_dataloader))
-        batch_data = batch_data.to(device)
-        # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
-        batch_data = batch_data.permute(1, 0, 2)
-        seq_len, batch_size, x_dim = batch_data.shape
-        half_point = seq_len // 2
-        num_iterations = 100
-        # iterated batch data of single series To calculate the accuracy measure for the same time series
-        batch_data_repeated = batch_data.repeat(1, num_iterations, 1)
+    #     ############################################################################
+    #     # Prepare shorter sequence data
+    #     # Single batch for demonstration
+    #     new_seq_len = 2000
+    #     test_dataloader.dataset.update_sequence_length(new_seq_len)
+    #     batch_data = next(iter(test_dataloader))
+    #     batch_data = batch_data.to(device)
+    #     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
+    #     batch_data = batch_data.permute(1, 0, 2)
+    #     seq_len, batch_size, x_dim = batch_data.shape
+    #     half_point = seq_len // 2
+    #     num_iterations = 100
+    #     # iterated batch data of single series To calculate the accuracy measure for the same time series
+    #     batch_data_repeated = batch_data.repeat(1, num_iterations, 1)
 
-        autonomous_mode_selector = create_autonomous_mode_selector(
-            seq_len,
-            "even_bursts",
-            autonomous_ratio=0.1,
-        ).astype(bool)
-        expanded_autonomous_mode_selector = expand_autonomous_mode_selector(
-            autonomous_mode_selector, x_dim
-        )
+    #     autonomous_mode_selector = create_autonomous_mode_selector(
+    #         seq_len,
+    #         "even_bursts",
+    #         autonomous_ratio=0.1,
+    #     ).astype(bool)
+    #     expanded_autonomous_mode_selector = expand_autonomous_mode_selector(
+    #         autonomous_mode_selector, x_dim
+    #     )
 
-        # turn input into tensor and send to GPU if needed
-        batch_data_repeated_tensor = torch.tensor(
-            batch_data_repeated, device=dvae.device
-        )
-        recon_data_repeated = (
-            dvae(batch_data_repeated_tensor, mode_selector=autonomous_mode_selector)
-            .cpu()
-            .numpy()
-        )
+    #     # turn input into tensor and send to GPU if needed
+    #     batch_data_repeated_tensor = torch.tensor(
+    #         batch_data_repeated, device=dvae.device
+    #     )
+    #     recon_data_repeated = (
+    #         dvae(batch_data_repeated_tensor, mode_selector=autonomous_mode_selector)
+    #         .cpu()
+    #         .numpy()
+    #     )
 
-        batch_data_repeated = batch_data_repeated.reshape(
-            seq_len, batch_size, num_iterations, x_dim
-        )
-        recon_data_repeated = recon_data_repeated.reshape(
-            seq_len, batch_size, num_iterations, x_dim
-        )
+    #     batch_data_repeated = batch_data_repeated.reshape(
+    #         seq_len, batch_size, num_iterations, x_dim
+    #     )
+    #     recon_data_repeated = recon_data_repeated.reshape(
+    #         seq_len, batch_size, num_iterations, x_dim
+    #     )
 
-        # Calculate expected RMSE
-        expected_rmse, expected_rmse_variance = calculate_expected_accuracy(
-            batch_data_repeated, recon_data_repeated, rmse
-        )
+    #     # Calculate expected RMSE
+    #     expected_rmse, expected_rmse_variance = calculate_expected_accuracy(
+    #         batch_data_repeated, recon_data_repeated, rmse
+    #     )
 
-        # Calculate expected R^2
-        expected_r2, expected_r2_variance = calculate_expected_accuracy(
-            batch_data_repeated, recon_data_repeated, r_squared
-        )
+    #     # Calculate expected R^2
+    #     expected_r2, expected_r2_variance = calculate_expected_accuracy(
+    #         batch_data_repeated, recon_data_repeated, r_squared
+    #     )
 
-        # Visualize results
-        save_dir = os.path.dirname(params["saved_dict"])
+    #     # Visualize results
+    #     save_dir = os.path.dirname(params["saved_dict"])
 
-        visualize_accuracy_over_time(
-            expected_rmse,
-            expected_rmse_variance,
-            save_dir,
-            measure="rsme",
-            num_batches=batch_size,
-            num_iter=num_iterations,
-            explain="over multiple series",
-            autonomous_mode_selector=expanded_autonomous_mode_selector,
-        )
-        visualize_accuracy_over_time(
-            expected_r2,
-            expected_r2_variance,
-            save_dir,
-            measure="r2",
-            num_batches=batch_size,
-            num_iter=num_iterations,
-            explain="over multiple series",
-            autonomous_mode_selector=expanded_autonomous_mode_selector,
-        )
+    #     visualize_accuracy_over_time(
+    #         expected_rmse,
+    #         expected_rmse_variance,
+    #         save_dir,
+    #         measure="rsme",
+    #         num_batches=batch_size,
+    #         num_iter=num_iterations,
+    #         explain="over multiple series",
+    #         autonomous_mode_selector=expanded_autonomous_mode_selector,
+    #     )
+    #     visualize_accuracy_over_time(
+    #         expected_r2,
+    #         expected_r2_variance,
+    #         save_dir,
+    #         measure="r2",
+    #         num_batches=batch_size,
+    #         num_iter=num_iterations,
+    #         explain="over multiple series",
+    #         autonomous_mode_selector=expanded_autonomous_mode_selector,
+    #     )
 
-        # visualize the hidden states
-        visualize_variable_evolution(
-            dvae.h,
-            batch_data=batch_data,
-            save_dir=save_fig_dir,
-            variable_name=f"hidden",
-            alphas=alphas_per_unit,
-            add_lines_lst=[half_point],
-        )
+    #     # visualize the hidden states
+    #     visualize_variable_evolution(
+    #         dvae.h,
+    #         batch_data=batch_data,
+    #         save_dir=save_fig_dir,
+    #         variable_name=f"hidden",
+    #         alphas=alphas_per_unit,
+    #         add_lines_lst=[half_point],
+    #     )
 
-        # visualize the x_features
-        visualize_variable_evolution(
-            dvae.feature_x,
-            batch_data=batch_data,
-            save_dir=save_fig_dir,
-            variable_name=f"x_features",
-            add_lines_lst=[half_point],
-        )
+    #     # visualize the x_features
+    #     visualize_variable_evolution(
+    #         dvae.feature_x,
+    #         batch_data=batch_data,
+    #         save_dir=save_fig_dir,
+    #         variable_name=f"x_features",
+    #         add_lines_lst=[half_point],
+    #     )
 
-        # Check if the model has a z variable
-        if hasattr(dvae, "z_mean"):
-            # visualize the latent states
-            visualize_variable_evolution(
-                dvae.z_mean,
-                batch_data=batch_data,
-                save_dir=save_fig_dir,
-                variable_name=f"z_mean_posterior",
-                add_lines_lst=[half_point],
-            )
-            visualize_variable_evolution(
-                dvae.z_logvar,
-                batch_data=batch_data,
-                save_dir=save_fig_dir,
-                variable_name=f"z_logvar_posterior",
-                add_lines_lst=[half_point],
-            )
-            visualize_variable_evolution(
-                dvae.z_mean_p,
-                batch_data=batch_data,
-                save_dir=save_fig_dir,
-                variable_name=f"z_mean_prior",
-                add_lines_lst=[half_point],
-            )
-            visualize_variable_evolution(
-                dvae.z_logvar_p,
-                batch_data=batch_data,
-                save_dir=save_fig_dir,
-                variable_name=f"z_logvar_prior",
-                add_lines_lst=[half_point],
-            )
+    #     # Check if the model has a z variable
+    #     if hasattr(dvae, "z_mean"):
+    #         # visualize the latent states
+    #         visualize_variable_evolution(
+    #             dvae.z_mean,
+    #             batch_data=batch_data,
+    #             save_dir=save_fig_dir,
+    #             variable_name=f"z_mean_posterior",
+    #             add_lines_lst=[half_point],
+    #         )
+    #         visualize_variable_evolution(
+    #             dvae.z_logvar,
+    #             batch_data=batch_data,
+    #             save_dir=save_fig_dir,
+    #             variable_name=f"z_logvar_posterior",
+    #             add_lines_lst=[half_point],
+    #         )
+    #         visualize_variable_evolution(
+    #             dvae.z_mean_p,
+    #             batch_data=batch_data,
+    #             save_dir=save_fig_dir,
+    #             variable_name=f"z_mean_prior",
+    #             add_lines_lst=[half_point],
+    #         )
+    #         visualize_variable_evolution(
+    #             dvae.z_logvar_p,
+    #             batch_data=batch_data,
+    #             save_dir=save_fig_dir,
+    #             variable_name=f"z_logvar_prior",
+    #             add_lines_lst=[half_point],
+    #         )
 
-        # Plot the reconstruction vs true sequence
-        visualize_teacherforcing_2_autonomous(
-            batch_data,
-            dvae,
-            mode_selector=autonomous_mode_selector,
-            save_path=save_fig_dir,
-            explain="final_generative_mode",
-            inference_mode=False,
-        )
-        visualize_teacherforcing_2_autonomous(
-            batch_data,
-            dvae,
-            mode_selector=autonomous_mode_selector,
-            save_path=save_fig_dir,
-            explain="final_inference_mode",
-            inference_mode=True,
-        )
+    #     # Plot the reconstruction vs true sequence
+    #     visualize_teacherforcing_2_autonomous(
+    #         batch_data,
+    #         dvae,
+    #         mode_selector=autonomous_mode_selector,
+    #         save_path=save_fig_dir,
+    #         explain="final_generative_mode",
+    #         inference_mode=False,
+    #     )
+    #     visualize_teacherforcing_2_autonomous(
+    #         batch_data,
+    #         dvae,
+    #         mode_selector=autonomous_mode_selector,
+    #         save_path=save_fig_dir,
+    #         explain="final_inference_mode",
+    #         inference_mode=True,
+    #     )
 
-    metrics = {
-        "params": params,
-        "power_spectrum_error": power_spectrum_error_lst,
-    }
+    # metrics = {
+    #     "params": params,
+    #     "power_spectrum_error": power_spectrum_error_lst,
+    # }
 
-    # Create directory to save metrics if it does not exist
-    eval_save_path = os.path.join(save_dir, "evaluation")
-    if not os.path.exists(eval_save_path):
-        os.makedirs(eval_save_path)
+    # # Create directory to save metrics if it does not exist
+    # eval_save_path = os.path.join(save_dir, "evaluation")
+    # if not os.path.exists(eval_save_path):
+    #     os.makedirs(eval_save_path)
 
-    # Save the metrics
-    metrics_file = os.path.join(eval_save_path, "evaluation_metrics.json")
-    with open(metrics_file, "w") as f:
-        json.dump(metrics, f)
+    # # Save the metrics
+    # metrics_file = os.path.join(eval_save_path, "evaluation_metrics.json")
+    # with open(metrics_file, "w") as f:
+    #     json.dump(metrics, f)

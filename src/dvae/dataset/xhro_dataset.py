@@ -7,6 +7,7 @@ import os
 import numpy as np
 import pandas as pd
 from .utils import data_utils
+from .utils.visualize_nans import plot_nan_heatmap, plot_segment_length_hist
 
 
 class Xhro(Dataset):
@@ -180,6 +181,21 @@ class Xhro(Dataset):
         std = np.nanstd(data, axis=0)
         data = (data - mean) / std
         return data
+
+    def get_full_xyz(self, index):
+        """
+        Retrieves the full xyz variables for the given index.
+
+        Args:
+            index (int): Index of the desired data sequence.
+
+        Returns:
+            torch.Tensor: The full xyz sequence data for the given index.
+        """
+        start_frame = self.data_idx[index]
+        end_frame = min(start_frame + self.seq_len, len(self.full_sequence))
+        # Return the full (x, y, z) data
+        return self.full_sequence[start_frame:end_frame]
 
     @staticmethod
     def create_moving_window_sequences(sequence, window_size):

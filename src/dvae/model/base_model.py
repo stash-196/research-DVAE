@@ -5,13 +5,14 @@ from collections import OrderedDict
 
 
 class BaseModel(nn.Module):
-    def __init__(self, x_dim, activation, dropout_p, device):
+    def __init__(self, x_dim, activation, dropout_p, device, cfg):
         super().__init__()
         self.x_dim = x_dim
         self.y_dim = x_dim
         self.activation = self._get_activation(activation)
         self.dropout_p = dropout_p
         self.device = device
+        self.cfg = cfg
 
     def forward(self, x):
         raise NotImplementedError("Each model must implement its own forward method.")
@@ -81,18 +82,18 @@ class BaseModel(nn.Module):
 
         return mode_selector
 
-    def impute_inputs_nans_with_output(self, input_t, y_t, t):
+    def impute_inputs_nans_with_output(self, input_t, mix_var_t, t):
         if input_t.isnan().any():
             if t == 0:
                 imputed_input_t = torch.where(
                     input_t.isnan(), torch.zeros_like(input_t), input_t
                 )
             else:
-                imputed_input_t = torch.where(input_t.isnan(), y_t, input_t)
+                imputed_input_t = torch.where(input_t.isnan(), mix_var_t, input_t)
             return imputed_input_t
         return input_t
 
-    def mix_inputs_with_outputs(self, input_t, y_t, mode_selector_t, t):
+    def mix_inputs_with_outputs(self, input_t, mix_var_t, mode_selector_t, t):
         """
         Mixes the inputs based on the mode_selector.
         Handles the case when t == 0 internally.
@@ -100,5 +101,5 @@ class BaseModel(nn.Module):
         if t == 0:
             return input_t
         else:
-            mixed_input = mode_selector_t * y_t + (1 - mode_selector_t) * input_t
+            mixed_input = mode_selector_t * mix_var_t + (1 - mode_selector_t) * input_t
             return mixed_input

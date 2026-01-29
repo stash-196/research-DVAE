@@ -76,7 +76,7 @@ class LearningAlgorithm:
         self.device_name = self.device_config["device_name"]
 
         # Get training parameters
-        self.sampling_method = self.cfg.get("Training", "sampling_method")
+        self.autonomous_sampling_method = self.cfg.get("Training", "sampling_method")
         self.sampling_ratio = self.cfg.getfloat("Training", "sampling_ratio")
         self.kl_warm_limit = self.cfg.getfloat(
             "Training", "kl_warm_limit", fallback=1.0
@@ -91,6 +91,21 @@ class LearningAlgorithm:
         self.loss_mask_mode = self.cfg.get(
             "Training", "loss_mask_mode", fallback="none"
         )
+        self.noise_warm_limit = self.cfg.getfloat(
+            "Training", "noise_max_ratio", fallback=1.0
+        )
+        self.noise_warm_start = self.cfg.getfloat(
+            "Training", "noise_init_ratio", fallback=1.0
+        )
+        self.noise_ratio = self.cfg.getfloat(
+            "Training", "noise_mix_ratio", fallback=0.0
+        )
+        self.noise_warm_reset_on_window = self.cfg.getboolean(
+            "Training", "noise_warm_reset_on_window", fallback=True
+        )  # True: reset noise on seq_len bump
+        self.tie_noise_to_auto = self.cfg.getboolean(
+            "Training", "tie_noise_to_auto", fallback=False
+        )  # True: force noise_warm = auto_warm (for tied ablations)
 
         # Get host name and date
         self.hostname = socket.gethostname()
@@ -135,7 +150,7 @@ class LearningAlgorithm:
     def init_optimizer(self):
         optimization = self.cfg.get("Training", "optimization")
         self.lr = self.cfg.getfloat("Training", "lr")
-        if self.optimize_alphas:
+        if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
             # defaults to the same as lr if not present
             self.alpha_lr = self.cfg.getfloat("Training", "alpha_lr", fallback=self.lr)
             params = [
@@ -190,7 +205,7 @@ class LearningAlgorithm:
                 self.dataset_label,
                 self.mask_label,
                 tag,
-                self.sampling_method,
+                self.autonomous_sampling_method,
                 self.sampling_ratio,
             ]
 
@@ -380,17 +395,34 @@ class LearningAlgorithm:
                 # set initial values of sigmas_history with alphas_init
                 sigmas_history[:, 0] = sigmoid_reverse_10(alphas_init)
 
-        auto_warm = self.auto_warm_start
-        if self.sampling_method in ["ss", "sm"]:
-            auto_warm = self.auto_warm_start
+        current_auto_warm = self.auto_warm_start
+        if self.autonomous_sampling_method in ["ss", "sm"]:
+            current_auto_warm = self.auto_warm_start
         else:
-            auto_warm = self.auto_warm_limit
+            current_auto_warm = self.auto_warm_limit
         auto_warm_values = np.zeros((epochs,))
+
         # if model is vrnn or mt_vrnn, then kl_warm is used
         if self.model_name in ["VRNN", "MT_VRNN"]:
-            kl_warm = 0
+            current_kl_warm = 0
         else:
-            kl_warm = 1
+            current_kl_warm = 1
+
+        # noise config variables
+        self.noise_sampling_method = self.cfg.get(
+            "Training", "noise_sampling_method", fallback="none"
+        )
+        self.noise_std_factor = self.cfg.getfloat(
+            "Training", "noise_std_factor", fallback=0.1
+        )
+        self.noise_target = self.cfg.get("Training", "noise_target", fallback="both")
+        current_noise_warm = self.noise_warm_start
+        if self.noise_sampling_method in ["ss", "sm"]:
+            current_noise_warm = self.noise_warm_start
+        else:
+            current_noise_warm = self.noise_warm_limit
+        noise_warm_values = np.zeros((epochs,))
+
         # stores the value of kl_warm at the epoch
         kl_warm_values = np.zeros((epochs,))
         best_state_epochs = np.zeros((epochs,))
@@ -411,10 +443,10 @@ class LearningAlgorithm:
             start_time = datetime.datetime.now()
 
             # Define a mapping from sampling_method to corresponding parameters
-            sampling_configs = {
+            autonomous_configs = {
                 "ss": {
                     "mode": "bernoulli_sampling",
-                    "autonomous_ratio": lambda: auto_warm,
+                    "autonomous_ratio": lambda: current_auto_warm,
                 },
                 "ptf": {
                     "mode": "bernoulli_sampling",
@@ -426,7 +458,7 @@ class LearningAlgorithm:
                 },
                 "sm": {
                     "mode": "mix_sampling",
-                    "autonomous_ratio": lambda: auto_warm,
+                    "autonomous_ratio": lambda: current_auto_warm,
                 },
                 "even_bursts": {
                     "mode": "even_bursts",
@@ -436,7 +468,39 @@ class LearningAlgorithm:
                 },
             }
 
-            sampling_config = sampling_configs[self.sampling_method]
+            # New: parallel structure just for noise
+            if self.tie_noise_to_auto:
+                current_noise_warm = (
+                    current_auto_warm  # Direct tie for confounding-free baselines
+                )
+
+            noise_configs = {
+                "none": None,  # disable noise entirely
+                "ss": {  # scheduled probabilistic noise (recommended default / most analogous to SS)
+                    "mode": "bernoulli_sampling",
+                    "ratio_fn": lambda: current_noise_warm,  # anneal from low→high
+                },
+                "sm": {  # scheduled continuous noise (soft additive noise that ramps up)
+                    "mode": "mix_sampling",
+                    "ratio_fn": lambda: current_noise_warm,
+                },
+                "ptf": {  # fixed high-probability noise (like permanent dropout/jitter)
+                    "mode": "bernoulli_sampling",
+                    "ratio_fn": lambda: self.noise_ratio,  # fixed, e.g. 0.3–0.5
+                },
+                "mtf": {  # fixed continuous noise strength (always on, scaled fraction)
+                    "mode": "mix_sampling",
+                    "ratio_fn": lambda: self.noise_ratio,
+                },
+                # Optional extras if you want them later
+                "even_bursts": {
+                    "mode": "even_bursts",
+                    "ratio_fn": lambda: self.noise_ratio * current_sequence_len / 10,
+                },
+            }
+
+            autonomous_config = autonomous_configs[self.autonomous_sampling_method]
+            noise_config = noise_configs.get(self.noise_sampling_method)
 
             torch.autograd.set_detect_anomaly(True)
             # Batch training
@@ -450,8 +514,8 @@ class LearningAlgorithm:
 
                 base_mode_selector = create_autonomous_mode_selector(
                     current_sequence_len,
-                    mode=sampling_config["mode"],
-                    autonomous_ratio=sampling_config["autonomous_ratio"](),
+                    mode=autonomous_config["mode"],
+                    autonomous_ratio=autonomous_config["autonomous_ratio"](),
                     batch_size=batch_size,
                     x_dim=dataset_config.x_dim,
                     device=self.device,
@@ -473,10 +537,39 @@ class LearningAlgorithm:
                 else:
                     model_mode_selector = base_mode_selector
 
+                # START: Compute masked batch std for adaptive noise #####################
+                noise_config = noise_configs.get(self.noise_sampling_method)
+                noise_selector = None
+                if noise_config is not None:
+                    current_noise_ratio = noise_config["ratio_fn"]()
+                    noise_selector = create_autonomous_mode_selector(
+                        current_sequence_len,
+                        mode=noise_config["mode"],
+                        autonomous_ratio=current_noise_ratio,
+                        batch_size=batch_size,
+                        x_dim=dataset_config.x_dim,
+                        device=self.device,
+                    )
+
+                    # Restrict to observed + targeting (keep this)
+                    # observed_mask = (
+                    #     ~batch_data.permute(1, 0, 2).isnan().detach()
+                    # )  # For selector restrict
+                    # noise_selector *= observed_mask.float()
+
+                    if self.noise_target == "tf_only":
+                        noise_selector *= 1 - model_mode_selector
+                    elif self.noise_target in ["ar_only", "hybrid_ar"]:
+                        noise_selector *= model_mode_selector
+
+                # END: Compute masked batch std for adaptive noise #####################
                 print(
                     f"[Learning Algo][epoch{epoch}][train] sent to device: {self.device}"
                 )
 
+                ################################
+                # Forward pass for training #
+                ################################
                 if (
                     self.dataset_name == "Lorenz63"
                     or self.dataset_name == "Sinusoid"
@@ -489,6 +582,7 @@ class LearningAlgorithm:
                     recon_batch_data = self.model(
                         batch_data,
                         mode_selector=model_mode_selector,
+                        noise_selector=noise_selector,
                         logger=logger,
                         from_instance=f"[Learning Algo][epoch{epoch}][train]",
                     )
@@ -579,7 +673,7 @@ class LearningAlgorithm:
                     )
 
                 loss_kl_avg = (
-                    kl_warm * beta * loss_kl / (seq_len * bs)
+                    current_kl_warm * beta * loss_kl / (seq_len * bs)
                 )  # Average KL Divergence
 
                 # Print device of loss
@@ -653,8 +747,8 @@ class LearningAlgorithm:
 
                 base_mode_selector = create_autonomous_mode_selector(
                     current_sequence_len,
-                    mode=sampling_config["mode"],
-                    autonomous_ratio=sampling_config["autonomous_ratio"](),
+                    mode=autonomous_config["mode"],
+                    autonomous_ratio=autonomous_config["autonomous_ratio"](),
                     batch_size=batch_size,
                     x_dim=dataset_config.x_dim,
                     device=self.device,
@@ -676,6 +770,39 @@ class LearningAlgorithm:
                 else:
                     model_mode_selector = base_mode_selector
 
+                # START: Compute masked batch std for adaptive noise #####################
+                noise_config = noise_configs.get(self.noise_sampling_method)
+                noise_selector = None
+                if noise_config is not None:
+                    current_noise_ratio = noise_config["ratio_fn"]()
+                    noise_selector = create_autonomous_mode_selector(
+                        current_sequence_len,
+                        mode=noise_config["mode"],
+                        autonomous_ratio=current_noise_ratio,
+                        batch_size=batch_size,
+                        x_dim=dataset_config.x_dim,
+                        device=self.device,
+                    )
+
+                    # Restrict to observed + targeting (keep this)
+                    # observed_mask = (
+                    #     ~batch_data.permute(1, 0, 2).isnan().detach()
+                    # )  # For selector restrict
+                    # noise_selector *= observed_mask.float()
+
+                    if self.noise_target == "tf_only":
+                        noise_selector *= 1 - model_mode_selector
+                    elif self.noise_target in ["ar_only", "hybrid_ar"]:
+                        noise_selector *= model_mode_selector
+
+                print(
+                    f"[Learning Algo][epoch{epoch}][val] sent to device: {self.device}"
+                )
+                # END: Compute masked batch std for adaptive noise #####################
+
+                ################################
+                # Forward pass for validation #
+                ################################
                 if (
                     self.dataset_name == "Lorenz63"
                     or self.dataset_name == "Sinusoid"
@@ -690,6 +817,7 @@ class LearningAlgorithm:
                     recon_batch_data = self.model(
                         batch_data,
                         mode_selector=model_mode_selector,
+                        noise_selector=noise_selector,
                         logger=logger,
                         from_instance=f"[Learning Algo][epoch{epoch}][val]",
                     )
@@ -778,7 +906,7 @@ class LearningAlgorithm:
                         logger=logger,
                         from_instance=f"[Learning Algo][epoch{epoch}][val]",
                     )
-                loss_kl_avg = kl_warm * beta * loss_kl / (seq_len * bs)
+                loss_kl_avg = current_kl_warm * beta * loss_kl / (seq_len * bs)
 
                 print(
                     f"[Learning Algo][epoch{epoch}] loss_recon.device: {loss_recon.device}, loss_kl.device: {loss_kl.device}"
@@ -851,14 +979,17 @@ class LearningAlgorithm:
                 )
 
             # Store the warm-up values
-            kl_warm_values[epoch] = kl_warm
-            auto_warm_values[epoch] = auto_warm
+            kl_warm_values[epoch] = current_kl_warm
+            auto_warm_values[epoch] = current_auto_warm
+            noise_warm_values[epoch] = current_noise_warm
             sequence_len_values[epoch] = current_sequence_len
             # Stop traning if early-stop triggers
             if cpt_patience > early_stop_patience:
                 if (
-                    kl_warm >= 1.0
-                    and auto_warm >= self.auto_warm_limit
+                    current_kl_warm >= 1.0
+                    and current_auto_warm >= self.auto_warm_limit
+                    and current_noise_warm
+                    >= self.noise_warm_limit  # New: wait for noise too
                     and current_sequence_len >= self.sequence_len
                 ):
                     logger.info("Early stop patience achieved")
@@ -866,31 +997,44 @@ class LearningAlgorithm:
                 else:
                     cpt_patience = 0
                     warm_up_happened = True
-                    warm_up_value = 0.1
+                    warm_up_value = 0.1  # Your bump size
 
-                    if auto_warm < self.auto_warm_limit:
-                        logger.info(
-                            "Early stop patience achieved, but autonomous warm-up not completed"
-                        )
-                        auto_warm = min(
-                            self.auto_warm_limit,
-                            auto_warm + warm_up_value * self.auto_warm_limit,
-                        )
-                        logger.info(
-                            "Autonomous warm-up, anneal coeff: {}".format(auto_warm)
-                        )
-                    elif kl_warm < 1.0:
-                        logger.info(
-                            "Early stop patience achieved, but KL warm-up not completed"
-                        )
-                        kl_warm += warm_up_value
-                        logger.info("KL warm-up, anneal coeff: {}".format(kl_warm))
+                    if (
+                        current_auto_warm < self.auto_warm_limit
+                        or current_noise_warm < self.noise_warm_limit
+                    ):
+                        if current_auto_warm < self.auto_warm_limit:
+                            logger.info("Bumping auto warm-up")
+                            current_auto_warm = min(
+                                self.auto_warm_limit,
+                                current_auto_warm
+                                + warm_up_value * self.auto_warm_limit,
+                            )
+                            logger.info(
+                                "Autonomous warm-up, anneal coeff: {}".format(
+                                    current_auto_warm
+                                )
+                            )
+                        if (
+                            current_noise_warm < self.noise_warm_limit
+                        ):  # New: Parallel bump for noise (after auto, before KL/seq)
+                            logger.info("Bumping noise warm-up")
+                            current_noise_warm = min(
+                                self.noise_warm_limit,
+                                current_noise_warm
+                                + warm_up_value * self.noise_warm_limit,
+                            )
+                            logger.info(
+                                "Noise warm-up, noise coeff: {}".format(
+                                    current_noise_warm
+                                )
+                            )
+                    elif current_kl_warm < 1.0:
+                        logger.info("Bumping KL warm-up")
+                        current_kl_warm += warm_up_value
 
                     elif current_sequence_len < self.sequence_len:
-                        logger.info(
-                            "Early stop patience achieved, but sequence length not completed"
-                        )
-                        # Example logic to increase sequence length
+                        logger.info("Bumping sequence length")
                         current_sequence_len = min(
                             self.sequence_len,
                             current_sequence_len
@@ -923,13 +1067,16 @@ class LearningAlgorithm:
                         )
 
                         if self.model_name in ["VRNN", "MT_VRNN"]:
-                            kl_warm = 0
-                        auto_warm = self.auto_warm_start
-                        logger.info("Resetting kl & auto warm-up values")
+                            current_kl_warm = 0
+                        current_auto_warm = self.auto_warm_start
+                        if self.noise_warm_reset_on_window:  # New: Configurable reset
+                            current_noise_warm = self.noise_warm_start
+                        logger.info("Resetting KL & auto & noise warm-ups")
 
                     else:
                         logger.info("Unknown early stop condition")
-
+            if self.tie_noise_to_auto:
+                current_noise_warm = current_auto_warm
             cpt_patience_epochs[epoch] = cpt_patience
             best_state_epochs[epoch] = cur_best_epoch
 
@@ -971,6 +1118,10 @@ class LearningAlgorithm:
                 kl_warm_epochs = np.insert(kl_warm_epochs, 0, 0)  # Prepend 0
                 auto_warm_epochs = np.where(np.diff(auto_warm_values) != 0)[0] + 1
                 auto_warm_epochs = np.insert(auto_warm_epochs, 0, 0)  # Prepend 0
+
+                noise_warm_epochs = np.where(np.diff(noise_warm_values) != 0)[0] + 1
+                noise_warm_epochs = np.insert(noise_warm_epochs, 0, 0)  # Prepend 0
+
                 sequence_len_epochs = np.where(np.diff(sequence_len_values) != 0)[0] + 1
                 sequence_len_epochs = np.insert(sequence_len_epochs, 0, 0)
 
@@ -979,9 +1130,11 @@ class LearningAlgorithm:
                     val_loss[: epoch + 1],
                     kl_warm_epochs,
                     auto_warm_epochs,
+                    noise_warm_epochs,
                     sequence_len_epochs,
                     self.model_name,
-                    self.sampling_method,
+                    self.autonomous_sampling_method,
+                    self.noise_sampling_method,
                     save_figures_dir,
                     tag,
                 )
@@ -990,9 +1143,11 @@ class LearningAlgorithm:
                     val_loss[: epoch + 1],
                     kl_warm_epochs,
                     auto_warm_epochs,
+                    noise_warm_epochs,
                     sequence_len_epochs,
                     self.model_name,
-                    self.sampling_method,
+                    self.autonomous_sampling_method,
+                    self.noise_sampling_method,
                     save_figures_dir,
                     tag,
                     log_scale=True,
@@ -1004,9 +1159,10 @@ class LearningAlgorithm:
                         val_recon[: epoch + 1],
                         kl_warm_epochs,
                         auto_warm_epochs,
+                        noise_warm_epochs,
                         sequence_len_epochs,
                         self.model_name,
-                        self.sampling_method,
+                        self.autonomous_sampling_method,
                         save_figures_dir,
                         tag,
                     )
@@ -1015,9 +1171,10 @@ class LearningAlgorithm:
                         val_recon[: epoch + 1],
                         kl_warm_epochs,
                         auto_warm_epochs,
+                        noise_warm_epochs,
                         sequence_len_epochs,
                         self.model_name,
-                        self.sampling_method,
+                        self.autonomous_sampling_method,
                         save_figures_dir,
                         tag,
                         log_scale=True,
@@ -1027,9 +1184,11 @@ class LearningAlgorithm:
                         val_kl[: epoch + 1],
                         kl_warm_epochs,
                         auto_warm_epochs,
+                        noise_warm_epochs,
                         sequence_len_epochs,
                         self.model_name,
-                        self.sampling_method,
+                        self.autonomous_sampling_method,
+                        self.noise_sampling_method,
                         save_figures_dir,
                         tag,
                     )
@@ -1038,9 +1197,11 @@ class LearningAlgorithm:
                         val_kl[: epoch + 1],
                         kl_warm_epochs,
                         auto_warm_epochs,
+                        noise_warm_epochs,
                         sequence_len_epochs,
                         self.model_name,
-                        self.sampling_method,
+                        self.autonomous_sampling_method,
+                        self.noise_sampling_method,
                         save_figures_dir,
                         tag,
                         log_scale=True,
@@ -1053,12 +1214,15 @@ class LearningAlgorithm:
                     kl_warm_values[: epoch + 1],
                     auto_warm_epochs,
                     auto_warm_values[: epoch + 1],
+                    noise_warm_epochs,
+                    noise_warm_values[: epoch + 1],
                     sequence_len_epochs,
                     sequence_len_values[: epoch + 1],
                     cpt_patience_epochs[: epoch + 1],
                     best_state_epochs[: epoch + 1],
                     self.model_name,
-                    self.sampling_method,
+                    self.autonomous_sampling_method,
+                    self.noise_sampling_method,
                     save_figures_dir,
                     tag,
                 )
@@ -1072,7 +1236,12 @@ class LearningAlgorithm:
                         kl_warm_epochs,
                         (
                             auto_warm_epochs
-                            if self.sampling_method in ["ss", "sm"]
+                            if self.autonomous_sampling_method in ["ss", "sm"]
+                            else None
+                        ),
+                        (
+                            noise_warm_epochs
+                            if self.noise_sampling_method in ["ss", "sm"]
                             else None
                         ),
                         sequence_len_epochs,
@@ -1085,7 +1254,12 @@ class LearningAlgorithm:
                         kl_warm_epochs,
                         (
                             auto_warm_epochs
-                            if self.sampling_method in ["ss", "sm"]
+                            if self.autonomous_sampling_method in ["ss", "sm"]
+                            else None
+                        ),
+                        (
+                            noise_warm_epochs
+                            if self.noise_sampling_method in ["ss", "sm"]
                             else None
                         ),
                         sequence_len_epochs,
@@ -1149,10 +1323,11 @@ class LearningAlgorithm:
                 # Reset sequence length back to current_sequence_len
                 train_dataloader.dataset.update_sequence_length(current_sequence_len)
 
+                # SART: Compute autonomous mode selector for visualization #################
                 model_mode_selector = create_autonomous_mode_selector(
                     temp_batch_data.size(0),
-                    mode=sampling_config["mode"],
-                    autonomous_ratio=sampling_config["autonomous_ratio"](),
+                    mode=autonomous_config["mode"],
+                    autonomous_ratio=autonomous_config["autonomous_ratio"](),
                     batch_size=temp_batch_data.size(1),
                     x_dim=dataset_config.x_dim,
                     device=self.device,
@@ -1163,19 +1338,40 @@ class LearningAlgorithm:
                     torch.tensor(1.0, device=self.device),
                     model_mode_selector,
                 )
+                # END: Compute autonomous mode selector for visualization #################
+
+                # START: Compute noise-mixing #####################
+                noise_config = noise_configs.get(self.noise_sampling_method)
+                noise_selector = None
+                if noise_config is not None:
+                    noise_selector = create_autonomous_mode_selector(
+                        temp_batch_data.size(0),
+                        mode=noise_config["mode"],
+                        autonomous_ratio=noise_config["ratio_fn"](),
+                        batch_size=temp_batch_data.size(1),
+                        x_dim=dataset_config.x_dim,
+                        device=self.device,
+                    )
+                    if self.noise_target == "tf_only":
+                        noise_selector *= 1 - model_mode_selector
+                    elif self.noise_target in ["ar_only", "hybrid_ar"]:
+                        noise_selector *= model_mode_selector
+                # END: Compute noise-mixing #####################
 
                 # Visualize teacher forcing and autonomous mode
                 visualize_teacherforcing_2_autonomous(
                     temp_batch_data,
                     self.model,
-                    mode_selector=model_mode_selector,
+                    auto_mode_selector=model_mode_selector,
+                    noise_selector=noise_selector,
                     save_path=os.path.join(
                         save_figures_dir, "sequence_reconstruction", "training_mode"
                     ),
-                    explain=f"training_epoch:{epoch}_klwarm{kl_warm}_auto_warm{auto_warm}_window{current_sequence_len}",
+                    explain=f"training_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
                     inference_mode=True,
                 )
 
+                # START: Compute autonomous mode selector for Even Bursts visualization #################
                 model_mode_selector_flip_test = create_autonomous_mode_selector(
                     temp_batch_data.size(0),
                     mode="even_bursts",
@@ -1189,18 +1385,38 @@ class LearningAlgorithm:
                     torch.tensor(1.0, device=self.device),
                     model_mode_selector,
                 )
+                # END: Compute autonomous mode selector for Even Bursts visualization #################
+                # START: Compute noise-mixing #####################
+                noise_config = noise_configs.get(self.noise_sampling_method)
+                noise_selector = None
+                if noise_config is not None:
+                    noise_selector = create_autonomous_mode_selector(
+                        temp_batch_data.size(0),
+                        mode=noise_config["mode"],
+                        autonomous_ratio=noise_config["ratio_fn"](),
+                        batch_size=temp_batch_data.size(1),
+                        x_dim=dataset_config.x_dim,
+                        device=self.device,
+                    )
+                    if self.noise_target == "tf_only":
+                        noise_selector *= 1 - model_mode_selector
+                    elif self.noise_target in ["ar_only", "hybrid_ar"]:
+                        noise_selector *= model_mode_selector
+                # END: Compute noise-mixing #####################
 
                 visualize_teacherforcing_2_autonomous(
                     temp_batch_data,
                     self.model,
-                    mode_selector=model_mode_selector_flip_test,
+                    auto_mode_selector=model_mode_selector_flip_test,
+                    noise_selector=noise_selector,
                     save_path=os.path.join(
                         save_figures_dir, "sequence_reconstruction", "even_bursts"
                     ),
-                    explain=f"even_bursts_epoch:{epoch}_klwarm{kl_warm}_auto_warm{auto_warm}_window{current_sequence_len}",
+                    explain=f"even_bursts_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
                     inference_mode=True,
                 )
 
+                # START: Compute autonomous mode selector for Half-Half visualization #################
                 model_mode_selector_flip_test = create_autonomous_mode_selector(
                     temp_batch_data.size(0),
                     mode="half_half",
@@ -1213,15 +1429,34 @@ class LearningAlgorithm:
                     torch.tensor(1.0, device=self.device),
                     model_mode_selector,
                 )
+                # END: Compute autonomous mode selector for Half-Half visualization #################
+                # START: Compute noise-mixing #####################
+                noise_config = noise_configs.get(self.noise_sampling_method)
+                noise_selector = None
+                if noise_config is not None:
+                    noise_selector = create_autonomous_mode_selector(
+                        temp_batch_data.size(0),
+                        mode=noise_config["mode"],
+                        autonomous_ratio=noise_config["ratio_fn"](),
+                        batch_size=temp_batch_data.size(1),
+                        x_dim=dataset_config.x_dim,
+                        device=self.device,
+                    )
+                    if self.noise_target == "tf_only":
+                        noise_selector *= 1 - model_mode_selector
+                    elif self.noise_target in ["ar_only", "hybrid_ar"]:
+                        noise_selector *= model_mode_selector
+                # END: Compute noise-mixing #####################
 
                 visualize_teacherforcing_2_autonomous(
                     temp_batch_data,
                     self.model,
-                    mode_selector=model_mode_selector_flip_test,
+                    auto_mode_selector=model_mode_selector_flip_test,
+                    noise_selector=noise_selector,
                     save_path=os.path.join(
                         save_figures_dir, "sequence_reconstruction", "half_half"
                     ),
-                    explain=f"half_half_epoch:{epoch}_klwarm{kl_warm}_auto_warm{auto_warm}_window{current_sequence_len}",
+                    explain=f"half_half_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
                     inference_mode=True,
                 )
 

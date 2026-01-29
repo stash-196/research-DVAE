@@ -15,7 +15,11 @@ class PLRNN(nn.Module):
         self.num_layers = 1
 
         # Diagonal A: learnable vector for element-wise multiplication
-        self.A = nn.Parameter(torch.empty(hidden_size).uniform_(0.5, 0.9))
+        # self.A = nn.Parameter(torch.empty(hidden_size).uniform_(0.5, 0.9))
+        self.A_sigmas = nn.Parameter(
+            torch.empty(hidden_size).uniform_(-1, 1)
+        )  # wide range for flexibility
+
         # Off-diagonal W: full matrix parameter
         r = 1.0 / (self.hidden_size**0.5)
         self.W = nn.Parameter(torch.empty(hidden_size, hidden_size).uniform_(-r, r))
@@ -57,6 +61,15 @@ class PLRNN(nn.Module):
         new_hx = h.unsqueeze(0)  # (1, batch_size, hidden_size)
         return outputs, new_hx
 
+    def sigmoid_10(self, x: torch.Tensor) -> torch.Tensor:
+        # base-10 variant without extra scaling: 1 / (1 + 10^{-x})
+        return 1.0 / (1.0 + torch.pow(10.0, -x))
+
+    @property
+    def A(self) -> torch.Tensor:
+        # computed on the fly from the parameter; not overwriting self.A with a Tensor
+        return self.sigmoid_10(self.A_sigmas)
+
 
 class shPLRNN(nn.Module):
     def __init__(self, input_size, hidden_size, hidden_sh_size, num_layers=1):
@@ -75,7 +88,10 @@ class shPLRNN(nn.Module):
         r2 = 1.0 / (self.hidden_size**0.5)
 
         # Diagonal A: learnable vector, init for decay (|A| < 1)
-        self.A = nn.Parameter(torch.empty(self.hidden_size).uniform_(0.5, 0.9))
+        # self.A = nn.Parameter(torch.empty(self.hidden_size).uniform_(0.5, 0.9))
+        self.A_sigmas = nn.Parameter(
+            torch.empty(hidden_size).uniform_(-1, 1)
+        )  # wide range for flexibility
 
         # W1 (dz, dh): no off-diagonal constraint
         self.W1 = nn.Parameter(
@@ -121,6 +137,78 @@ class shPLRNN(nn.Module):
                 + self.b1
                 + self.linear_C(x)
             )
+
+            outputs.append(h)
+
+        outputs = torch.stack(outputs)  # (seq_len, batch_size, hidden_size)
+        new_hx = h.unsqueeze(0)  # (1, batch_size, hidden_size)
+        return outputs, new_hx
+
+    def sigmoid_10(self, x: torch.Tensor) -> torch.Tensor:
+        # base-10 variant without extra scaling: 1 / (1 + 10^{-x})
+        return 1.0 / (1.0 + torch.pow(10.0, -x))
+
+    @property
+    def A(self) -> torch.Tensor:
+        # computed on the fly from the parameter; not overwriting self.A with a Tensor
+        return self.sigmoid_10(self.A_sigmas)
+
+
+class shPLRNN_wo_A(nn.Module):
+    def __init__(self, input_size, hidden_size, hidden_sh_size, num_layers=1):
+        super().__init__()
+        if num_layers != 1:
+            raise ValueError(
+                "PLRNN currently supports only num_layers=1 for simplicity."
+            )
+        self.input_size = input_size
+        self.hidden_size = hidden_size  # dz in repo (latent dim)
+        self.hidden_sh_size = hidden_sh_size  # dh in repo (shallow hidden dim)
+        self.num_layers = 1
+
+        # Follow repo init ranges for stability
+        r1 = 1.0 / (self.hidden_sh_size**0.5)
+        r2 = 1.0 / (self.hidden_size**0.5)
+
+        # W1 (dz, dh): no off-diagonal constraint
+        self.W1 = nn.Parameter(
+            torch.empty(self.hidden_size, self.hidden_sh_size).uniform_(-r1, r1)
+        )
+
+        # W2 (dh, dz): no off-diagonal constraint
+        self.W2 = nn.Parameter(
+            torch.empty(self.hidden_sh_size, self.hidden_size).uniform_(-r2, r2)
+        )
+
+        # b1 (dz): bias, init zeros
+        self.b1 = nn.Parameter(torch.zeros(self.hidden_size))
+
+        # b2 (dh): bias in ReLU, init uniform
+        self.b2 = nn.Parameter(torch.empty(self.hidden_sh_size).uniform_(-r1, r1))
+
+        # C x_t + b: standard linear (your term, not in repo)
+        self.linear_C = nn.Linear(input_size, self.hidden_size, bias=True)
+
+    def forward(self, input, hx=None):
+        # input: (seq_len, batch_size, input_size) -- works with seq_len=1
+        # hx: (1, batch_size, hidden_size)
+        # Returns: output (seq_len, batch_size, hidden_size), new_hx (1, batch_size, hidden_size)
+
+        if hx is None:
+            hx = torch.zeros(1, input.size(1), self.hidden_size, device=input.device)
+
+        seq_len, batch_size = input.shape[:2]
+        outputs = []
+        h = hx[0]  # (batch_size, hidden_size)
+
+        for t in range(seq_len):
+            x = input[t]  # (batch_size, input_size)
+
+            # shPLRNN_wo_A step: W1 @ ReLU(W2 @ h + b2) + b1 + linear_C(x)
+            relu_term = F.relu(
+                torch.matmul(h, self.W2.T) + self.b2
+            )  # (batch_size, hidden_sh_size)
+            h = torch.matmul(relu_term, self.W1.T) + self.b1 + self.linear_C(x)
 
             outputs.append(h)
 
