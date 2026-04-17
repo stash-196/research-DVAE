@@ -13,7 +13,7 @@ declare -a experiments=("20251020_Lorenz_ss0.8_shPL_MarkovMiss_GradClip100")
 today=$(date +%Y-%m-%d)
 
 # get the current time in HH:MM:SS:MS format
-now=$(date +%H:%M:%S) 
+now=$(date +%H:%M:%S)
 
 # Parse cfg_device.ini to get the saved_root path
 CFG_DEVICE_FILE=~/workspace/research-DVAE/config/cfg_device.ini

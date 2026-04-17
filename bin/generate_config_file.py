@@ -52,20 +52,21 @@ if __name__ == "__main__":
 
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
-    experiment_name = "20251024_" + "Lorenz_ss_shPL-markovMiss"
+    # experiment_name = "20251024_" + "Lorenz_ss_shPL-markovMiss"
+    experiment_name = "20251114_" + "Lorenz_markovMissing0.8_SS_MTRNN_varySampRatios_3or9alphas_allLoss"
     print("Experiment name:", experiment_name)
 
 
     models = [
-        "RNN",
+        # "RNN",
         # "VRNN",
-        # "MT_RNN",
+        "MT_RNN",
         # "MT_VRNN"
     ]
     rnn_types = [
         # "PLRNN",
-        # "RNN",
-        "shPLRNN",
+        "RNN",
+        # "shPLRNN",
     ]
 
     # Change to dictionary of lists
@@ -77,10 +78,10 @@ if __name__ == "__main__":
 
     dim_rnn = [64]
     alphas = [
-        # [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
-        [0.1],
+        [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+        # [0.1],
         # [0.1, 0.1],
-        # [0.1, 0.1, 0.1],
+        [0.1, 0.1, 0.1],
         # [ 0.09183, 0.64830, 0.73307, ],  
         # [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
     ]
@@ -102,7 +103,7 @@ if __name__ == "__main__":
     ]
     sampling_ratio = [
         # 0.01,
-        # 0.05,
+        0.05,
         0.1,
         0.2,
         # 0.3,
@@ -171,8 +172,8 @@ if __name__ == "__main__":
         # "Markov_AvgLen15_0.3",
         # "Markov_AvgLen15_0.4",
         # "Markov_AvgLen15_0.5",
-        "Markov_AvgLen15_0.6",
-        "Markov_AvgLen15_0.7",
+        # "Markov_AvgLen15_0.6",
+        # "Markov_AvgLen15_0.7",
         "Markov_AvgLen15_0.8",
         # "Markov_AvgLen15_0.9"
         ]

@@ -52,9 +52,12 @@ if __name__ == "__main__":
 
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
-    experiment_name = "20251024_" + "Lorenz_ss_shPL-markovMiss"
+    experiment_name = (
+        "20260212_"
+        # + "XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
+        + "Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh"
+    )
     print("Experiment name:", experiment_name)
-
 
     models = [
         "RNN",
@@ -65,7 +68,8 @@ if __name__ == "__main__":
     rnn_types = [
         # "PLRNN",
         # "RNN",
-        "shPLRNN",
+        # "shPLRNN",
+        "LSTM",
     ]
 
     # Change to dictionary of lists
@@ -75,57 +79,62 @@ if __name__ == "__main__":
     z_dim = [9]
     dense_z = [[16, 32]]
 
-    dim_rnn = [64]
+    dim_rnn = [20]
     alphas = [
-        # [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
-        [0.1],
+        [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+        # [0.1],
         # [0.1, 0.1],
         # [0.1, 0.1, 0.1],
-        # [ 0.09183, 0.64830, 0.73307, ],  
+        # [ 0.09183, 0.64830, 0.73307, ],
         # [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
     ]
     activation = ["relu"]
+    dropout_p = [
+        0.0,
+        # 0.1,
+    ]
 
     # Training
     lr = [0.001]
     alpha_lr = [0.01]
-    epochs = [20000]
-    early_stop_patience = [50]
-    save_frequency = [50]
-    gradient_clip = [0.0]
+    epochs = [10000]
+    early_stop_patience = [200]
+    save_frequency = [200]
+    gradient_clip = [1.0]
     optimize_alphas = [True]
     sampling_method = [
-        "ss",
-        # "ptf",
+        # "ss",
+        "ptf",
         # 'mtf',
         # "sm"
     ]
     sampling_ratio = [
+        0.0,
         # 0.01,
         # 0.05,
         0.1,
-        0.2,
-        # 0.3,
+        # 0.2,
+        0.3,
         # 0.4,
-        # 0.5,
+        0.5,
         # 0.6,
-        # 0.7,
-        # 0.8,
+        0.7,
+        0.8,
         # 0.9,
     ]
     auto_warm_start = [
-        0.0,
+        # 0.0,
         # 0.1,
         # 0.2,
+        0.5,
     ]
 
     mask_autonomous_filled = [False]
     loss_mask_mode = [
         "none",
         # "weighted",
-        # "strict"
+        # "strict",
     ]
-
 
     # DataFrame
     dataset_name = [
@@ -134,65 +143,106 @@ if __name__ == "__main__":
         # "SHO",
         # "DampedSHO"
     ]
-
-    dataset_label = [
-        # "None",
-        "sigma10_rho28_beta8d3_N108k_dt0.01",
-        # "sigma10_rho24_beta8d3_N108k_dt0.01",
-        # "sigma10_rho25_beta8d3_N108k_dt0.01",
-        # "sigma10_rho26_beta8d3_N108k_dt0.01",
-        # "sigma10_rho27_beta8d3_N108k_dt0.01",
-        # "sigma10_rho30_beta8d3_N108k_dt0.01",
-        # "sigma10_rho35_beta8d3_N108k_dt0.01",
-        # "sigma10_rho40_beta8d3_N108k_dt0.01",
-        # "sigma10_rho28_beta8d3_N108k_dt0.005",
-        # "sigma10_rho28_beta8d3_N108k_dt0.02",
-        # "sigma10_rho28_beta8d3_N108k_dt0.03",
-        # "sigma10_rho28_beta8d3_N108k_dt0.04",
-
-        # "XHRO_01_XH011",
-
-        # "amp1,2,0.5_freq1,0.5,20_phas0,piD2,0_N10000_dt0.01"
-
-        # "omegas2pi,pi_gammas0.5,0.2_inst100_N1k_dt0.01",
-        # "omegas2pi_gammas0.5_inst100_N1k_dt0.01"
-
-        # "amp1,2,0.1_freq1,0.5,20_phas0,piD2,0_N10000_dt0.01",
-        # "amp1,2,0.5_freq1,0.5,20_phas0,piD2,0_N10000_dt0.01",
-        # "amp1,2_freq1,0.5_phas0,piD2_N10000_dt0.01",
-
-    ]
-
-    mask_label = [
-        # "None",
-        # "Markov_AvgLen15_0.0",
-        # "Markov_AvgLen15_0.1",
-        # "Markov_AvgLen15_0.2",
-        # "Markov_AvgLen15_0.3",
-        # "Markov_AvgLen15_0.4",
-        # "Markov_AvgLen15_0.5",
-        "Markov_AvgLen15_0.6",
-        "Markov_AvgLen15_0.7",
-        "Markov_AvgLen15_0.8",
-        # "Markov_AvgLen15_0.9"
+    if dataset_name[0] == "Lorenz63":
+        dataset_label = [
+            # "None",
+            "sigma10_rho28_beta8d3_N108k_dt0.01",
+            # "sigma10_rho24_beta8d3_N108k_dt0.01",
+            # "sigma10_rho25_beta8d3_N108k_dt0.01",
+            # "sigma10_rho26_beta8d3_N108k_dt0.01",
+            # "sigma10_rho27_beta8d3_N108k_dt0.01",
+            # "sigma10_rho30_beta8d3_N108k_dt0.01",
+            # "sigma10_rho35_beta8d3_N108k_dt0.01",
+            # "sigma10_rho40_beta8d3_N108k_dt0.01",
+            # "sigma10_rho28_beta8d3_N108k_dt0.005",
+            # "sigma10_rho28_beta8d3_N108k_dt0.02",
+            # "sigma10_rho28_beta8d3_N108k_dt0.03",
+            # "sigma10_rho28_beta8d3_N108k_dt0.04",
         ]
+    elif dataset_name[0] == "Xhro":
+        dataset_label = [
+            # "None",
+            # "XHRO_01_XH006",
+            # "XHRO_04_XH057",
+            "XHRO_02_XH070",
+        ]
+    elif dataset_name[0] == "SHO":
+        dataset_label = [
+            # "None",
+            # "amp1,2,0.1_freq1,0.5,20_phas0,piD2,0_N10000_dt0.01",
+            "amp1,2,0.5_freq1,0.5,20_phas0,piD2,0_N10000_dt0.01",
+            # "amp1,2_freq1,0.5_phas0,piD2_N10000_dt0.01",
+        ]
+    elif dataset_name[0] == "DampedSHO":
+        dataset_label = [
+            # "None",
+            # "omegas2pi,pi_gammas0.5,0.2_inst100_N1k_dt0.01",
+            "omegas2pi_gammas0.5_inst100_N1k_dt0.01",
+        ]
+    else:
+        # error
+        raise ValueError(f"Unknown dataset_name: {dataset_name[0]}")
+
+    if dataset_name[0] == "Xhro":
+        mask_label = [
+            "None",
+        ]
+    elif dataset_name[0] == "Lorenz63":
+        mask_label = [
+            "None",
+            # "Markov_AvgLen15_0.0",
+            "Markov_AvgLen15_0.1",
+            # "Markov_AvgLen15_0.2",
+            "Markov_AvgLen15_0.3",
+            # "Markov_AvgLen15_0.4",
+            "Markov_AvgLen15_0.5",
+            # "Markov_AvgLen15_0.6",
+            "Markov_AvgLen15_0.7",
+            "Markov_AvgLen15_0.8",
+            # "Markov_AvgLen15_0.9",
+        ]
+    else:
+        mask_label = [
+            "None",
+        ]
+
     s_dim = [1]
     shuffle = [True]
     batch_size = [128]
     num_workers = [8]
     sequence_len = [1000]
     val_indices = [0.2]
-    observation_process = [
-        "only_x",
-        # "raw_all",
-        # "raw_ch4",
-        # "ch4_relative_powers",
-        # "ch4_3_vars",
-        # "ch4_alpha",
 
-        # "all_ch_relative_powers",
-        # "mixed_1d",        
-    ]
+    if dataset_name[0] == "Xhro":
+        observation_process = [
+            # "raw_all",
+            "raw_ch1",
+            "raw_ch2",
+            "raw_ch3",
+            # "raw_ch4",
+            # "ch4_relative_powers",
+            # "ch4_3_vars",
+            # "ch4_alpha",
+            # "all_ch_relative_powers",
+            # "mixed_1d",
+        ]
+    elif dataset_name[0] == "Lorenz63":
+        observation_process = [
+            "only_x",
+            # "only_x_w_noise",
+            # "raw_noisy",
+            # "relative_powers",
+            # "3_vars",
+            # "alpha",
+        ]
+    else:
+        observation_process = [
+            "raw",
+            # "raw_noisy",
+            # "relative_powers",
+            # "3_vars",
+            # "alpha",
+        ]
 
     model_params = {
         "RNN": {
@@ -202,6 +252,7 @@ if __name__ == "__main__":
             "name": ["RNN"],
             "tag": ["RNN"],
             "type_rnn": rnn_types,
+            "dropout_p": dropout_p,
             "x_dim": x_dim,
             "dense_x": dense_x,
             "dim_rnn": dim_rnn,
