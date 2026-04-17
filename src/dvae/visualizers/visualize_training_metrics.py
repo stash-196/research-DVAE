@@ -8,9 +8,11 @@ def visualize_total_loss(
     val_loss,
     kl_warm_epochs,
     auto_warm_epochs,
+    noise_warm_epochs,
     sequence_len_epochs,
     model_name,
-    sampling_method,
+    auto_sampling_method,
+    noise_sampling_method,
     save_figures_dir,
     tag,
     log_scale=False,
@@ -21,9 +23,12 @@ def visualize_total_loss(
     if model_name in ["VRNN", "MT_VRNN"]:
         for kl_warm_epoch in kl_warm_epochs:
             plt.axvline(x=kl_warm_epoch, color="c", linestyle="--")
-    if sampling_method == "ss":
+    if auto_sampling_method in ["ss", "sm"]:
         for auto_warm_epoch in auto_warm_epochs:
             plt.axvline(x=auto_warm_epoch, color="r", linestyle=":")
+    if noise_sampling_method in ["ss", "sm"]:
+        for noise_warm_epoch in noise_warm_epochs:
+            plt.axvline(x=noise_warm_epoch, color="g", linestyle="-.")
     for sequence_len_epoch in sequence_len_epochs:
         plt.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
     plt.plot(train_loss, label="training loss")
@@ -47,7 +52,8 @@ def visualize_recon_loss(
     auto_warm_epochs,
     sequence_len_epochs,
     model_name,
-    sampling_method,
+    auto_sampling_method,
+    noise_sampling_method,
     save_figures_dir,
     tag,
     log_scale=False,
@@ -58,9 +64,12 @@ def visualize_recon_loss(
     if model_name in ["VRNN", "MT_VRNN"]:
         for kl_warm_epoch in kl_warm_epochs:
             plt.axvline(x=kl_warm_epoch, color="c", linestyle="--")
-    if sampling_method == "ss":
+    if auto_sampling_method in ["ss", "sm"]:
         for auto_warm_epoch in auto_warm_epochs:
             plt.axvline(x=auto_warm_epoch, color="r", linestyle=":")
+    if noise_sampling_method in ["ss", "sm"]:
+        for noise_warm_epoch in noise_warm_epochs:
+            plt.axvline(x=noise_warm_epoch, color="g", linestyle="-.")
     for sequence_len_epoch in sequence_len_epochs:
         plt.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
     plt.plot(train_recon, label="Training")
@@ -82,9 +91,11 @@ def visualize_kld_loss(
     val_kl,
     kl_warm_epochs,
     auto_warm_epochs,
+    noise_warm_epochs,
     sequence_len_epochs,
     model_name,
-    sampling_method,
+    auto_sampling_method,
+    noise_sampling_method,
     save_figures_dir,
     tag,
     log_scale=False,
@@ -95,9 +106,12 @@ def visualize_kld_loss(
     if model_name in ["VRNN", "MT_VRNN"]:
         for kl_warm_epoch in kl_warm_epochs:
             plt.axvline(x=kl_warm_epoch, color="c", linestyle="--")
-    if sampling_method == "ss":
+    if auto_sampling_method in ["ss", "sm"]:
         for auto_warm_epoch in auto_warm_epochs:
             plt.axvline(x=auto_warm_epoch, color="r", linestyle=":")
+    if noise_sampling_method in ["ss", "sm"]:
+        for noise_warm_epoch in noise_warm_epochs:
+            plt.axvline(x=noise_warm_epoch, color="g", linestyle="-.")
     for sequence_len_epoch in sequence_len_epochs:
         plt.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
     plt.plot(train_kl, label="Training")
@@ -121,17 +135,20 @@ def visualize_combined_metrics(
     kl_warm_values,
     auto_warm_epochs,
     auto_warm_values,
+    noise_warm_epochs,
+    noise_warm_values,
     sequence_len_epochs,
     sequence_len_values,
     cpt_patience_epochs,
     best_state_epochs,
     model_name,
-    sampling_method,
+    auto_sampling_method,
+    noise_sampling_method,
     save_figures_dir,
     tag,
 ):
     plt.clf()
-    fig, axs = plt.subplots(5, 1, figsize=(12, 15))  # Updated to 5 subplots
+    fig, axs = plt.subplots(6, 1, figsize=(12, 18))  # Updated to 6 subplots
     plt.rcParams["font.size"] = 12
 
     # Plot delta
@@ -155,13 +172,22 @@ def visualize_combined_metrics(
         axs[1].step(
             np.arange(len(kl_warm_values)), kl_warm_values, label="kl_warm", color="c"
         )
-    if sampling_method == "ss":
+    if auto_sampling_method in ["ss", "sm"]:
         axs[1].step(
             np.arange(len(auto_warm_values)),
             auto_warm_values,
             label="auto_warm",
             color="r",
         )
+
+    if noise_sampling_method in ["ss", "sm"]:
+        axs[1].step(
+            np.arange(len(noise_warm_values)),
+            noise_warm_values,
+            label="noise_warm",
+            color="g",
+        )
+
     axs[1].legend(fontsize=16, title="warm values", title_fontsize=20)
     axs[1].set_xlabel("epochs", fontdict={"size": 16})
     axs[1].set_ylabel("warm values", fontdict={"size": 16})
@@ -194,25 +220,22 @@ def visualize_combined_metrics(
 
     if model_name in ["VRNN", "MT_VRNN"]:
         for kl_warm_epoch in kl_warm_epochs:
-            axs[0].axvline(x=kl_warm_epoch, color="c", linestyle="--")
-            axs[1].axvline(x=kl_warm_epoch, color="c", linestyle="--")
-            axs[2].axvline(x=kl_warm_epoch, color="c", linestyle="--")
-            axs[3].axvline(x=kl_warm_epoch, color="c", linestyle="--")
-            axs[4].axvline(x=kl_warm_epoch, color="c", linestyle="--")
-    if sampling_method == "ss":
+            for i in range(len(axs)):
+                axs[i].axvline(x=kl_warm_epoch, color="c", linestyle="--")
+
+    if auto_sampling_method in ["ss", "sm"]:
         for auto_warm_epoch in auto_warm_epochs:
-            axs[0].axvline(x=auto_warm_epoch, color="r", linestyle=":")
-            axs[1].axvline(x=auto_warm_epoch, color="r", linestyle=":")
-            axs[2].axvline(x=auto_warm_epoch, color="r", linestyle=":")
-            axs[3].axvline(x=auto_warm_epoch, color="r", linestyle=":")
-            axs[4].axvline(x=auto_warm_epoch, color="r", linestyle=":")
+            for i in range(len(axs)):
+                axs[i].axvline(x=auto_warm_epoch, color="r", linestyle=":")
+
+    if noise_sampling_method in ["ss", "sm"]:
+        for noise_warm_epoch in noise_warm_epochs:
+            for i in range(len(axs)):
+                axs[i].axvline(x=noise_warm_epoch, color="g", linestyle="-.")
 
     for sequence_len_epoch in sequence_len_epochs:
-        axs[0].axvline(x=sequence_len_epoch, color="m", linestyle="-.")
-        axs[1].axvline(x=sequence_len_epoch, color="m", linestyle="-.")
-        axs[2].axvline(x=sequence_len_epoch, color="m", linestyle="-.")
-        axs[3].axvline(x=sequence_len_epoch, color="m", linestyle="-.")
-        axs[4].axvline(x=sequence_len_epoch, color="m", linestyle="-.")
+        for i in range(len(axs)):
+            axs[i].axvline(x=sequence_len_epoch, color="m", linestyle="-.")
 
     fig_file = os.path.join(
         save_figures_dir, f"vis_training_delta_kl_cpt_best_state_{tag}.png"
@@ -228,6 +251,7 @@ def visualize_sigma_history(
     tag,
     kl_warm_epochs=None,
     auto_warm_epochs=None,
+    noise_warm_epochs=None,
     sequence_len_epochs=None,
 ):
     plt.clf()
@@ -239,6 +263,9 @@ def visualize_sigma_history(
     if auto_warm_epochs is not None:
         for auto_warm_epoch in auto_warm_epochs:
             plt.axvline(x=auto_warm_epoch, color="r", linestyle=":")
+    if noise_warm_epochs is not None:
+        for noise_warm_epoch in noise_warm_epochs:
+            plt.axvline(x=noise_warm_epoch, color="g", linestyle="-.")
     if sequence_len_epochs is not None:
         for sequence_len_epoch in sequence_len_epochs:
             plt.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
@@ -263,6 +290,7 @@ def visualize_alpha_history(
     tag,
     kl_warm_epochs=None,
     auto_warm_epochs=None,
+    noise_warm_epochs=None,
     sequence_len_epochs=None,
 ):
     plt.clf()
@@ -274,6 +302,9 @@ def visualize_alpha_history(
     if auto_warm_epochs is not None:
         for auto_warm_epoch in auto_warm_epochs:
             plt.axvline(x=auto_warm_epoch, color="r", linestyle=":")
+    if noise_warm_epochs is not None:
+        for noise_warm_epoch in noise_warm_epochs:
+            plt.axvline(x=noise_warm_epoch, color="g", linestyle="-.")
     if sequence_len_epochs is not None:
         for sequence_len_epoch in sequence_len_epochs:
             plt.axvline(x=sequence_len_epoch, color="m", linestyle="-.")

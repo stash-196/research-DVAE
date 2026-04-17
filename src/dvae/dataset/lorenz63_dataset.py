@@ -26,6 +26,7 @@ class Lorenz63(Dataset):
         overlap,
         with_nan,
         shuffle=True,
+        eval_mode=False,
         **kwargs,
     ):
         """
@@ -51,6 +52,7 @@ class Lorenz63(Dataset):
         self.shuffle = shuffle
         self.device = device
         self.with_nan = with_nan
+        self.eval_mode = eval_mode
 
         dataset_label = (
             self.dataset_label
@@ -82,6 +84,7 @@ class Lorenz63(Dataset):
             self.mask_label != None
             and self.mask_label != "None"
             and self.mask_label != ""
+            and not self.eval_mode
         ):
             # mask_label should be {distribution}_{rate}
             mask_label = self.mask_label.split("_")
@@ -103,8 +106,10 @@ class Lorenz63(Dataset):
 
             # Apply the mask to the sequence
             the_sequence = np.where(mask_sequence, np.nan, complete_sequence)
+            self.complete_sequence = complete_sequence
         else:
             the_sequence = complete_sequence
+            self.complete_sequence = complete_sequence
 
         # Store the full sequence before applying any observation process
         self.full_sequence = complete_sequence
@@ -226,7 +231,7 @@ class Lorenz63(Dataset):
         # Return the full (x, y, z) data
         return self.full_sequence[start_frame:end_frame]
 
-    def update_sequence_length(self, new_seq_len=None):
+    def update_sequence_length(self, new_seq_len=None, **kwargs):
         # Only one index representing the start of each sequence
         if new_seq_len is not None:
             self.seq_len = new_seq_len

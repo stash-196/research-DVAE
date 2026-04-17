@@ -37,7 +37,12 @@ class DatasetConfig:
     mask_label: str | None = None
 
 
-def build_dataloader(dataset_name: str, dataset_config: DatasetConfig, split: str):
+def build_dataloader(
+    dataset_name: str,
+    dataset_config: DatasetConfig,
+    split: str,
+    eval_mode: bool = False,
+):
     """Unified function to build data loaders for all datasets.
 
     Args:
@@ -76,7 +81,9 @@ def build_dataloader(dataset_name: str, dataset_config: DatasetConfig, split: st
 
     elif split == "test":
         # Load test dataset for evaluation
-        test_dataset = dataset_class(split="test", **dataset_params)
+        test_dataset = dataset_class(
+            split="test", eval_mode=eval_mode, **dataset_params
+        )
         test_dataloader = DataLoader(
             test_dataset,
             batch_size=dataset_config.batch_size,

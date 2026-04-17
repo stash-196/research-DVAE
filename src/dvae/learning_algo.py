@@ -199,12 +199,14 @@ class LearningAlgorithm:
         # Create directory for results
         if not self.params["reload"]:
             tag = self.cfg.get("Network", "tag")
+            type_rnn = self.cfg.get("Network", "type_rnn")
             # Define all the parts of the filename in a list
             filename_parts = [
                 self.dataset_name,
                 self.dataset_label,
                 self.mask_label,
                 tag,
+                type_rnn,
                 self.autonomous_sampling_method,
                 self.sampling_ratio,
             ]
@@ -932,7 +934,7 @@ class LearningAlgorithm:
                 "Epoch: {} training time {}".format(epoch, str(interval).split(".")[0])
             )
             logger.info(
-                "Train => tot: {:.2f} recon {:.2f} KL {:.2f} Val => tot: {:.2f} recon {:.2f} KL {:.2f}".format(
+                "Train => tot: {:.4f} recon {:.4f} KL {:.4f} Val => tot: {:.4f} recon {:.4f} KL {:.4f}".format(
                     train_loss[epoch],
                     train_recon[epoch],
                     train_kl[epoch],

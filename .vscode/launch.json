@@ -33,9 +33,28 @@
                 // "--saved_dict", "/Users/stashtomonaga/workspace/research-DVAE/saved_model/2024-12-06/41206784_Lorenz63_2024-08-15-15:38:51_MT_RNN_SM-ss_α-[0.00490695, 0.02916397, 0.01453569]/MT_RNN_final_epoch11046.pt",
                 // "--saved_dict", "/Volumes/bucket/DoyaU/stash/research-DVAE/saved_model/2025-05-21/mac_studio/debug_test/Lorenz63_Markov_AvgLen15_0.5_MT_RNN_ss_0.0_α0.092,0.648,0.733_2025-05-21-15:35:46_b62ef615/MT_RNN_final_epoch2.pt",
                 // "--saved_dict", "/Volumes/bucket/DoyaU/stash/research-DVAE/saved_model/2025-06-21/deigo_cluster/20250621_lorenz63_MT-RNN_ptf0.6_alpha9d_seqlen300_vary-rhos/logs/63618311_training_cfg_20250621_lorenz63_MT-RNN_ptf0.6_alpha9d_seqlen300_vary-rhos_MT_RNN_dataset_label-sigma10_rho25_beta8d3_N108k_dt0.01.err"
-                "--saved_dict", "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2025-06-21/deigo_cluster/20250621_lorenz63_MT-RNN_ptf0.6_alpha9d_seqlen300_vary-rhos/Lorenz63_sigma10_rho25_beta8d3_N108k_dt0.01_None_MT_RNN_ptf_0.6_20250621-17.34.25_63618311/MT_RNN_final_epoch8706.pt",
+                // "--saved_dict", "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2025-06-21/deigo_cluster/20250621_lorenz63_MT-RNN_ptf0.6_alpha9d_seqlen300_vary-rhos/Lorenz63_sigma10_rho25_beta8d3_N108k_dt0.01_None_MT_RNN_ptf_0.6_20250621-17.34.25_63618311/MT_RNN_final_epoch8706.pt",
                 // "--saved_dict", "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2025-08-27/mac_studio/debug_test/DampedSHO_omegas2pi,pi_gammas0.5,0.2_inst100_N1k_dt0.01_MT_RNN_ss_0.0_α0.100,0.100,0.100_20250827-17.46.53_dfb93047/MT_RNN_final_epoch2.pt"
 
+                // For Biostec
+                // XHRO data
+                // "--saved_dict", "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2025-10-25/deigo_cluster/20251025_XHRO_ptfHIGH-Strict_MTRNN_SampRatios_3Subjs_hdim256_copy0628_1Dchannel/Xhro_XHRO_02_XH070_None_MT_RNN_ptf_0.6_α0.100,0.100,0.100_20251025-14.25.41_12850106/MT_RNN_final_epoch6795.pt"
+                // Lorenz 2024-11-01
+                "--saved_dict", "/Users/stashtomonaga/Downloads/2024-11-01/ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios/Lorenz63_nanBer0.8_MT_RNN_ptf_0.03_α0.100,0.100,0.100,0.100,0.100,0.100,0.100,0.100_44073698_2024-11-01-07:59:11/MT_RNN_final_epoch10127.pt"
+
+                // bucket Lorenz 3a-alpha
+                // High
+                // "--saved_dict",  "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2025-11-14/deigo_cluster/20251114_Lorenz_markovMissing0.8_SS_MTRNN_varySampRatios_3or9alphas_allLoss/Lorenz63_sigma10_rho28_beta8d3_N108k_dt0.01_Markov_AvgLen15_0.8_MT_RNN_ss_0.1_α0.100,0.100,0.100_20251114-14.19.09_14612089/MT_RNN_checkpoint.pt"
+                // "--saved_dict",  "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2025-11-14/deigo_cluster/20251114_Lorenz_markovMissing0.8_ptf_MTRNN_varySampRatios_3or9alphas_allLoss/Lorenz63_sigma10_rho28_beta8d3_N108k_dt0.01_Markov_AvgLen15_0.8_MT_RNN_ptf_0.1_α0.100,0.100,0.100_20251114-14.18.28_14612077/MT_RNN_checkpoint.pt"
+                // 0.7
+                // "--saved_dict",  "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_markovMissingHigh_ptf_MTRNN_varySampRatios_3alphas/Lorenz63_sigma10_rho28_beta8d3_N108k_dt0.01_Markov_AvgLen15_0.7_MT_RNN_ptf_0.1_α0.100,0.100,0.100_20251112-23.13.48_14357608/MT_RNN_checkpoint.pt"
+                // 0.3
+                // "--saved_dict",  "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_markovMissingMedium_ptf_MTRNN_varySampRatios_3alphas/Lorenz63_sigma10_rho28_beta8d3_N108k_dt0.01_Markov_AvgLen15_0.3_MT_RNN_ptf_0.3_α0.100,0.100,0.100_20251112-23.10.23_14356990/MT_RNN_checkpoint.pt"
+                // 0.0
+                // "--saved_dict",  "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_markovMissingNone_ptf_MTRNN_varySampRatios_3alphas/Lorenz63_sigma10_rho28_beta8d3_N108k_dt0.01_None_MT_RNN_ptf_0.7_α0.100,0.100,0.100_20251112-23.12.30_14357246/MT_RNN_checkpoint.pt"
+
+
+                // "--saved_dict", "/Users/stashtomonaga/Downloads/2024-11-02/ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios/Lorenz63_nanBer0.8_MT_RNN_ptf_0.1_α0.100,0.100,0.100,0.100,0.100,0.100,0.100,0.100_44073834_2024-11-02-03:14:39/MT_RNN_final_epoch9612.pt"
             ]
         },
         {
@@ -53,8 +72,8 @@
                 // "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/saved_model/2024-09-18/h27_ep2000_SampMeths_RNNs_0/c9b35073_Lorenz63_2024-09-18-17:05:35_MT_RNN_SM-ss_α-[0.00490695, 0.02916397, 0.01453569]/config.ini"
                 // "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/sinusoid/generated/debug_test/cfg_debug_test_RNN.ini",
                 // "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/general_signal/generated/debug_test/cfg_debug_test_MT_RNN_sho.ini",
-                "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/general_signal/generated/debug_test/cfg_mt_rnn_xhro_test_multi_dim.ini",
-                // "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/general_signal/generated/debug_test/cfg_mt_rnn_xhro_test.ini",
+                // "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/general_signal/generated/debug_test/cfg_mt_rnn_xhro_test_multi_dim.ini",
+                "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/general_signal/generated/debug_test/cfg_mt_rnn_xhro_test.ini",
                 // "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/general_signal/generated/debug_test/cfg_debug_test_PLRNN.ini",
 
 

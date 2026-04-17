@@ -20,8 +20,54 @@ import matplotlib.pyplot as plt
 import matplotlib
 
 matplotlib.use("Agg")  # Set the backend to 'Agg' to avoid GUI issues
+# plt.rcParams["font.family"] = "Liberation Serif"
 
-plt.rcParams["font.family"] = "Liberation Serif"
+
+def get_plot_config(paper_ready=True):
+    """
+    Updates Matplotlib's global plotting settings for exploratory or publication-quality figures,
+    and returns a dictionary of additional settings.
+
+    Args:
+        paper_ready (bool, optional): If True, applies settings for publication-quality figures.
+                                      Defaults to False.
+
+    Returns:
+        dict: A dictionary containing additional plotting settings, including 'show_title'.
+    """
+    config = {}
+    if paper_ready:
+        # Settings for a publication-quality figure ✒️
+        plt.rcParams.update(
+            {
+                "font.family": "serif",
+                "font.serif": ["Times New Roman"] + plt.rcParams["font.serif"],
+                "axes.labelsize": 24,
+                "xtick.labelsize": 20,
+                "ytick.labelsize": 20,
+                "legend.fontsize": 20,
+                "lines.linewidth": 2,
+                "lines.markersize": 8,
+            }
+        )
+        config["show_title"] = (
+            False  # Command to remove/disable titles for paper-ready plots
+        )
+    else:
+        # Default settings for exploratory plotting
+        plt.rcParams.update(
+            {
+                "font.family": "sans-serif",
+                "axes.labelsize": "medium",  # Matplotlib default
+                "xtick.labelsize": "medium",
+                "ytick.labelsize": "medium",
+                "legend.fontsize": "medium",
+                "lines.linewidth": 1.5,
+                "lines.markersize": 6,
+            }
+        )
+        config["show_title"] = True  # Keep titles for exploratory plots
+    return config
 
 
 def visualize_model_parameters(model, explain, save_path=None, fixed_scale=None):
@@ -141,8 +187,22 @@ def visualize_combined_parameters(
     plt.close()
 
 
-def visualize_sequences(true_data, recon_data, mode_selector, save_dir, explain=""):
+def visualize_sequences(sequences, mode_selector, save_dir, explain=""):
     linewidth = 2
+    true_data = sequences[0]["data"]  # Assuming the first entry is the true sequence
+    recon_data = sequences[1][
+        "data"
+    ]  # Assuming the second entry is the reconstructed sequence
+    noise_data = (
+        sequences[2]["data"] if len(sequences) > 2 else None
+    )  # Optional noise sequence
+    # Add offset for noise data if present
+    min_val = min(np.min(true_data), np.min(recon_data))
+    if noise_data is not None:
+        offset = 1.1 * min_val - np.max(noise_data)
+        noise_data = noise_data + offset
+
+    PAPER_READY = True
     plt.rcParams["lines.linewidth"] = linewidth
 
     # Determine number of dimensions
@@ -150,6 +210,8 @@ def visualize_sequences(true_data, recon_data, mode_selector, save_dir, explain=
         true_data = true_data[:, np.newaxis]  # Reshape to (n_seq, 1)
         recon_data = recon_data[:, np.newaxis]
         mode_selector = mode_selector[:, np.newaxis]
+        if noise_data is not None:
+            noise_data = noise_data[:, np.newaxis]
 
     n_seq, x_dim = true_data.shape
 
@@ -162,9 +224,13 @@ def visualize_sequences(true_data, recon_data, mode_selector, save_dir, explain=
     if x_dim == 1:
         axes = [axes]
 
+    get_plot_config(paper_ready=PAPER_READY)
     # Plot each dimension in its own subplot
     for dim in range(x_dim):
         ax = axes[dim]
+        # Plot added noise if present
+        if noise_data is not None:
+            ax.plot(noise_data[:, dim], label="Added Noise", color="purple")
         # Plot true sequence
         ax.plot(true_data[:, dim], label="True Sequence", color="blue")
 
@@ -196,27 +262,32 @@ def visualize_sequences(true_data, recon_data, mode_selector, save_dir, explain=
         plt.Line2D([0], [0], color="green", label="Teacher-Forced"),
         plt.Line2D([0], [0], color="red", label="Autonomous"),
     ]
+    if noise_data is not None:
+        handles.append(plt.Line2D([0], [0], color="purple", label="Added Noise"))
     labels = [h.get_label() for h in handles]
-    fig.legend(handles, labels, loc="upper right")
+    fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(1.0, 1.2))
 
     # Add a super title with adjusted y-position
-    fig.suptitle(
-        textwrap.fill(
-            f"Comparison of True and Predicted Sequences {explain}",
-            width=50,
-            break_long_words=True,
-        ),
-        y=0.98,  # Adjust position to prevent cutoff
-    )
+    if not PAPER_READY:
+        fig.suptitle(
+            textwrap.fill(
+                f"Comparison of True and Predicted Sequences {explain}",
+                width=50,
+                break_long_words=True,
+            ),
+            y=0.98,  # Adjust position to prevent cutoff
+        )
 
     # Adjust the top margin to ensure the super title is not cut off
-    plt.subplots_adjust(top=0.9)
+    # plt.subplots_adjust(top=0.9)
+
+    get_plot_config(paper_ready=PAPER_READY)
 
     # Save figure
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
     fig_file = os.path.join(save_dir, f"vis_pred_true_series_{explain}.png")
-    plt.savefig(fig_file)
+    plt.savefig(fig_file, bbox_inches="tight")
     plt.close()
 
 
@@ -228,6 +299,7 @@ def visualize_spectral_analysis(
     sampling_rate,
     explain="",
     max_sequences=None,
+    use_log_scale=False,
 ):
     if max_sequences is not None and len(data_lst) > max_sequences:
         data_lst = data_lst[:max_sequences]
@@ -272,15 +344,24 @@ def visualize_spectral_analysis(
         dataset_color = colors_lst[idx]
 
         # Power spectral plot with unified y-axis
-        axs[idx, 0].loglog(
-            freqs_nonzero,
-            power_spectrum,
-            label=f"{name_lst[idx]} Power Spectrum",
-            color=dataset_color,
-        )
-        # Set the same y-axis range for all plots
-        axs[idx, 0].set_ylim(min_power, max_power)
-        axs[idx, 0].set_xlim(freq_min, freq_max)
+        if use_log_scale:
+            axs[idx, 0].loglog(
+                freqs_nonzero,
+                power_spectrum,
+                color=dataset_color,
+                label=f"{name_lst[idx]} Power Spectrum",
+            )
+            axs[idx, 0].set_xlim(freq_min, freq_max)
+            axs[idx, 0].set_ylim(min_power, max_power)
+        else:
+            axs[idx, 0].plot(
+                freqs_nonzero,
+                power_spectrum,
+                color=dataset_color,
+                label=f"{name_lst[idx]} Power Spectrum",
+            )
+            axs[idx, 0].set_xscale("linear")
+            axs[idx, 0].set_yscale("linear")
         axs[idx, 0].set_title(
             textwrap.fill(
                 f"{name_lst[idx]} Power Spectrum",
@@ -296,18 +377,26 @@ def visualize_spectral_analysis(
         ax_new = axs[idx, 0].twiny()
         # Invisible plot to generate secondary x-axis
         ax_new.loglog(periods_nonzero, power_spectrum, alpha=0)
-        ax_new.set_xlabel("Period (seconds)")
         ax_new.set_xscale("log")
+        ax_new.set_xlabel("Period (seconds)")
         ax_new.set_xlim(period_min, period_max)
 
         # Phase spectral plot
         phase_spectrum = np.angle(fft[nonzero_indices])
-        axs[idx, 1].semilogx(
-            freqs_nonzero,
-            phase_spectrum,
-            label=f"{name_lst[idx]} Phase Spectrum",
-            color=dataset_color,
-        )
+        if use_log_scale:
+            axs[idx, 1].semilogx(
+                freqs_nonzero,
+                phase_spectrum,
+                color=dataset_color,
+                label=f"{name_lst[idx]} Phase Spectrum",
+            )
+        else:
+            axs[idx, 1].plot(
+                freqs_nonzero,
+                phase_spectrum,
+                color=dataset_color,
+                label=f"{name_lst[idx]} Phase Spectrum",
+            )
         axs[idx, 1].set_title(
             textwrap.fill(
                 f"{name_lst[idx]} Phase Spectrum",
@@ -320,7 +409,9 @@ def visualize_spectral_analysis(
         axs[idx, 1].grid(True)
 
     plt.tight_layout()
-    fig_file = os.path.join(save_dir, f"vis_spectral_analysis_{explain}.png")
+    fig_file = os.path.join(
+        save_dir, f"vis_spectral_analysis_{explain}_log{use_log_scale}.png"
+    )
     plt.savefig(fig_file)
     plt.close()
 
@@ -401,23 +492,30 @@ def visualize_variable_evolution(
 def visualize_teacherforcing_2_autonomous(
     batch_data,
     dvae,
-    mode_selector,
+    auto_mode_selector,
     save_path,
     explain="",
     inference_mode=False,
     seq_len=None,
     is_segmented_1d=False,
+    noise_selector=None,
 ):
     # Get sequence length and dimensions
     seq_len_total, batch_size, x_dim = batch_data.shape
-    n_seq = seq_len if seq_len is None else min(seq_len, seq_len_total)
+    n_seq = seq_len_total if seq_len is None else min(seq_len, seq_len_total)
+
+    if noise_selector is None:
+        noise_selector = None
+    else:
+        noise_selector = noise_selector[:n_seq, :1, :]
 
     # Move data to device and generate reconstruction
     batch_data = batch_data.to(dvae.device)
     recon_batch_data = (
         dvae(
             batch_data[:n_seq, :1, :],
-            mode_selector=mode_selector[:n_seq, :1, :],
+            mode_selector=auto_mode_selector[:n_seq, :1, :],
+            noise_selector=noise_selector,
             inference_mode=inference_mode,
         )
         .detach()
@@ -429,19 +527,46 @@ def visualize_teacherforcing_2_autonomous(
         true_series = batch_data[:n_seq, 0, :].reshape(-1).cpu().numpy()
         recon_series = recon_batch_data[:n_seq, 0, :].reshape(-1).cpu().numpy()
         # Expand mode_selector to match flattened length
-        expanded_mode_selector = mode_selector[:n_seq, 0, :].reshape(-1).cpu().numpy()
+        expanded_mode_selector = (
+            auto_mode_selector[:n_seq, 0, :].reshape(-1).cpu().numpy()
+        )
+        if noise_selector is not None:
+            noise_series = (
+                dvae.noise_values[:n_seq, 0, :].reshape(-1).cpu().numpy()
+            )  # not used for now
+        else:
+            noise_series = None
     else:
         # Scenario 2: Keep high-dimensional data as 2D
         true_series = batch_data[:n_seq, 0, :].cpu().numpy()  # Shape: (n_seq, x_dim)
         recon_series = (
             recon_batch_data[:n_seq, 0, :].cpu().numpy()
         )  # Shape: (n_seq, x_dim)
-        expanded_mode_selector = mode_selector[:n_seq, 0, :].cpu().numpy()
+        expanded_mode_selector = auto_mode_selector[:n_seq, 0, :].cpu().numpy()
+        if noise_selector is not None:
+            noise_series = (
+                dvae.noise_values[:n_seq, 0, :].cpu().numpy()
+            )  # not used for now
+        else:
+            noise_series = None
 
+    recon_tf_color_intensity = auto_mode_selector[:n_seq, 0, :].cpu().numpy()
+    recon_auto_color_intensity = 1 - auto_mode_selector[:n_seq, 0, :].cpu().numpy()
+    recon_color = (recon_tf_color_intensity, recon_auto_color_intensity, 0)
+    sequences = [
+        {"title": "True Series", "data": true_series, "color": "blue"},
+        {"title": "Reconstructed Series", "data": recon_series, "color": recon_color},
+    ]
+    if noise_series is not None:
+        sequences.append(
+            {
+                "title": "Added Noise",
+                "data": noise_series,
+                "color": "purple",
+            }
+        )
     # Call visualization function
-    visualize_sequences(
-        true_series, recon_series, expanded_mode_selector, save_path, explain
-    )
+    visualize_sequences(sequences, expanded_mode_selector, save_path, explain)
 
 
 def reduce_dimensions(embeddings, technique="pca", n_components=3):
@@ -657,59 +782,75 @@ def visualize_accuracy_over_time(
 
 
 def visualize_delay_embedding(
-    observation,
-    delay,
-    dimensions,
+    embedded,
     save_dir,
     variable_name,
     explain="",
     base_color="Blues",
     rotation_speed=5,
     total_rotation=360,
+    handle_nan="mask",  # Only for viz if embedded has NaNs
 ):
-    n = len(observation)
-    embedding_length = n - (dimensions - 1) * delay
-    if embedding_length <= 0:
-        raise ValueError(
-            "Delay and dimensions are too large for the length of the observation array."
-        )
+    """
+    Visualize the pre-computed 3D delay embedding as a rotating GIF.
 
-    embedded = np.empty((embedding_length, dimensions))
-    for i in range(dimensions):
-        embedded[:, i] = observation[i * delay : i * delay + embedding_length]
-
-    if dimensions != 3:
-        raise NotImplementedError(
-            "Rotation and color gradient for dimensions other than 3 is not implemented."
-        )
+    :param embedded: Pre-computed embedding array (N, 3) from compute_delay_embedding.
+    :param save_dir: Directory to save the GIF.
+    :param variable_name: Name for title/filename.
+    :param explain: Additional title text.
+    :param base_color: Colormap base (e.g., 'Blues').
+    :param rotation_speed: Degrees per frame.
+    :param total_rotation: Total rotation degrees.
+    :param handle_nan: If embedded has NaNs, 'mask' skips invalid segments.
+    :return: Path to saved GIF.
+    """
+    if not isinstance(embedded, np.ndarray) or embedded.shape[1] != 3:
+        raise ValueError("embedded must be (N, 3) NumPy array.")
 
     fig = plt.figure(figsize=(12, 8))
     ax = fig.add_subplot(111, projection="3d")
 
-    cmap = plt.get_cmap(base_color)
+    # Safe min/max/mean with NaNs
     zs = embedded[:, 2]
-    z_min, z_max = zs.min(), zs.max()
+    z_min = np.nanmin(zs)
+    z_max = np.nanmax(zs)
+    if np.isnan(z_min) or np.isnan(z_max):
+        raise ValueError("All z values are NaN; cannot visualize.")
 
-    for i in range(1, len(embedded)):
-        x = embedded[i - 1 : i + 1, 0]
-        y = embedded[i - 1 : i + 1, 1]
-        z = embedded[i - 1 : i + 1, 2]
-        color_value = (z.mean() - z_min) / (z_max - z_min)
-        ax.plot(x, y, z, color=cmap(color_value))
+    cmap = plt.get_cmap(base_color)
+
+    # Plot loop: Handle NaNs by finding contiguous non-NaN segments
+    i = 1
+    while i < len(embedded):
+        # Find next contiguous non-NaN segment
+        start = i - 1
+        while i < len(embedded) and not np.any(np.isnan(embedded[i])):
+            i += 1
+        end = i
+
+        if end - start >= 2:  # Need at least 2 points for a line
+            segment = embedded[start:end]
+            for j in range(1, len(segment)):
+                # Get the two consecutive points for this sub-segment
+                x_seg = segment[j - 1 : j + 1, 0]
+                y_seg = segment[j - 1 : j + 1, 1]
+                z_seg = segment[j - 1 : j + 1, 2]
+
+                # Use the z-value of the starting point (or average if preferred)
+                z_val = segment[j - 1, 2]
+                color_value = (z_val - z_min) / (z_max - z_min)
+
+                # Plot this small segment with its specific color
+                ax.plot(x_seg, y_seg, z_seg, color=cmap(color_value))
+
+        i += 1  # Skip to next potential segment
 
     font_scale = 3
-
-    # ax.set_xlabel("X(t)", fontsize=16 * font_scale)
-    # ax.set_ylabel("X(t + delay)", fontsize=16 * font_scale)
-    # ax.set_zlabel("X(t + 2 * delay)", fontsize=16 * font_scale)
     title = textwrap.fill(
-        f"Delay Embedding of {variable_name.capitalize()} {explain} (Delay: {delay})",
+        f"Delay Embedding of {variable_name.capitalize()} {explain}",
         width=50,
         break_long_words=True,
     )
-    # plt.title(title, fontsize=16 * font_scale)
-
-    # Adjust tick label font sizes
     ax.tick_params(axis="both", which="major", labelsize=12 * font_scale)
 
     def update(frame):
@@ -723,20 +864,101 @@ def visualize_delay_embedding(
         interval=200,
         blit=True,
     )
-    fig_file = os.path.join(
-        save_dir, f"vis_delay_embedding_of_{variable_name}_τ{delay}_{explain}.gif"
-    )
 
+    fig_file = os.path.join(
+        save_dir, f"vis_delay_embedding_of_{variable_name}_{explain}.gif"
+    )
     print(f"Saving animation at: {fig_file}")
     start_time = time.time()
-    anim.save(fig_file, writer=PillowWriter(fps=10))
+    anim.save(fig_file, writer="pillow", fps=10)
     end_time = time.time()
-
     print(f"Animation saved in {end_time - start_time:.2f} seconds")
 
     plt.close()
-    # Returning the embedded data for further analysis
-    return embedded
+    return fig_file
+
+
+# def visualize_delay_embedding(
+#     observation,
+#     delay,
+#     dimensions,
+#     save_dir,
+#     variable_name,
+#     explain="",
+#     base_color="Blues",
+#     rotation_speed=5,
+#     total_rotation=360,
+# ):
+#     n = len(observation)
+#     embedding_length = n - (dimensions - 1) * delay
+#     if embedding_length <= 0:
+#         raise ValueError(
+#             "Delay and dimensions are too large for the length of the observation array."
+#         )
+
+#     embedded = np.empty((embedding_length, dimensions))
+#     for i in range(dimensions):
+#         embedded[:, i] = observation[i * delay : i * delay + embedding_length]
+
+#     if dimensions != 3:
+#         raise NotImplementedError(
+#             "Rotation and color gradient for dimensions other than 3 is not implemented."
+#         )
+
+#     fig = plt.figure(figsize=(12, 8))
+#     ax = fig.add_subplot(111, projection="3d")
+
+#     cmap = plt.get_cmap(base_color)
+#     zs = embedded[:, 2]
+#     z_min, z_max = zs.min(), zs.max()
+
+#     for i in range(1, len(embedded)):
+#         x = embedded[i - 1 : i + 1, 0]
+#         y = embedded[i - 1 : i + 1, 1]
+#         z = embedded[i - 1 : i + 1, 2]
+#         color_value = (z.mean() - z_min) / (z_max - z_min)
+#         ax.plot(x, y, z, color=cmap(color_value))
+
+#     font_scale = 3
+
+#     # ax.set_xlabel("X(t)", fontsize=16 * font_scale)
+#     # ax.set_ylabel("X(t + delay)", fontsize=16 * font_scale)
+#     # ax.set_zlabel("X(t + 2 * delay)", fontsize=16 * font_scale)
+#     title = textwrap.fill(
+#         f"Delay Embedding of {variable_name.capitalize()} {explain} (Delay: {delay})",
+#         width=50,
+#         break_long_words=True,
+#     )
+#     # plt.title(title, fontsize=16 * font_scale)
+
+#     # Adjust tick label font sizes
+#     ax.tick_params(axis="both", which="major", labelsize=12 * font_scale)
+
+#     def update(frame):
+#         ax.view_init(30, frame)
+#         return (fig,)
+
+#     anim = FuncAnimation(
+#         fig,
+#         update,
+#         frames=np.arange(0, total_rotation, rotation_speed),
+#         interval=200,
+#         blit=True,
+#     )
+#     fig_file = os.path.join(
+#         save_dir, f"vis_delay_embedding_of_{variable_name}_τ{delay}_{explain}.gif"
+#     )
+
+#     print(f"Saving animation at: {fig_file}")
+#     start_time = time.time()
+#     anim.save(fig_file, writer=PillowWriter(fps=10))
+#     end_time = time.time()
+
+#     print(f"Animation saved in {end_time - start_time:.2f} seconds")
+
+#     plt.close()
+#     # Returning the embedded data for further analysis
+#     return embedded
 
 
 def visualize_alpha_history_and_spectrums(

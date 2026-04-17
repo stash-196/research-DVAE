@@ -70,6 +70,7 @@ def build_MT_RNN(cfg, device="cpu"):
         dropout_p=dropout_p,
         beta=beta,
         device=device,
+        cfg=cfg,
     ).to(device)
 
     return model
@@ -84,6 +85,7 @@ class MT_RNN(BaseRNN):
         dense_x,
         dense_h_x,
         dim_rnn,
+        cfg,
         num_rnn=1,
         type_rnn="RNN",
         dropout_p=0,
@@ -100,6 +102,7 @@ class MT_RNN(BaseRNN):
             type_rnn,
             dropout_p,
             device,
+            cfg=cfg,
         )
 
         self.alphas = alphas

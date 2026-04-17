@@ -56,6 +56,7 @@ def build_RNN(cfg, device="cpu"):
         dropout_p=dropout_p,
         beta=beta,
         device=device,
+        cfg=cfg,
     ).to(device)
 
     return model
@@ -71,6 +72,7 @@ class RNN(BaseRNN):
         dim_rnn,
         num_rnn,
         type_rnn,
+        cfg,
         dropout_p=0,
         beta=1,
         device="cpu",
@@ -85,6 +87,7 @@ class RNN(BaseRNN):
             type_rnn,
             dropout_p,
             device,
+            cfg=cfg,
         )
         self.beta = beta
 

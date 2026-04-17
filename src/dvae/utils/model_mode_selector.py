@@ -39,9 +39,9 @@ def create_autonomous_mode_selector_1d(seq_len, mode="all_1", autonomous_ratio=0
         )
     elif mode == "even_bursts":
         mode_selector_list = []  # Use a list to build efficiently
-        flip_interval = (
-            int(1 / autonomous_ratio) if autonomous_ratio > 0 else seq_len + 1
-        )  # Avoid division by zero, make it never flip if ratio is 0
+        flip_interval = int(
+            seq_len * autonomous_ratio
+        )  # if autonomous_ratio > 0 else seq_len + 1  # Avoid division by zero, make it never flip if ratio is 0
         current_mode = 0  # Start with teacher forcing
         for i in range(seq_len):
             if i > 0 and (i % flip_interval == 0):  # Flip at interval, not at start

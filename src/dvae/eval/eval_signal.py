@@ -5,11 +5,14 @@ Copyright (c) 2020 by Inria
 Authoried by Xiaoyu BIE (xiaoyu.bie@inria.fr)
 License agreement in LICENSE.txt
 """
+
 import os
 import uuid
+from sklearn import metrics
 import torch
 import argparse
 import json
+import yaml
 import sys
 import time
 import numpy as np
@@ -160,6 +163,8 @@ if __name__ == "__main__":
 
     VISUALIZE_3D = True
 
+    metrics = {"params": params}
+
     with torch.no_grad():
 
         # Visualize results
@@ -224,6 +229,25 @@ if __name__ == "__main__":
                 explain=f"final_short_inference_mode_half_half_short",
                 inference_mode=True,
             )
+
+        # visualize the hidden states
+        visualize_variable_evolution(
+            dvae.h,
+            batch_data=batch_data_long,
+            save_dir=save_fig_dir,
+            variable_name=f"hidden",
+            alphas=alphas_per_unit,
+            add_lines_lst=[half_point_long],
+        )
+
+        # visualize the x_features
+        visualize_variable_evolution(
+            dvae.feature_x,
+            batch_data=batch_data_long,
+            save_dir=save_fig_dir,
+            variable_name=f"x_features",
+            add_lines_lst=[half_point_long],
+        )
 
         ############################################################################
         # For longer sequence
@@ -361,16 +385,17 @@ if __name__ == "__main__":
                     use_gmm=True,
                 )
                 print(f"[Eval] KL Autonomous: {kl_auto_error:.4f}")
-                # state_space_kl(
-                #     true_traj=embedded_true_x,
-                #     # against random noise as baseline with same variance
-                #     gen_traj=np.random.normal(
-                #         loc=0.0,
-                #         scale=np.std(embedded_true_x),
-                #         size=embedded_true_x.shape,
-                #     ),
-                #     use_gmm=True,
-                # )
+
+                # Add to metrics
+                metrics["kl_tf"] = float(kl_tf_error)
+                metrics["kl_auto"] = float(kl_auto_error)
+
+                # Logging
+                # Log the metrics to a file in the same directory as the .pt file
+                log_file = os.path.join(save_dir, "evaluation_log.txt")
+                with open(log_file, "w") as f:
+                    f.write(f"KL Teacher-forced: {kl_tf_error:.4f}\n")
+                    f.write(f"KL Autonomous: {kl_auto_error:.4f}\n")
 
             # teacherforced_states = dvae.h[~autonomous_mode_selector_long, 0, :]
             # autonomous_states = dvae.h[autonomous_mode_selector_long, 0, :]
@@ -471,99 +496,80 @@ if __name__ == "__main__":
             # break after the first batch
             break
 
-    #     ############################################################################
-    #     # Prepare shorter sequence data
-    #     # Single batch for demonstration
-    #     new_seq_len = 2000
-    #     test_dataloader.dataset.update_sequence_length(new_seq_len)
-    #     batch_data = next(iter(test_dataloader))
-    #     batch_data = batch_data.to(device)
-    #     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
-    #     batch_data = batch_data.permute(1, 0, 2)
-    #     seq_len, batch_size, x_dim = batch_data.shape
-    #     half_point = seq_len // 2
-    #     num_iterations = 100
-    #     # iterated batch data of single series To calculate the accuracy measure for the same time series
-    #     batch_data_repeated = batch_data.repeat(1, num_iterations, 1)
+        #     ############################################################################
+        #     # Prepare shorter sequence data
+        #     # Single batch for demonstration
+        #     new_seq_len = 2000
+        #     test_dataloader.dataset.update_sequence_length(new_seq_len)
+        #     batch_data = next(iter(test_dataloader))
+        #     batch_data = batch_data.to(device)
+        #     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
+        #     batch_data = batch_data.permute(1, 0, 2)
+        #     seq_len, batch_size, x_dim = batch_data.shape
+        #     half_point = seq_len // 2
+        #     num_iterations = 100
+        #     # iterated batch data of single series To calculate the accuracy measure for the same time series
+        #     batch_data_repeated = batch_data.repeat(1, num_iterations, 1)
 
-    #     autonomous_mode_selector = create_autonomous_mode_selector(
-    #         seq_len,
-    #         "even_bursts",
-    #         autonomous_ratio=0.1,
-    #     ).astype(bool)
-    #     expanded_autonomous_mode_selector = expand_autonomous_mode_selector(
-    #         autonomous_mode_selector, x_dim
-    #     )
+        #     autonomous_mode_selector = create_autonomous_mode_selector(
+        #         seq_len,
+        #         "even_bursts",
+        #         autonomous_ratio=0.1,
+        #     ).astype(bool)
+        #     expanded_autonomous_mode_selector = expand_autonomous_mode_selector(
+        #         autonomous_mode_selector, x_dim
+        #     )
 
-    #     # turn input into tensor and send to GPU if needed
-    #     batch_data_repeated_tensor = torch.tensor(
-    #         batch_data_repeated, device=dvae.device
-    #     )
-    #     recon_data_repeated = (
-    #         dvae(batch_data_repeated_tensor, mode_selector=autonomous_mode_selector)
-    #         .cpu()
-    #         .numpy()
-    #     )
+        #     # turn input into tensor and send to GPU if needed
+        #     batch_data_repeated_tensor = torch.tensor(
+        #         batch_data_repeated, device=dvae.device
+        #     )
+        #     recon_data_repeated = (
+        #         dvae(batch_data_repeated_tensor, mode_selector=autonomous_mode_selector)
+        #         .cpu()
+        #         .numpy()
+        #     )
 
-    #     batch_data_repeated = batch_data_repeated.reshape(
-    #         seq_len, batch_size, num_iterations, x_dim
-    #     )
-    #     recon_data_repeated = recon_data_repeated.reshape(
-    #         seq_len, batch_size, num_iterations, x_dim
-    #     )
+        #     batch_data_repeated = batch_data_repeated.reshape(
+        #         seq_len, batch_size, num_iterations, x_dim
+        #     )
+        #     recon_data_repeated = recon_data_repeated.reshape(
+        #         seq_len, batch_size, num_iterations, x_dim
+        #     )
 
-    #     # Calculate expected RMSE
-    #     expected_rmse, expected_rmse_variance = calculate_expected_accuracy(
-    #         batch_data_repeated, recon_data_repeated, rmse
-    #     )
+        #     # Calculate expected RMSE
+        #     expected_rmse, expected_rmse_variance = calculate_expected_accuracy(
+        #         batch_data_repeated, recon_data_repeated, rmse
+        #     )
 
-    #     # Calculate expected R^2
-    #     expected_r2, expected_r2_variance = calculate_expected_accuracy(
-    #         batch_data_repeated, recon_data_repeated, r_squared
-    #     )
+        #     # Calculate expected R^2
+        #     expected_r2, expected_r2_variance = calculate_expected_accuracy(
+        #         batch_data_repeated, recon_data_repeated, r_squared
+        #     )
 
-    #     # Visualize results
-    #     save_dir = os.path.dirname(params["saved_dict"])
+        #     # Visualize results
+        #     save_dir = os.path.dirname(params["saved_dict"])
 
-    #     visualize_accuracy_over_time(
-    #         expected_rmse,
-    #         expected_rmse_variance,
-    #         save_dir,
-    #         measure="rsme",
-    #         num_batches=batch_size,
-    #         num_iter=num_iterations,
-    #         explain="over multiple series",
-    #         autonomous_mode_selector=expanded_autonomous_mode_selector,
-    #     )
-    #     visualize_accuracy_over_time(
-    #         expected_r2,
-    #         expected_r2_variance,
-    #         save_dir,
-    #         measure="r2",
-    #         num_batches=batch_size,
-    #         num_iter=num_iterations,
-    #         explain="over multiple series",
-    #         autonomous_mode_selector=expanded_autonomous_mode_selector,
-    #     )
-
-    #     # visualize the hidden states
-    #     visualize_variable_evolution(
-    #         dvae.h,
-    #         batch_data=batch_data,
-    #         save_dir=save_fig_dir,
-    #         variable_name=f"hidden",
-    #         alphas=alphas_per_unit,
-    #         add_lines_lst=[half_point],
-    #     )
-
-    #     # visualize the x_features
-    #     visualize_variable_evolution(
-    #         dvae.feature_x,
-    #         batch_data=batch_data,
-    #         save_dir=save_fig_dir,
-    #         variable_name=f"x_features",
-    #         add_lines_lst=[half_point],
-    #     )
+        #     visualize_accuracy_over_time(
+        #         expected_rmse,
+        #         expected_rmse_variance,
+        #         save_dir,
+        #         measure="rsme",
+        #         num_batches=batch_size,
+        #         num_iter=num_iterations,
+        #         explain="over multiple series",
+        #         autonomous_mode_selector=expanded_autonomous_mode_selector,
+        #     )
+        #     visualize_accuracy_over_time(
+        #         expected_r2,
+        #         expected_r2_variance,
+        #         save_dir,
+        #         measure="r2",
+        #         num_batches=batch_size,
+        #         num_iter=num_iterations,
+        #         explain="over multiple series",
+        #         autonomous_mode_selector=expanded_autonomous_mode_selector,
+        #     )
 
     #     # Check if the model has a z variable
     #     if hasattr(dvae, "z_mean"):
@@ -615,17 +621,7 @@ if __name__ == "__main__":
     #         inference_mode=True,
     #     )
 
-    # metrics = {
-    #     "params": params,
-    #     "power_spectrum_error": power_spectrum_error_lst,
-    # }
-
-    # # Create directory to save metrics if it does not exist
-    # eval_save_path = os.path.join(save_dir, "evaluation")
-    # if not os.path.exists(eval_save_path):
-    #     os.makedirs(eval_save_path)
-
-    # # Save the metrics
-    # metrics_file = os.path.join(eval_save_path, "evaluation_metrics.json")
-    # with open(metrics_file, "w") as f:
-    #     json.dump(metrics, f)
+    # Save the metrics as YAML (human-readable JSON-like format)
+    metrics_file = os.path.join(save_dir, "evaluation_metrics.yaml")
+    with open(metrics_file, "w") as f:
+        yaml.dump(metrics, f, default_flow_style=False)
