@@ -283,15 +283,21 @@ select_columns_for_obs_conditions = {
         "raw_ch1": [
             "ch1",
         ],
+        "raw_ch2": [
+            "ch2",
+        ],
+        "raw_ch3": [
+            "ch3",
+        ],
+        "raw_ch4": [
+            "ch4",
+        ],
         "raw_ecg": [
             "ch1",
             "ch2",
         ],
         "raw_eeg": [
             "ch3",
-            "ch4",
-        ],
-        "raw_ch4": [
             "ch4",
         ],
         "raw_all": [
