@@ -330,6 +330,13 @@ if __name__ == "__main__":
                 dvae_model=dvae,
             )
 
+            # Add spectrum errors to metrics
+            for key, error in zip(
+                spectrum_results["signal_keys"],
+                spectrum_results["power_spectrum_errors"],
+            ):
+                metrics[f"spectrum_error_{key}"] = float(error)
+
             if learning_algo.dataset_name == "Lorenz63":
                 time_delay = 10
                 delay_embedding_dimensions = 3
@@ -373,15 +380,15 @@ if __name__ == "__main__":
             print(f"[Eval] KL Autonomous: {kl_auto_error:.4f}")
 
             # Add to metrics
-            metrics["kl_tf"] = float(kl_tf_error)
-            metrics["kl_auto"] = float(kl_auto_error)
+            metrics["kld_tf"] = float(kl_tf_error)
+            metrics["kld_auto"] = float(kl_auto_error)
 
             # Add spectrum distance metrics
             if spectrum_results:
                 spectrum_errors = spectrum_results["power_spectrum_errors"]
-                signal_names = spectrum_results["signal_names"]
+                signal_names = spectrum_results["signal_keys"]
                 metrics["spectrum_distance"] = {
-                    name: float(error)
+                    name.replace("\n", " "): float(error)
                     for name, error in zip(signal_names, spectrum_errors)
                 }
 

@@ -34,6 +34,7 @@ def run_spectrum_analysis(
             recon_data_long[autonomous_mode_selector_long.bool()],
         ]
         name_lst = ["z", "y", "Ground\nTruth", "Teacher-\nForced", "Autonomous"]
+        key_lst = ["z", "y", "gt", "tf", "auto"]
         true_signal_index = 2
         colors_lst = ["orange", "magenta", "blue", "green", "red"]
 
@@ -48,6 +49,7 @@ def run_spectrum_analysis(
             recon_data_long[autonomous_mode_selector_long.bool()],
         ]
         name_lst = ["Ground Truth", "teacher-forced", "autonomous"]
+        key_lst = ["gt", "tf", "auto"]
         true_signal_index = 2
         colors_lst = ["blue", "green", "red"]
         dt = 1e-2
@@ -61,6 +63,7 @@ def run_spectrum_analysis(
             recon_data_long[autonomous_mode_selector_long.bool()],
         ]
         name_lst = ["Ground\nTruth", "Teacher-\nForced", "Autonomous"]
+        key_lst = ["gt", "tf", "auto"]
         true_signal_index = 2
         colors_lst = ["blue", "green", "red"]
         dt = 1e-2
@@ -94,6 +97,7 @@ def run_spectrum_analysis(
             "Teacher-\nForced",
             "Autonomous",
         ]
+        key_lst = ["ch1", "ch2", "ch3", "gt", "tf", "auto"]
         true_signal_index = 3
         colors_lst = ["cyan", "orange", "magenta", "blue", "green", "red"]
         dt = 1 / 250
@@ -134,7 +138,7 @@ def run_spectrum_analysis(
 
     return {
         "power_spectrum_errors": power_spectrum_error_lst,
-        "signal_names": name_lst,
+        "signal_keys": key_lst,
     }
 
     # # Visualize the alphas against the power spectral density
