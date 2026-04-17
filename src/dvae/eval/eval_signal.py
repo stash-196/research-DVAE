@@ -113,6 +113,9 @@ if __name__ == "__main__":
         % (sum(p.numel() for p in dvae.parameters()) / 1000000.0)
     )
 
+    # Convert config to dict for YAML
+    config_dict = {section: dict(cfg[section]) for section in cfg.sections()}
+
     # Create DatasetConfig for evaluation
     dataset_config = DatasetConfig(
         data_dir=learning_algo.data_dir,
@@ -149,6 +152,11 @@ if __name__ == "__main__":
     save_dir = os.path.dirname(params["saved_dict"])
     loss_file = os.path.join(save_dir, "loss_model.pckl")
 
+    # Initialize metrics
+    metrics = {"params": params}
+    # Add config to metrics
+    metrics["config"] = config_dict
+
     # Check if the loss_model.pckl file exists
     if os.path.isfile(loss_file):
         print(f"[Eval] Loading loss data from {loss_file}")
@@ -160,10 +168,6 @@ if __name__ == "__main__":
         print(f"[Eval][Warning] No loss data file found at {loss_file}")
 
     ############################################################################
-
-    VISUALIZE_3D = True
-
-    metrics = {"params": params}
 
     with torch.no_grad():
 
@@ -333,69 +337,71 @@ if __name__ == "__main__":
                 time_delay = 5
                 delay_embedding_dimensions = 3
 
-            if VISUALIZE_3D:
-                embedded_true_x = compute_delay_embedding(
-                    observation=batch_data_long[:, 0, :].reshape(-1).numpy(),
-                    delay=time_delay,
-                    dimensions=delay_embedding_dimensions,
-                )
-                # visualize_delay_embedding(
-                #     embedded=embedded_true_x,
-                #     save_dir=save_fig_dir,
-                #     variable_name=f"true_signal_inference_mode_τ{time_delay}_d{delay_embedding_dimensions}",
-                #     base_color="Blues",
-                # )
+            embedded_true_x = compute_delay_embedding(
+                observation=batch_data_long[:, 0, :].reshape(-1).numpy(),
+                delay=time_delay,
+                dimensions=delay_embedding_dimensions,
+            )
 
-                embedded_recon_teacher = compute_delay_embedding(
-                    observation=recon_data_long[
-                        ~autonomous_mode_selector_long.bool()  # , 0, :
-                    ].reshape(-1),
-                    delay=time_delay,
-                    dimensions=delay_embedding_dimensions,
-                )
-                # visualize_delay_embedding(
-                #     embedded=embedded_recon_teacher,
-                #     save_dir=save_fig_dir,
-                #     variable_name=f"teacher-forced_reconstruction_inference_mode_τ{time_delay}_d{delay_embedding_dimensions}",
-                #     base_color="Greens",
-                # )
-                embedded_recon_auto = compute_delay_embedding(
-                    observation=recon_data_long[
-                        autonomous_mode_selector_long.bool(),  # , 0, :
-                    ].reshape(-1),
-                    delay=time_delay,
-                    dimensions=delay_embedding_dimensions,
-                )
-                # visualize_delay_embedding(
-                #     embedded=embedded_recon_auto,
-                #     save_dir=save_fig_dir,
-                #     variable_name=f"autonomous_reconstruction_inference_mode_τ{time_delay}_d{delay_embedding_dimensions}",
-                #     base_color="Reds",
-                # )
+            embedded_recon_teacher = compute_delay_embedding(
+                observation=recon_data_long[
+                    ~autonomous_mode_selector_long.bool()  # , 0, :
+                ].reshape(-1),
+                delay=time_delay,
+                dimensions=delay_embedding_dimensions,
+            )
 
-                kl_tf_error = state_space_kl(
-                    true_traj=embedded_true_x,
-                    gen_traj=embedded_recon_teacher,
-                    use_gmm=True,
-                )
-                print(f"[Eval] KL Teacher-forced: {kl_tf_error:.4f}")
-                kl_auto_error = state_space_kl(
-                    true_traj=embedded_true_x,
-                    gen_traj=embedded_recon_auto,
-                    use_gmm=True,
-                )
-                print(f"[Eval] KL Autonomous: {kl_auto_error:.4f}")
+            embedded_recon_auto = compute_delay_embedding(
+                observation=recon_data_long[
+                    autonomous_mode_selector_long.bool(),  # , 0, :
+                ].reshape(-1),
+                delay=time_delay,
+                dimensions=delay_embedding_dimensions,
+            )
 
-                # Add to metrics
-                metrics["kl_tf"] = float(kl_tf_error)
-                metrics["kl_auto"] = float(kl_auto_error)
+            kl_tf_error = state_space_kl(
+                true_traj=embedded_true_x,
+                gen_traj=embedded_recon_teacher,
+                use_gmm=True,
+            )
+            print(f"[Eval] KL Teacher-forced: {kl_tf_error:.4f}")
+            kl_auto_error = state_space_kl(
+                true_traj=embedded_true_x,
+                gen_traj=embedded_recon_auto,
+                use_gmm=True,
+            )
+            print(f"[Eval] KL Autonomous: {kl_auto_error:.4f}")
 
-                # Logging
-                # Log the metrics to a file in the same directory as the .pt file
-                log_file = os.path.join(save_dir, "evaluation_log.txt")
-                with open(log_file, "w") as f:
-                    f.write(f"KL Teacher-forced: {kl_tf_error:.4f}\n")
-                    f.write(f"KL Autonomous: {kl_auto_error:.4f}\n")
+            # Add to metrics
+            metrics["kl_tf"] = float(kl_tf_error)
+            metrics["kl_auto"] = float(kl_auto_error)
+
+            # Logging
+            # Log the metrics to a file in the same directory as the .pt file
+            log_file = os.path.join(save_dir, "evaluation_log.txt")
+            with open(log_file, "w") as f:
+                f.write(f"KL Teacher-forced: {kl_tf_error:.4f}\n")
+                f.write(f"KL Autonomous: {kl_auto_error:.4f}\n")
+
+            if True:
+                visualize_delay_embedding(
+                    embedded=embedded_true_x,
+                    save_dir=save_fig_dir,
+                    variable_name=f"true_signal_inference_mode_τ{time_delay}_d{delay_embedding_dimensions}",
+                    base_color="Blues",
+                )
+                visualize_delay_embedding(
+                    embedded=embedded_recon_teacher,
+                    save_dir=save_fig_dir,
+                    variable_name=f"teacher-forced_reconstruction_inference_mode_τ{time_delay}_d{delay_embedding_dimensions}",
+                    base_color="Greens",
+                )
+                visualize_delay_embedding(
+                    embedded=embedded_recon_auto,
+                    save_dir=save_fig_dir,
+                    variable_name=f"autonomous_reconstruction_inference_mode_τ{time_delay}_d{delay_embedding_dimensions}",
+                    base_color="Reds",
+                )
 
             # teacherforced_states = dvae.h[~autonomous_mode_selector_long, 0, :]
             # autonomous_states = dvae.h[autonomous_mode_selector_long, 0, :]
@@ -622,6 +628,6 @@ if __name__ == "__main__":
     #     )
 
     # Save the metrics as YAML (human-readable JSON-like format)
-    metrics_file = os.path.join(save_dir, "evaluation_metrics.yaml")
+    metrics_file = os.path.join(save_dir, "evaluation_summary.yaml")
     with open(metrics_file, "w") as f:
         yaml.dump(metrics, f, default_flow_style=False)
