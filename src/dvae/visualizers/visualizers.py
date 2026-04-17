@@ -447,6 +447,15 @@ def visualize_variable_evolution(
             states[:, 0, dim].cpu().numpy(), label=f"Dim {dim}", color=colors[dim]
         )
 
+    # Add colorbar if alphas are provided
+    if alphas is not None:
+        import matplotlib.cm as cm
+        alphas_np = alphas.cpu().numpy()
+        sm = cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(vmin=np.min(alphas_np), vmax=np.max(alphas_np)))
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=axs[0], orientation='vertical', shrink=0.8)
+        cbar.set_label('Alpha values')
+
     # Add vertical lines at specified epochs
     for t in add_lines_lst:
         axs[0].axvline(x=t, color="r", linestyle="--")

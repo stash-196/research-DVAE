@@ -132,6 +132,11 @@ def run_spectrum_analysis(
         colors=colors_lst,
     )
 
+    return {
+        "power_spectrum_errors": power_spectrum_error_lst,
+        "signal_names": name_lst,
+    }
+
     # # Visualize the alphas against the power spectral density
     # if model_name == "MT_RNN" or model_name == "MT_VRNN":
     #     sigmas_history = loaded_data["sigmas_history"]

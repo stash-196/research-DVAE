@@ -318,7 +318,7 @@ if __name__ == "__main__":
             )
 
             # Run spectrum analysis and visualization
-            run_spectrum_analysis(
+            spectrum_results = run_spectrum_analysis(
                 test_dataloader=test_dataloader,
                 recon_data_long=recon_data_long,
                 save_fig_dir=save_fig_dir,
@@ -376,6 +376,15 @@ if __name__ == "__main__":
             metrics["kl_tf"] = float(kl_tf_error)
             metrics["kl_auto"] = float(kl_auto_error)
 
+            # Add spectrum distance metrics
+            if spectrum_results:
+                spectrum_errors = spectrum_results["power_spectrum_errors"]
+                signal_names = spectrum_results["signal_names"]
+                metrics["spectrum_distance"] = {
+                    name: float(error)
+                    for name, error in zip(signal_names, spectrum_errors)
+                }
+
             # Logging
             # Log the metrics to a file in the same directory as the .pt file
             log_file = os.path.join(save_dir, "evaluation_log.txt")
@@ -383,7 +392,7 @@ if __name__ == "__main__":
                 f.write(f"KL Teacher-forced: {kl_tf_error:.4f}\n")
                 f.write(f"KL Autonomous: {kl_auto_error:.4f}\n")
 
-            if True:
+            if False:
                 visualize_delay_embedding(
                     embedded=embedded_true_x,
                     save_dir=save_fig_dir,
