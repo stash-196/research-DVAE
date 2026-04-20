@@ -399,7 +399,7 @@ if __name__ == "__main__":
                 f.write(f"KL Teacher-forced: {kl_tf_error:.4f}\n")
                 f.write(f"KL Autonomous: {kl_auto_error:.4f}\n")
 
-            if False:
+            if True:
                 visualize_delay_embedding(
                     embedded=embedded_true_x,
                     save_dir=save_fig_dir,
@@ -463,13 +463,13 @@ if __name__ == "__main__":
                     "technique": "tsne",
                 },
             ]
-            
+
             # Save the metrics as YAML before starting parallel visualizations
             metrics_file = os.path.join(save_dir, "evaluation_summary.yaml")
             with open(metrics_file, "w") as f:
                 yaml.dump(metrics, f, default_flow_style=False)
             print(f"[Eval] Metrics saved to: {metrics_file}")
-            
+
             run_parallel_visualizations(
                 visualize_embedding_space, vis_embedding_space_params
             )
