@@ -1,0 +1,223 @@
+2024-04-09/
+
+2024-04-10/
+
+2024-04-26/
+
+2024-04-27/
+
+2024-05-15/
+
+2024-06-04/
+
+2024-06-06/
+
+2024-06-10/
+
+2024-06-11/
+
+2024-06-12/
+
+2024-06-18/
+
+2024-07-01/
+
+2024-07-03/
+
+2024-07-04/
+
+2024-07-05/
+
+2024-07-07/
+
+2024-07-08/
+
+2024-07-09/
+
+2024-07-10/
+
+2024-07-18/
+
+2024-07-19/
+
+2024-08-15/
+
+2024-09-18/
+
+2024-09-19/
+
+2024-10-04/
+
+2024-10-07/
+
+2024-10-22/
+
+2024-10-31/
+
+2024-11-01/
+
+2024-11-02/
+
+2025-05-17/
+
+2025-05-19/
+
+2025-05-21/
+
+2025-05-22/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-05-22/deigo_cluster/debug_test"
+
+2025-05-23/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-05-23/deigo_cluster/20250523-MT-VRNN-multiple_alpha_dims?-0.5x0.2"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-05-23/deigo_cluster/20250523-multiple_alpha_dims?-0.0x0.0"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-05-23/deigo_cluster/20250523-multiple_alpha_dims?-0.0x0.2"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-05-23/deigo_cluster/20250523-multiple_alpha_dims?-0.5x0.0"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-05-23/deigo_cluster/20250523-multiple_alpha_dims?-0.5x0.2"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-05-23/deigo_cluster/20250523-optimize_alphas?"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-05-23/deigo_cluster/20250523-sampling_ratio"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-05-23/deigo_cluster/20250523-sampling_ratio_w_more_missing"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-05-23/deigo_cluster/debug_test"
+
+2025-06-15/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-15/deigo_cluster/20250615-MT-VandVanillaRNN-multiple_alpha_dims?-0.0x0.0"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-15/deigo_cluster/20250615-MT-VandVanillaRNN-multiple_alpha_dims?-0.0x0.2"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-15/deigo_cluster/20250615-MT-VandVanillaRNN-multiple_alpha_dims?-0.2x0.5"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-15/deigo_cluster/20250615-MT-VandVanillaRNN-multiple_alpha_dims?-0.5x0.0"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-15/deigo_cluster/20250615-MT-VandVanillaRNN-multiple_alpha_dims?-0.5x0.2"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-15/deigo_cluster/20250615-MT-VandVanillaRNN-optimize_alphas?-False"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-15/deigo_cluster/20250615-MT-VandVanillaRNN-optimize_alphas?-True"
+
+2025-06-20/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-20/deigo_cluster/20250620_lorenz63_MT-RNN_alpha3d_seqlen300_vary-deltas"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-20/deigo_cluster/20250620_lorenz63_MT-RNN_alpha3d_seqlen300_vary-rhos"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-20/deigo_cluster/20250620_lorenz63_MT-RNN_alpha9d_seqlen300_vary-deltas"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-20/deigo_cluster/20250620_lorenz63_MT-RNN_alpha9d_seqlen300_vary-rhos"
+
+2025-06-21/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-21/deigo_cluster/20250621_lorenz63_MT-RNN_ptf0.6_alpha9d_seqlen300_vary-dts"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-21/deigo_cluster/20250621_lorenz63_MT-RNN_ptf0.6_alpha9d_seqlen300_vary-rhos"
+
+2025-06-28/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-28/deigo_cluster/20250628_XHRO-01-11_alpha3d_ptf_seqlen1000_raw_ch4_vary_MT-MTV"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-28/deigo_cluster/20250628_XHRO-01-11_alpha9d_ptf_seqlen1000_raw_ch4_vary_SampRatios_MT-MTV_hdims"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-28/deigo_cluster/20250628_XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-28/deigo_cluster/20250628_XHRO-01-11_raw_all_alpha3d_ptf_seqlen1000_vary_MT-MTV"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-28/deigo_cluster/20250628_lorenz63_MT-RNN_obsx_ptf0.6_alpha3d_seqlen1000_vary-MissingRatios"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-28/deigo_cluster/20250628_lorenz63_MT-RNN_obsx_ptf0.6_alpha3d_seqlen1000_vary-SampRatios"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-28/deigo_cluster/20250628_lorenz63_MT-RNN_obsx_ptf0.6_alpha3d_seqlen1000_vary-dts"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-06-28/deigo_cluster/20250628_lorenz63_MT-RNN_obsx_ptf0.6_alpha3d_seqlen1000_vary-rhos"
+
+2025-07-09/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-07-09/deigo_cluster/20250628_XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
+
+2025-09-02/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-09-02/deigo_cluster/20250902_SHO_alpha1-3d_ptf0.7"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-09-02/deigo_cluster/20250902_SHO_alpha1-3d_ss0.7"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-09-02/deigo_cluster/20250902_dampedSHO_alpha1-3d_ptf0.7"
+
+2025-09-03/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-09-03/deigo_cluster/20250902_SHO_alpha1-3d_ss0.9"
+
+2025-10-15/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-10-15/deigo_cluster/20251015_Lorenz_ptfs_PLRNNs_lrs"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-10-15/deigo_cluster/20251015_Lorenz_ss0.9_PLRNNs"
+
+2025-10-16/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-10-16/deigo_cluster/20251016_Lorenz_ss_PL-vRNNs_hdims_patiences_autostarts"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-10-16/deigo_cluster/20251016_Lorenz_ss_PL-vRNNs_low-patience_autostarts"
+
+2025-10-18/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-10-18/deigo_cluster/20251016_Lorenz_ss0.8_shPL-vanRNNs_low-patience"
+
+2025-10-19/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-10-19/deigo_cluster/20251018_Lorenz_ss0.8_shPL_MarkovMiss"
+
+2025-10-20/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-10-20/deigo_cluster/20251020_Lorenz_ss0.8_shPL_MarkovMiss_GradClip100"
+
+2025-10-22/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-10-22/deigo_cluster/20251022_Lorenz_ss0.8_shPL_MarkovMiss_GradClip"
+
+2025-10-24/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-10-24/deigo_cluster/20251024_Lorenz_sms_shPL-vanil"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-10-24/deigo_cluster/20251024_Lorenz_sms_shPL_MarkovMiss"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-10-24/deigo_cluster/20251024_Lorenz_ss_shPL-markovMiss"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-10-24/deigo_cluster/20251024_Lorenz_ss_shPL-vanil"
+
+2025-10-25/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-10-25/deigo_cluster/20251025_XHRO_ptfHIGH-Strict_MTRNN_SampRatios_3Subjs_hdim256_copy0628"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-10-25/deigo_cluster/20251025_XHRO_ptfHIGH-Strict_MTRNN_SampRatios_3Subjs_hdim256_copy0628_1Dchannel"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-10-25/deigo_cluster/20251025_XHRO_ssHIGH-Strict_MTRNN_SampRatios_3Subjs_hdim128"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-10-25/deigo_cluster/20251025_XHRO_ssHIGH_MTRNN_SampRatios_3Subjs_hdim128"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-10-25/deigo_cluster/20251025_XHRO_ss_MTRNN_SampRatios_3Subjs_hdim128"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-10-25/deigo_cluster/20251025_XHRO_ss_shPL_SampRatios_3Subjs_hdim128"
+
+2025-11-12/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_MissingHigh_ssptf_MTRNN-markovMiss_varySampRatios"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_MissingMedium_ssptf_MTRNN-markovMiss_varySampRatios"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_MissingNone_ssptf_MTRNN-markovMiss_varySampRatios"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_markovMissingHigh_ptf_MTRNN_varySampRatios_3alphas"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_markovMissingMedium_ptf_MTRNN_varySampRatios_3alphas"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_markovMissingNone_ptf_MTRNN_varySampRatios_3alphas"
+
+2025-11-13/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-13/deigo_cluster/20251113_Lorenz_markovMissing0.8_ptf_MTRNN_varySampRatios_9alphas"
+
+2025-11-14/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-14/deigo_cluster/20251114_Lorenz_markovMissing0.8_SS_MTRNN_varySampRatios_3or9alphas_allLoss"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-14/deigo_cluster/20251114_Lorenz_markovMissing0.8_ptf_MTRNN_varySampRatios_3or9alphas_allLoss"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-14/deigo_cluster/20251114_XHRO_ssHIGH-AllLoss_MTRNN_SampRatios_3Subjs_hdim256_alphaDim9_1Dchannel"
+
+2025-11-15/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-15/deigo_cluster/20251114_Lorenz_markovMissing0.8_SS_MTRNN_varySampRatios_3or9alphas_allLoss"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-15/deigo_cluster/20251114_Lorenz_markovMissing0.8_ptf_MTRNN_varySampRatios_3or9alphas_allLoss"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-15/deigo_cluster/20251114_XHRO_ssHIGH-AllLoss_MTRNN_SampRatios_3Subjs_hdim256_alphaDim9_1Dchannel"
+
+2026-01-14/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch"
+
+2026-01-16/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-16/deigo_cluster/20260116_XHRO_len500_drop0.1_ss0.1-AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-16/deigo_cluster/20260116_XHRO_ss0.1-AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-16/deigo_cluster/20260116_XHRO_sss-AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000"
+
+2026-01-18/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-18/deigo_cluster/20260118_XHRO_len500_drop0.1_ss0.4-_AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000"
+
+2026-01-21/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-21/deigo_cluster/20260121_XHRO_len1000_drop0_ss0.5-_AllLoss_MT-RNN_Subj70_ch3-4_h1000"
+
+2026-01-22/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-22/deigo_cluster/20260122_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MT-RNN_Subj70_ch1-2_h1000"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-22/deigo_cluster/20260122_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_v-LSRNN_Subj70_ch3-4_h1000"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-22/deigo_cluster/20260122_XHRO_len1000_drop0_ptf0.6-_clip1_AllLoss_MT-RNN_Subj70_ch3-4_h1000"
+
+2026-01-24/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-24/deigo_cluster/20260123_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSRNN_Subj70_ch3-4_h100"
+
+2026-01-25/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-25/deigo_cluster/20260125_32mem_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-25/deigo_cluster/20260125_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100"
+
+2026-01-27/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-27/deigo_cluster/20260126_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-27/deigo_cluster/20260127_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_hdims"
+
+2026-01-28/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-28/deigo_cluster/20260128_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_hdims_ptientHigh"
+
+2026-01-29/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-29/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
+
+2026-01-30/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-30/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
+
+2026-02-06/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-06/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
+
+2026-02-12/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNN_hdi20_ptientHigh"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_hdi20s_ptientHigh"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MTRNN_hdi20-40_ptientHigh"
+

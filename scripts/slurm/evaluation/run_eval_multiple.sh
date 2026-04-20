@@ -1,14 +1,82 @@
 #!/bin/bash
 
 # Script to generate and submit SLURM jobs for evaluating multiple models using eval_signal.py
-# Usage: ./run_eval_multiple.sh <experiment_directory>
+# Edit the experiments array below to add/remove target directories
 
-if [ $# -ne 1 ]; then
-    echo "Usage: $0 <experiment_directory>"
-    exit 1
-fi
+# Define a list of experiment directories
+declare -a experiments=(
 
-EXPERIMENT_DIR=$1
+#     2025-11-12/
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_MissingHigh_ssptf_MTRNN-markovMiss_varySampRatios"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_MissingMedium_ssptf_MTRNN-markovMiss_varySampRatios"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_MissingNone_ssptf_MTRNN-markovMiss_varySampRatios"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_markovMissingHigh_ptf_MTRNN_varySampRatios_3alphas"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_markovMissingMedium_ptf_MTRNN_varySampRatios_3alphas"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_markovMissingNone_ptf_MTRNN_varySampRatios_3alphas"
+
+# 2025-11-13/
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-13/deigo_cluster/20251113_Lorenz_markovMissing0.8_ptf_MTRNN_varySampRatios_9alphas"
+
+# 2025-11-14/
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-14/deigo_cluster/20251114_Lorenz_markovMissing0.8_SS_MTRNN_varySampRatios_3or9alphas_allLoss"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-14/deigo_cluster/20251114_Lorenz_markovMissing0.8_ptf_MTRNN_varySampRatios_3or9alphas_allLoss"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-14/deigo_cluster/20251114_XHRO_ssHIGH-AllLoss_MTRNN_SampRatios_3Subjs_hdim256_alphaDim9_1Dchannel"
+
+# 2025-11-15/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-15/deigo_cluster/20251114_Lorenz_markovMissing0.8_SS_MTRNN_varySampRatios_3or9alphas_allLoss"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-15/deigo_cluster/20251114_Lorenz_markovMissing0.8_ptf_MTRNN_varySampRatios_3or9alphas_allLoss"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-15/deigo_cluster/20251114_XHRO_ssHIGH-AllLoss_MTRNN_SampRatios_3Subjs_hdim256_alphaDim9_1Dchannel"
+
+# 2026-01-14/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch"
+
+# 2026-01-16/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-16/deigo_cluster/20260116_XHRO_len500_drop0.1_ss0.1-AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-16/deigo_cluster/20260116_XHRO_ss0.1-AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-16/deigo_cluster/20260116_XHRO_sss-AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000"
+
+# 2026-01-18/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-18/deigo_cluster/20260118_XHRO_len500_drop0.1_ss0.4-_AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000"
+
+# 2026-01-21/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-21/deigo_cluster/20260121_XHRO_len1000_drop0_ss0.5-_AllLoss_MT-RNN_Subj70_ch3-4_h1000"
+
+# 2026-01-22/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-22/deigo_cluster/20260122_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MT-RNN_Subj70_ch1-2_h1000"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-22/deigo_cluster/20260122_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_v-LSRNN_Subj70_ch3-4_h1000"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-22/deigo_cluster/20260122_XHRO_len1000_drop0_ptf0.6-_clip1_AllLoss_MT-RNN_Subj70_ch3-4_h1000"
+
+# 2026-01-24/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-24/deigo_cluster/20260123_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSRNN_Subj70_ch3-4_h100"
+
+# 2026-01-25/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-25/deigo_cluster/20260125_32mem_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-25/deigo_cluster/20260125_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100"
+
+# 2026-01-27/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-27/deigo_cluster/20260126_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-27/deigo_cluster/20260127_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_hdims"
+
+# 2026-01-28/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-28/deigo_cluster/20260128_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_hdims_ptientHigh"
+
+# 2026-01-29/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-29/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
+
+# 2026-01-30/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-30/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
+
+# 2026-02-06/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-06/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
+
+# 2026-02-12/
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNN_hdi20_ptientHigh"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_hdi20s_ptientHigh"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MTRNN_hdi20-40_ptientHigh"
+
+    # Add more directories here as needed
+)
 
 # Get the current date in YYYY-MM-DD format
 today=$(date +%Y-%m-%d)
@@ -20,10 +88,13 @@ VENV_PATH=~/containers/venvs/research-DVAE/
 DATA_HOST_PATH=/bucket/DoyaU/stash/research-DVAE/data
 SAVED_HOST_PATH=/flash/DoyaU/stash/research-DVAE/saved_model
 
-# Create log directory under the experiment directory
-LOG_DIR="$EXPERIMENT_DIR/eval_logs"
-echo "[bash] LOG_DIR: $LOG_DIR"
-mkdir -p "$LOG_DIR"
+# Loop over each experiment directory
+for EXPERIMENT_DIR in "${experiments[@]}"; do
+    # Create log directory under the experiment directory
+    LOG_DIR="$EXPERIMENT_DIR/eval_logs"
+    echo "[bash] Processing experiment: $EXPERIMENT_DIR"
+    echo "[bash] LOG_DIR: $LOG_DIR"
+    mkdir -p "$LOG_DIR"
 
 # Find all .pt files containing 'final' in subdirectories of EXPERIMENT_DIR
 find "$EXPERIMENT_DIR" -type f -name "*final*.pt" | while read MODEL_FILE; do
@@ -107,4 +178,5 @@ EOL
 
     # Optionally, remove the temporary SLURM script after submission
     # rm "scripts/slurm/temp/run_eval_$MODEL_BASENAME.slurm"
+done
 done
