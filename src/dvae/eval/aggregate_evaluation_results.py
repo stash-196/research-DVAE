@@ -129,15 +129,28 @@ def plot_1d(data, param, metric, output_dir):
             param_values.append(p_val)
             metric_values.append(d[metric])
 
-    if len(param_values) < 2:
+    if len(param_values) == 0:
         print(
-            f"Not enough varying data for param {param} and metric {metric} (found {len(param_values)} points). Skipping plot."
+            f"No varying data for param {param} and metric {metric}. Skipping 1D plot."
         )
         return
 
+    # Sort values and use a scatter plot if there are overlapping X-axis entries
+    # to prevent a messy zig-zag line graph
+    pairs = sorted(zip(param_values, metric_values), key=lambda x: str(x[0]))
+    sorted_p, sorted_m = zip(*pairs)
+
+    has_dups = len(set(sorted_p)) < len(sorted_p)
+
     config = get_plot_config(paper_ready=True)
     plt.figure(figsize=(8, 6))
-    plt.plot(param_values, metric_values, "o-")
+
+    if has_dups:
+        # Multiple secondary parameters exist, rendering scatter plot to avoid vertical/overlap lines
+        plt.plot(sorted_p, sorted_m, "o", alpha=0.7, markersize=8)
+    else:
+        plt.plot(sorted_p, sorted_m, "o-")
+
     plt.xlabel(get_display_name(param))
     plt.ylabel(get_metric_display_name(metric))
     if config["show_title"]:
@@ -146,15 +159,17 @@ def plot_1d(data, param, metric, output_dir):
     plt.close()
 
 
-def plot_2d(data, param1, param2, metric, output_dir):
-    """Plot 2D heatmap for a metric vs two parameters."""
+def plot_2d(data, param1, metric, output_dir, param2=None):
+    """Plot 2D heatmap for a metric vs two parameters (or 1 param as single row)."""
     param1_values = extract_param_values(data, param1)
-    param2_values = extract_param_values(data, param2)
 
-    if len(param1_values) < 2 or len(param2_values) < 2:
-        print(
-            f"Not enough varying data for parameters {param1} ({len(param1_values)} values) or {param2} ({len(param2_values)} values). Skipping heatmap."
-        )
+    if param2:
+        param2_values = extract_param_values(data, param2)
+    else:
+        param2_values = ["-"]
+
+    if len(param1_values) == 0:
+        print(f"No varying data for {param1}. Skipping heatmap.")
         return
 
     # Create a grid
@@ -163,19 +178,23 @@ def plot_2d(data, param1, param2, metric, output_dir):
     for d in data:
         # Get param values
         p1_val = get_param_value(d, param1)
-        p2_val = get_param_value(d, param2)
-        if p1_val is None or p2_val is None or metric not in d:
+        if p1_val is None or metric not in d:
             continue
 
+        if param2:
+            p2_val = get_param_value(d, param2)
+            if p2_val is None:
+                continue
+            j = param2_values.index(p2_val) if p2_val in param2_values else None
+        else:
+            j = 0
+
         i = param1_values.index(p1_val) if p1_val in param1_values else None
-        j = param2_values.index(p2_val) if p2_val in param2_values else None
         if i is not None and j is not None:
             grid[i, j] = d[metric]
 
     if np.all(np.isnan(grid)):
-        print(
-            f"No valid data points for 2D plot of {metric} vs {param1} and {param2}. Skipping."
-        )
+        print(f"No valid data points for 2D plot of {metric}. Skipping.")
         return
 
     config = get_plot_config(paper_ready=True)
@@ -197,13 +216,20 @@ def plot_2d(data, param1, param2, metric, output_dir):
     ax.set_yticks(range(len(param1_values)))
     ax.set_yticklabels(param1_values)
 
-    plt.xlabel(get_display_name(param2))
+    if param2:
+        plt.xlabel(get_display_name(param2))
+    else:
+        plt.xlabel("")
+
     plt.ylabel(get_display_name(param1))
+
     if config["show_title"]:
-        plt.title(
-            f"{get_metric_display_name(metric)} heatmap: {get_display_name(param1)} vs {get_display_name(param2)}",
-            pad=20,
+        title_str = (
+            f"{get_metric_display_name(metric)} heatmap: {get_display_name(param1)}"
         )
+        if param2:
+            title_str += f" vs {get_display_name(param2)}"
+        plt.title(title_str, pad=20)
 
     # Add annotations if grid is small enough
     if len(param1_values) <= 5 and len(param2_values) <= 5:
@@ -220,18 +246,30 @@ def plot_2d(data, param1, param2, metric, output_dir):
                         color="white",
                     )
 
-    plt.savefig(os.path.join(output_dir, f"{metric}_heatmap_{param1}_vs_{param2}.png"))
+    out_name = f"{metric}_heatmap_{param1}"
+    if param2:
+        out_name += f"_vs_{param2}"
+    plt.savefig(os.path.join(output_dir, f"{out_name}.png"))
     plt.close()
 
 
-def aggregate_delay_embeddings(data, output_dir):
+def aggregate_delay_embeddings(data, args, output_dir):
     """Aggregate delay embedding GIFs into tiled figures for autonomous and teacher-forced modes."""
-    # Get global unique values
-    unique_sampling = sorted(set(get_param_value(d, "sampling_ratio") for d in data))
-    unique_mask = sorted(set(get_param_value(d, "mask_label") for d in data))
+    param1 = args.parameters[0]
+    param2 = args.parameters[1] if len(args.parameters) > 1 else None
 
-    rows = len(unique_sampling)
-    cols = len(unique_mask)
+    unique_param1 = sorted(set(get_param_value(d, param1) for d in data if get_param_value(d, param1) is not None))
+    if param2:
+        unique_param2 = sorted(set(get_param_value(d, param2) for d in data if get_param_value(d, param2) is not None))
+    else:
+        unique_param2 = ["-"]
+
+    rows = len(unique_param1)
+    cols = len(unique_param2)
+
+    if rows == 0 or cols == 0:
+        print("Not enough varying data for delay embeddings. Skipping.")
+        return
 
     config = get_plot_config(paper_ready=True)
 
@@ -243,10 +281,22 @@ def aggregate_delay_embeddings(data, output_dir):
         filled = {}
 
         for d in data:
-            sampling = get_param_value(d, "sampling_ratio")
-            mask = get_param_value(d, "mask_label")
-            i = unique_sampling.index(sampling)
-            j = unique_mask.index(mask)
+            val1 = get_param_value(d, param1)
+            if val1 is None:
+                continue
+
+            if param2:
+                val2 = get_param_value(d, param2)
+                if val2 is None:
+                    continue
+            else:
+                val2 = "-"
+
+            try:
+                i = unique_param1.index(val1)
+                j = unique_param2.index(val2)
+            except ValueError:
+                continue
 
             if (i, j) in filled:
                 continue  # Skip if already filled
@@ -326,17 +376,18 @@ def aggregate_delay_embeddings(data, output_dir):
                     for spine in axs[i, j].spines.values():
                         spine.set_visible(False)
 
-                # Top row prints the mask label, left column prints the sampling ratio
+                # Top row prints param2, left column prints param1
                 if i == 0:
-                    axs[i, j].set_title(str(unique_mask[j]), fontsize=45, pad=15)
+                    axs[i, j].set_title(str(unique_param2[j]), fontsize=45, pad=15)
                 if j == 0:
                     axs[i, j].set_ylabel(
-                        str(unique_sampling[i]), fontsize=45, labelpad=15
+                        str(unique_param1[i]), fontsize=45, labelpad=15
                     )
 
         # Global axis labels
-        fig.suptitle(get_display_name("mask_label"), fontsize=55, y=1.02)
-        fig.supylabel(get_display_name("sampling_ratio"), fontsize=55)
+        if param2:
+            fig.suptitle(get_display_name(param2), fontsize=55, y=1.02)
+        fig.supylabel(get_display_name(param1), fontsize=55)
 
         plt.tight_layout(pad=2.0)
         plt.subplots_adjust(wspace=0.0, hspace=0.0)
@@ -542,7 +593,7 @@ def main():
         print("=" * 60 + "\n")
 
     # Aggregate delay embeddings
-    aggregate_delay_embeddings(data, args.output_dir)
+    aggregate_delay_embeddings(data, args, args.output_dir)
 
     # Collect parameter values for all runs
     param_table = []
@@ -577,17 +628,30 @@ def main():
             f"Generating plots for parameters: {args.parameters}, metrics: {args.metrics}"
         )
     for metric in args.metrics:
+        # Plot 1D for ALL parameters, individually
+        for param in args.parameters:
+            if args.verbose:
+                print(f"Plotting 1D: {metric} vs {param}")
+            plot_1d(data, param, metric, args.output_dir)
+
+        # Plot 2D (heatmap style coverage)
         if len(args.parameters) == 1:
             if args.verbose:
-                print(f"Plotting 1D: {metric} vs {args.parameters[0]}")
-            plot_1d(data, args.parameters[0], metric, args.output_dir)
+                print(
+                    f"Plotting 2D: {metric} single-row heatmap for {args.parameters[0]}"
+                )
+            plot_2d(data, args.parameters[0], metric, args.output_dir, param2=None)
         else:
             if args.verbose:
                 print(
                     f"Plotting 2D: {metric} heatmap for {args.parameters[0]} vs {args.parameters[1]}"
                 )
             plot_2d(
-                data, args.parameters[0], args.parameters[1], metric, args.output_dir
+                data,
+                args.parameters[0],
+                metric,
+                args.output_dir,
+                param2=args.parameters[1],
             )
 
     print(f"Plots saved to {args.output_dir}")

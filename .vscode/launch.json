@@ -114,9 +114,11 @@
 
                 "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch",
                 "--parameters",
+                "tag"
                 "sampling_ratio",
                 "--filter", 
-                "loss_mask_mode=none",
+                // "loss_mask_mode=none",
+                "dataset_label=XHRO_02_XH070",
             ]        },
     ]
 }
