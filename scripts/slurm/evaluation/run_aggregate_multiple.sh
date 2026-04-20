@@ -96,7 +96,7 @@ singularity exec \\
   --bind \$DATA_HOST_PATH:/data \\
   --bind \$SAVED_HOST_PATH:/saved_model \\
   \$CONTAINER_PATH \\
-    bash -c "source /workspace/venv/bin/activate && python3 src/dvae/eval/aggregate_evaluation_results.py $EXPERIMENT_CONTAINER_PATH $PARAMS --output_dir $OUTPUT_DIR_CONTAINER"
+    bash -c "source /workspace/venv/bin/activate && python3 src/dvae/eval/aggregate_evaluation_results.py $EXPERIMENT_CONTAINER_PATH --parameters $PARAMS --output_dir $OUTPUT_DIR_CONTAINER"
 
 # Check exit code
 EXIT_CODE=\$?
