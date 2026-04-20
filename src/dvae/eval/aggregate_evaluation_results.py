@@ -216,7 +216,7 @@ def plot_2d(data, param1, param2, metric, output_dir):
                         f"{grid[i, j]:.2f}",
                         ha="center",
                         va="center",
-                        fontsize=12,
+                        fontsize=20,
                         color="white",
                     )
 
@@ -359,9 +359,15 @@ def main():
         help="Path to the experiment directory.",
     )
     parser.add_argument(
-        "parameters",
+        "--parameters",
         nargs="+",
         help="Parameters to use for plotting (1 or 2).",
+    )
+    parser.add_argument(
+        "--filter",
+        nargs="*",
+        default=[],
+        help="Filter the data to plot a specific slice by requiring exact parameter matches (e.g., --filter dim_rnn=64 type_rnn=RNN)",
     )
     parser.add_argument(
         "--metrics",
@@ -400,6 +406,12 @@ def main():
         param_dir = f"aggregate_eval_plots_{args.parameters[0]}"
     else:
         param_dir = f"aggregate_eval_plots_{args.parameters[0]}_{args.parameters[1]}"
+
+    if args.filter:
+        # Append all filters directly into the output directory name, replacing '==' with '=', and '.'
+        filter_str = "_".join(args.filter).replace("==", "=").replace(".", "_")
+        param_dir = f"{param_dir}_{filter_str}"
+
     args.output_dir = os.path.join(args.experiment_dir, param_dir)
     args.yaml_list_file = os.path.join(args.output_dir, "yaml_files.txt")
 
@@ -428,6 +440,106 @@ def main():
     data = load_yaml_data(yaml_files)
     if args.verbose:
         print(f"Loaded data from {len(data)} files.")
+
+    # Filter data early if --filter is provided
+    if args.filter:
+        if args.verbose:
+            print(f"Applying filters: {args.filter}")
+        filtered_data = []
+        for d in data:
+            match = True
+            for f in args.filter:
+                # Support both key=value and key==value formats seamlessly
+                if "==" in f:
+                    k, v = f.split("==", 1)
+                elif "=" in f:
+                    k, v = f.split("=", 1)
+                else:
+                    print(f"Warning: Invalid filter format '{f}'. Ignored.")
+                    continue
+
+                # Fetch metric using our universal struct accessor
+                d_val = get_param_value(d, k)
+
+                # Coerce data_value and input_value types loosely for floats vs ints vs strings
+                try:
+                    if float(d_val) != float(v):
+                        match = False
+                except (ValueError, TypeError):
+                    if str(d_val) != str(v):
+                        match = False
+
+                if not match:
+                    break
+
+            if match:
+                filtered_data.append(d)
+        data = filtered_data
+        print(f"Data reduced to {len(data)} files after filtering.")
+        if not data:
+            print("No data left after filtering! Exiting.")
+            return
+
+    # Check for overlapping runs based on the selected parameters
+    param_groups = defaultdict(list)
+    for d in data:
+        key = tuple(get_param_value(d, p) for p in args.parameters)
+        param_groups[key].append(d)
+
+    overlap_warning = False
+    for p_val_tuple, files in param_groups.items():
+        if len(files) > 1:
+            if not overlap_warning:
+                print("\n" + "=" * 60)
+                print("⚠️ WARNING: MULTIPLE MODELS WITH THE SAME PLOT PARAMETERS ⚠️")
+                print("=" * 60)
+                overlap_warning = True
+
+            param_str = ", ".join(
+                [f"{p}={v}" for p, v in zip(args.parameters, p_val_tuple)]
+            )
+            print(f"\nFound {len(files)} overlapping models for [{param_str}]:")
+            for d in files:
+                print(f"  - {d['yaml_file']}")
+
+            # Identify differing parameters
+            all_keys = set()
+            for d in files:
+                if "params" in d:
+                    all_keys.update(d["params"].keys())
+                if "config" in d and isinstance(d["config"], dict):
+                    for section in d["config"].values():
+                        if isinstance(section, dict):
+                            all_keys.update(section.keys())
+
+            diff_params = {}
+            for k in all_keys:
+                if k in args.parameters:
+                    continue  # skip the grouping parameters
+                val_strs = set()
+                vals_actual = []
+                for d in files:
+                    val = get_param_value(d, k)
+                    val_str = str(val)
+                    if val_str not in val_strs:
+                        val_strs.add(val_str)
+                        vals_actual.append(val)
+                if len(vals_actual) > 1:
+                    diff_params[k] = vals_actual
+
+            if diff_params:
+                print("\n  Differing configuration parameters across these models:")
+                for k, vals in sorted(diff_params.items()):
+                    val_formatted = ", ".join(
+                        f"'{v}'" if isinstance(v, str) else str(v) for v in vals
+                    )
+                    print(f"    - {k}: {val_formatted}")
+
+    if overlap_warning:
+        print(
+            "\nNote: Plotting grids/heatmaps will arbitrarily overwrite or pick the first hit."
+        )
+        print("=" * 60 + "\n")
 
     # Aggregate delay embeddings
     aggregate_delay_embeddings(data, args.output_dir)

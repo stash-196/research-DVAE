@@ -102,8 +102,21 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "args": [
-                "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh",
-                "sampling_ratio", "mask_label"
+                // // "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh",
+                // "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MTRNN_hdi20-40_ptientHigh",
+                // "--parameters",
+                // "sampling_ratio", "mask_label",
+                // "--filter", 
+                // // "type_rnn=RNN", 
+                // "dim_rnn=40",
+                // "loss_mask_mode=none",
+                // "tag=RNN",
+
+                "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch",
+                "--parameters",
+                "sampling_ratio",
+                "--filter", 
+                "loss_mask_mode=none",
             ]        },
     ]
 }
