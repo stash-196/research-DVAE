@@ -7,10 +7,16 @@
 # The key is the experiment directory, and the value is the full command-line arguments after the script path.
 # Example: ["/path/to/exp"]="--parameters sampling_ratio mask_label --filter dim_rnn=64"
 declare -A experiments=(
-    ["/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh"]="--parameters sampling_ratio mask_label"
-    ["/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNN_hdi20_ptientHigh"]="--parameters sampling_ratio mask_label"
-    ["/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_hdi20s_ptientHigh"]="--parameters sampling_ratio mask_label"
-    ["/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MTRNN_hdi20-40_ptientHigh"]="--parameters sampling_ratio mask_label"
+    # 2026-01-14/
+    # ["/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch"]="--parameters sampling_ratio --filter loss_mask_mode=none dataset_label=XHRO_02_XH070"
+    ["/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch"]="--parameters tag sampling_ratio --filter dataset_label=XHRO_02_XH070"
+    ["/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch"]="--parameters observation_process sampling_ratio  --filter dataset_label=XHRO_02_XH070 tag=MT_RNN"
+
+
+    # ["/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh"]="--parameters sampling_ratio mask_label"
+    # ["/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNN_hdi20_ptientHigh"]="--parameters sampling_ratio mask_label"
+    # ["/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_hdi20s_ptientHigh"]="--parameters sampling_ratio mask_label"
+    # ["/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MTRNN_hdi20-40_ptientHigh"]="--parameters sampling_ratio mask_label"
 
     # Add more key-value pairs here as needed: ["/path/to/exp"]="--parameters param1 param2 --filter key=val"
 )
@@ -47,14 +53,15 @@ for EXPERIMENT_DIR in "${!experiments[@]}"; do
     for arg in $FULL_ARGS; do
         if [ "$arg" = "--parameters" ]; then
             parsing_parameters=true
+            parsing_filters=false
         elif [ "$arg" = "--filter" ]; then
             parsing_filters=true
+            parsing_parameters=false
             FILTERS="$FILTERS --filter"
-        elif [ "$parsing_filters" = true ]; then
-            FILTERS="$FILTERS $arg"
-            parsing_filters=false
         elif [ "$parsing_parameters" = true ]; then
             PARAMETERS="$PARAMETERS $arg"
+        elif [ "$parsing_filters" = true ]; then
+            FILTERS="$FILTERS $arg"
         fi
     done
 
