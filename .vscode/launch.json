@@ -93,7 +93,17 @@
             "args": [
                 // "--exp_dir", "/Users/stashtomonaga/workspace/research-DVAE/saved_model/2024-05-15/h180_ep500_SampMeths_αs_0",
                 "--exp_dir", "/Users/stashtomonaga/workspace/research-DVAE/saved_model/2024-06-27/h27_ep500_SampMeths_RNNs_0"
-            ]
-        },
+            ]        },
+        {
+            "name": "Aggregate Evaluation Results",
+            "type": "python",
+            "request": "launch",
+            "program": "src/dvae/eval/aggregate_evaluation_results.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh",
+                "sampling_ratio", "mask_label"
+            ]        },
     ]
 }

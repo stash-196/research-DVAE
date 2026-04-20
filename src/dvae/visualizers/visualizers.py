@@ -438,7 +438,7 @@ def visualize_variable_evolution(
 
     # Create a figure with two subplots, making the bottom subplot smaller
     fig, axs = plt.subplots(
-        2, 1, figsize=(12, 8), gridspec_kw={"height_ratios": [3, 1]}
+        2, 1, figsize=(16, 8), gridspec_kw={"height_ratios": [3, 1]}
     )
 
     # Plotting the variables
@@ -447,22 +447,37 @@ def visualize_variable_evolution(
             states[:, 0, dim].cpu().numpy(), label=f"Dim {dim}", color=colors[dim]
         )
 
+    # Adjust layout before adding colorbar
+    plt.tight_layout()
+    # Add more vertical space between subplots
+    plt.subplots_adjust(hspace=0.3, right=0.85)  # Leave space on the right for colorbar
+
     # Add colorbar if alphas are provided
     if alphas is not None:
         import matplotlib.cm as cm
+
         alphas_np = alphas.cpu().numpy()
-        sm = cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(vmin=np.min(alphas_np), vmax=np.max(alphas_np)))
+        sm = cm.ScalarMappable(
+            cmap="viridis",
+            norm=plt.Normalize(vmin=np.min(alphas_np), vmax=np.max(alphas_np)),
+        )
         sm.set_array([])
-        cbar = fig.colorbar(sm, ax=axs[0], orientation='vertical', shrink=0.8)
-        cbar.set_label('Alpha values')
+        # Position colorbar manually next to the first subplot
+        cax = fig.add_axes(
+            [0.87, 0.55, 0.02, 0.3]
+        )  # [left, bottom, width, height] in figure coordinates
+        cbar = fig.colorbar(sm, cax=cax, orientation="vertical")
+        cbar.set_label("Alpha values")
 
     # Add vertical lines at specified epochs
     for t in add_lines_lst:
         axs[0].axvline(x=t, color="r", linestyle="--")
-        axs[1].axvline(x=t * x_dim, color="r", linestyle="--")
+        axs[1].axvline(x=t, color="r", linestyle="--")
 
     str_alphas = (
-        " α:" + str(set(alphas.cpu().detach().numpy())) if alphas is not None else ""
+        f" α: {[round(float(a), 4) for a in sorted(set(alphas.cpu().detach().numpy()))]}"
+        if alphas is not None
+        else ""
     )
     axs[0].set_title(
         textwrap.fill(
@@ -478,8 +493,9 @@ def visualize_variable_evolution(
         axs[0].legend(loc="upper right", bbox_to_anchor=(1.25, 1))
     axs[0].grid(True)
 
-    # Plotting the true signal
-    axs[1].plot(reshaped_batch_data, label="True Signal", color="blue")
+    # Plotting the true signal with synchronized time axis
+    time_steps = np.arange(len(reshaped_batch_data)) / x_dim
+    axs[1].plot(time_steps, reshaped_batch_data, label="True Signal", color="blue")
     axs[1].set_title(
         textwrap.fill(
             f"True Signal for {variable_name}",
@@ -657,9 +673,11 @@ def visualize_embedding_space(
     - base_colors: List of base colors for each subplot.
     """
 
-    font_scale = 1
+    # Apply publication-ready formatting
+    plot_config = get_plot_config(paper_ready=True)
+
     num_plots = len(states_list)
-    fig = plt.figure(figsize=(10, 10 * num_plots))
+    fig = plt.figure(figsize=(14, 10 * num_plots))
 
     for i, (states, condition_name, base_color) in enumerate(
         zip(states_list, condition_names, base_colors)
@@ -681,20 +699,20 @@ def visualize_embedding_space(
             color_value = (z.mean() - z_min) / (z_max - z_min)
             ax.plot(x, y, z, color=cmap(color_value))
 
-        # Set larger font sizes for axis labels
-        ax.set_xlabel("Component 1", fontsize=14 * font_scale)
-        ax.set_ylabel("Component 2", fontsize=14 * font_scale)
-        ax.set_zlabel("Component 3", fontsize=14 * font_scale)
-        ax.set_title(
-            textwrap.fill(
-                f"Trajectory of {variable_name.capitalize()} {condition_name.capitalize()} in {explain} {technique.upper()} space",
-                width=50,
-                break_long_words=True,
-            ),
-            fontsize=16 * font_scale,
-        )
-        # Adjust tick label font sizes
-        ax.tick_params(axis="both", which="major", labelsize=12 * font_scale)
+        # Set axis labels with publication-ready font sizes
+        ax.set_xlabel("Component 1")
+        ax.set_ylabel("Component 2")
+        ax.set_zlabel("Component 3")
+
+        # Only show title if not paper-ready mode
+        if plot_config.get("show_title", True):
+            ax.set_title(
+                textwrap.fill(
+                    f"Trajectory of {variable_name.capitalize()} {condition_name.capitalize()} in {explain} {technique.upper()} space",
+                    width=50,
+                    break_long_words=True,
+                )
+            )
 
     def update(frame):
         for ax in fig.axes:

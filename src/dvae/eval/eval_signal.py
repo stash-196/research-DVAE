@@ -419,104 +419,66 @@ if __name__ == "__main__":
                     base_color="Reds",
                 )
 
-            # teacherforced_states = dvae.h[~autonomous_mode_selector_long, 0, :]
-            # autonomous_states = dvae.h[autonomous_mode_selector_long, 0, :]
-            # embedding_states_list = [teacherforced_states, autonomous_states]
-            # embedding_states_conditions = ["teacher-forced", "autonomous"]
-            # embedding_states_colors = ["Greens", "Reds"]
+            teacher_forced_mask = ~autonomous_mode_selector_long[:, 0, 0].bool()
+            autonomous_mask = autonomous_mode_selector_long[:, 0, 0].bool()
+            teacherforced_states = dvae.h[teacher_forced_mask, 0, :]
+            autonomous_states = dvae.h[autonomous_mask, 0, :]
+            embedding_states_list = [teacherforced_states, autonomous_states]
+            embedding_states_conditions = ["teacher-forced", "autonomous"]
+            embedding_states_colors = ["Greens", "Reds"]
 
-            # # visualize the hidden states 3d
-            # # vis_embedding_space_params = [
-            # #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'nmf'},
-            # #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'kernel_pca'},
-            # #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'isomap'},
-            # #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'lle'},
-            # #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'umap'},
-            # #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'ica'},
-            # #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'mds'},
-            # #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors},
-            # #     {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'tsne'},
-            # # ]
-            # # run_parallel_visualizations(visualize_embedding_space, vis_embedding_space_params)
-            #
-
-            # visualize the hidden states 3d in different techniques
-            # if VISUALIZE_3D:
-            if False:
-                visualize_embedding_space(
-                    [teacherforced_states, autonomous_states],
-                    save_dir=save_fig_dir,
-                    variable_name="hidden",
-                    condition_names=[f"teacher-forced", f"autonomous"],
-                    base_colors=["Greens", "Reds"],
-                    technique="nmf",
-                )
-                visualize_embedding_space(
-                    [teacherforced_states, autonomous_states],
-                    save_dir=save_fig_dir,
-                    variable_name="hidden",
-                    condition_names=[f"teacher-forced", f"autonomous"],
-                    base_colors=["Greens", "Reds"],
-                    technique="kernel_pca",
-                )
-                visualize_embedding_space(
-                    [teacherforced_states, autonomous_states],
-                    save_dir=save_fig_dir,
-                    variable_name="hidden",
-                    condition_names=[f"teacher-forced", f"autonomous"],
-                    base_colors=["Greens", "Reds"],
-                    technique="isomap",
-                )
-                visualize_embedding_space(
-                    [teacherforced_states, autonomous_states],
-                    save_dir=save_fig_dir,
-                    variable_name="hidden",
-                    condition_names=[f"teacher-forced", f"autonomous"],
-                    base_colors=["Greens", "Reds"],
-                    technique="lle",
-                )
-                visualize_embedding_space(
-                    [teacherforced_states, autonomous_states],
-                    save_dir=save_fig_dir,
-                    variable_name="hidden",
-                    condition_names=[f"teacher-forced", f"autonomous"],
-                    base_colors=["Greens", "Reds"],
-                    technique="umap",
-                )
-                visualize_embedding_space(
-                    [teacherforced_states, autonomous_states],
-                    save_dir=save_fig_dir,
-                    variable_name="hidden",
-                    condition_names=[f"teacher-forced", f"autonomous"],
-                    base_colors=["Greens", "Reds"],
-                    technique="ica",
-                )
-                visualize_embedding_space(
-                    [teacherforced_states, autonomous_states],
-                    save_dir=save_fig_dir,
-                    variable_name="hidden",
-                    condition_names=[f"teacher-forced", f"autonomous"],
-                    base_colors=["Greens", "Reds"],
-                    technique="mds",
-                )
-                visualize_embedding_space(
-                    [teacherforced_states, autonomous_states],
-                    save_dir=save_fig_dir,
-                    variable_name="hidden",
-                    condition_names=[f"teacher-forced", f"autonomous"],
-                    base_colors=["Greens", "Reds"],
-                )
-                visualize_embedding_space(
-                    [teacherforced_states, autonomous_states],
-                    save_dir=save_fig_dir,
-                    variable_name="hidden",
-                    condition_names=[f"teacher-forced", f"autonomous"],
-                    base_colors=["Greens", "Reds"],
-                    technique="tsne",
-                )
+            # visualize the hidden states 3d
+            hidden_3d_gif_dir = os.path.join(save_fig_dir, "3d_hidden_gifs")
+            if not os.path.exists(hidden_3d_gif_dir):
+                os.makedirs(hidden_3d_gif_dir)
+            vis_embedding_space_params = [
+                # {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'nmf'},
+                {
+                    "states_list": embedding_states_list,
+                    "save_dir": hidden_3d_gif_dir,
+                    "variable_name": f"hidden",
+                    "condition_names": embedding_states_conditions,
+                    "base_colors": embedding_states_colors,
+                    "technique": "kernel_pca",
+                },
+                # {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'isomap'},
+                # {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'lle'},
+                # {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'umap'},
+                {
+                    "states_list": embedding_states_list,
+                    "save_dir": hidden_3d_gif_dir,
+                    "variable_name": f"hidden",
+                    "condition_names": embedding_states_conditions,
+                    "base_colors": embedding_states_colors,
+                    "technique": "ica",
+                },
+                # {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'mds'},
+                # {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors},
+                {
+                    "states_list": embedding_states_list,
+                    "save_dir": hidden_3d_gif_dir,
+                    "variable_name": f"hidden",
+                    "condition_names": embedding_states_conditions,
+                    "base_colors": embedding_states_colors,
+                    "technique": "tsne",
+                },
+            ]
+            
+            # Save the metrics as YAML before starting parallel visualizations
+            metrics_file = os.path.join(save_dir, "evaluation_summary.yaml")
+            with open(metrics_file, "w") as f:
+                yaml.dump(metrics, f, default_flow_style=False)
+            print(f"[Eval] Metrics saved to: {metrics_file}")
+            
+            run_parallel_visualizations(
+                visualize_embedding_space, vis_embedding_space_params
+            )
 
             # break after the first batch
             break
+
+    # Wait for parallel visualizations to complete (optional - can be removed if not needed)
+    # The YAML is already saved above, so we can exit early if desired
 
         #     ############################################################################
         #     # Prepare shorter sequence data
@@ -647,3 +609,4 @@ if __name__ == "__main__":
     metrics_file = os.path.join(save_dir, "evaluation_summary.yaml")
     with open(metrics_file, "w") as f:
         yaml.dump(metrics, f, default_flow_style=False)
+    print(f"[Eval] Metrics saved to: {metrics_file}")
