@@ -27,8 +27,8 @@ DISPLAY_NAMES = {
 
 # Dictionary for metric display names
 METRIC_DISPLAY_NAMES = {
-    "kl_tf": "KLD of Teacher Forced",
-    "kl_auto": "KLD of Autonomous",
+    "kld_tf": "KLD of Teacher Forced",
+    "kld_auto": "KLD of Autonomous",
     "spectrum_error_gt": "Spectrum Error Ground Truth",
     "spectrum_error_tf": "Spectrum Error Teacher Forced",
     "spectrum_error_auto": "Spectrum Error Autonomous",
@@ -367,8 +367,8 @@ def main():
         "--metrics",
         nargs="*",
         default=[
-            "kl_tf",
-            "kl_auto",
+            "kld_tf",
+            "kld_auto",
             "spectrum_error_gt",
             "spectrum_error_tf",
             "spectrum_error_auto",
