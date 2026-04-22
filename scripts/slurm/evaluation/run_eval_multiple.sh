@@ -6,6 +6,9 @@
 # Define a list of experiment directories
 declare -a experiments=(
 
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2024-11-02/ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2024-11-01/ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
+
 #     2025-11-12/
 #     "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_MissingHigh_ssptf_MTRNN-markovMiss_varySampRatios"
 #     "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_MissingMedium_ssptf_MTRNN-markovMiss_varySampRatios"
@@ -22,58 +25,58 @@ declare -a experiments=(
 #     "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-14/deigo_cluster/20251114_Lorenz_markovMissing0.8_ptf_MTRNN_varySampRatios_3or9alphas_allLoss"
 #     "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-14/deigo_cluster/20251114_XHRO_ssHIGH-AllLoss_MTRNN_SampRatios_3Subjs_hdim256_alphaDim9_1Dchannel"
 
-# 2025-11-15/
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-15/deigo_cluster/20251114_Lorenz_markovMissing0.8_SS_MTRNN_varySampRatios_3or9alphas_allLoss"
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-15/deigo_cluster/20251114_Lorenz_markovMissing0.8_ptf_MTRNN_varySampRatios_3or9alphas_allLoss"
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-15/deigo_cluster/20251114_XHRO_ssHIGH-AllLoss_MTRNN_SampRatios_3Subjs_hdim256_alphaDim9_1Dchannel"
+# # 2025-11-15/
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-15/deigo_cluster/20251114_Lorenz_markovMissing0.8_SS_MTRNN_varySampRatios_3or9alphas_allLoss"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-15/deigo_cluster/20251114_Lorenz_markovMissing0.8_ptf_MTRNN_varySampRatios_3or9alphas_allLoss"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-15/deigo_cluster/20251114_XHRO_ssHIGH-AllLoss_MTRNN_SampRatios_3Subjs_hdim256_alphaDim9_1Dchannel"
 
-# 2026-01-14/
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch"
+# # 2026-01-14/
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch"
 
-# 2026-01-16/
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-16/deigo_cluster/20260116_XHRO_len500_drop0.1_ss0.1-AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000"
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-16/deigo_cluster/20260116_XHRO_ss0.1-AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000"
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-16/deigo_cluster/20260116_XHRO_sss-AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000"
+# # 2026-01-16/
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-16/deigo_cluster/20260116_XHRO_len500_drop0.1_ss0.1-AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-16/deigo_cluster/20260116_XHRO_ss0.1-AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-16/deigo_cluster/20260116_XHRO_sss-AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000"
 
-# 2026-01-18/
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-18/deigo_cluster/20260118_XHRO_len500_drop0.1_ss0.4-_AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000"
+# # 2026-01-18/
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-18/deigo_cluster/20260118_XHRO_len500_drop0.1_ss0.4-_AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000"
 
-# 2026-01-21/
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-21/deigo_cluster/20260121_XHRO_len1000_drop0_ss0.5-_AllLoss_MT-RNN_Subj70_ch3-4_h1000"
+# # 2026-01-21/
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-21/deigo_cluster/20260121_XHRO_len1000_drop0_ss0.5-_AllLoss_MT-RNN_Subj70_ch3-4_h1000"
 
-# 2026-01-22/
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-22/deigo_cluster/20260122_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MT-RNN_Subj70_ch1-2_h1000"
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-22/deigo_cluster/20260122_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_v-LSRNN_Subj70_ch3-4_h1000"
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-22/deigo_cluster/20260122_XHRO_len1000_drop0_ptf0.6-_clip1_AllLoss_MT-RNN_Subj70_ch3-4_h1000"
+# # 2026-01-22/
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-22/deigo_cluster/20260122_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MT-RNN_Subj70_ch1-2_h1000"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-22/deigo_cluster/20260122_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_v-LSRNN_Subj70_ch3-4_h1000"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-22/deigo_cluster/20260122_XHRO_len1000_drop0_ptf0.6-_clip1_AllLoss_MT-RNN_Subj70_ch3-4_h1000"
 
-# 2026-01-24/
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-24/deigo_cluster/20260123_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSRNN_Subj70_ch3-4_h100"
+# # 2026-01-24/
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-24/deigo_cluster/20260123_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSRNN_Subj70_ch3-4_h100"
 
-# 2026-01-25/
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-25/deigo_cluster/20260125_32mem_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100"
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-25/deigo_cluster/20260125_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100"
+# # 2026-01-25/
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-25/deigo_cluster/20260125_32mem_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-25/deigo_cluster/20260125_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100"
 
-# 2026-01-27/
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-27/deigo_cluster/20260126_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100"
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-27/deigo_cluster/20260127_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_hdims"
+# # 2026-01-27/
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-27/deigo_cluster/20260126_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-27/deigo_cluster/20260127_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_hdims"
 
-# 2026-01-28/
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-28/deigo_cluster/20260128_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_hdims_ptientHigh"
+# # 2026-01-28/
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-28/deigo_cluster/20260128_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_hdims_ptientHigh"
 
-# 2026-01-29/
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-29/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
+# # 2026-01-29/
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-29/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
 
-# 2026-01-30/
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-30/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
+# # 2026-01-30/
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-30/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
 
-# 2026-02-06/
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-06/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
+# # 2026-02-06/
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-06/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
 
-# 2026-02-12/
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh"
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNN_hdi20_ptientHigh"
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_hdi20s_ptientHigh"
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MTRNN_hdi20-40_ptientHigh"
+# # 2026-02-12/
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNN_hdi20_ptientHigh"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_hdi20s_ptientHigh"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MTRNN_hdi20-40_ptientHigh"
 
     # Add more directories here as needed
 )

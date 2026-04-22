@@ -3,22 +3,42 @@
 # Script to generate and submit SLURM jobs for aggregating evaluation results using aggregate_evaluation_results.py
 # Edit the experiments dict below to add/remove target directories
 
-# Define experiment/parameter pairs using an associative array (dictionary).
-# The key is the experiment directory, and the value is the full command-line arguments after the script path.
-# Example: ["/path/to/exp"]="--parameters sampling_ratio mask_label --filter dim_rnn=64"
-declare -A experiments=(
+# Define experiment runs as a standard array (list).
+# Format: "experiment_directory --parameters param1 param2 --filter key=val"
+experiments=(
+    #
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2024-11-02/ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios --parameters sampling_ratio mask_label"
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2024-11-01/ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios --parameters sampling_ratio mask_label"
+
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch --parameters observation_process sampling_ratio"
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch --parameters observation_process sampling_ratio"
+    # # 2026-01-25/
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-25/deigo_cluster/20260125_32mem_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100 --parameters observation_process sampling_ratio"
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-25/deigo_cluster/20260125_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100 --parameters observation_process sampling_ratio"
+
+    # # 2026-01-27/
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-27/deigo_cluster/20260126_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100 --parameters observation_process sampling_ratio"
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-27/deigo_cluster/20260127_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_hdims --parameters observation_process sampling_ratio"
+
+    # 2026-01-28/
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-28/deigo_cluster/20260128_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_hdims_ptientHigh --parameters dim_rnn sampling_ratio"
+
+    # # 2026-01-29/
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-29/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh --parameters observation_process sampling_ratio"
+
+    # # 2026-01-30/
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-30/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh --parameters observation_process sampling_ratio"
+
     # 2026-01-14/
-    # ["/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch"]="--parameters sampling_ratio --filter loss_mask_mode=none dataset_label=XHRO_02_XH070"
-    ["/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch"]="--parameters tag sampling_ratio --filter dataset_label=XHRO_02_XH070"
-    ["/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch"]="--parameters observation_process sampling_ratio  --filter dataset_label=XHRO_02_XH070 tag=MT_RNN"
-
-
-    # ["/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh"]="--parameters sampling_ratio mask_label"
-    # ["/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNN_hdi20_ptientHigh"]="--parameters sampling_ratio mask_label"
-    # ["/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_hdi20s_ptientHigh"]="--parameters sampling_ratio mask_label"
-    # ["/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MTRNN_hdi20-40_ptientHigh"]="--parameters sampling_ratio mask_label"
-
-    # Add more key-value pairs here as needed: ["/path/to/exp"]="--parameters param1 param2 --filter key=val"
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch --parameters sampling_ratio --filter loss_mask_mode=none dataset_label=XHRO_02_XH070"
+    # used
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch --parameters tag sampling_ratio --filter dataset_label=XHRO_02_XH070"
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch --parameters observation_process sampling_ratio  --filter dataset_label=XHRO_02_XH070 tag=MT_RNN"
+    # 2026-02-12/
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh --parameters sampling_ratio mask_label"
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNN_hdi20_ptientHigh --parameters sampling_ratio mask_label --filter tag=MT-RNN"
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_hdi20s_ptientHigh --parameters sampling_ratio mask_label"
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MTRNN_hdi20-40_ptientHigh --parameters sampling_ratio mask_label"
 )
 
 # Get the current date in YYYY-MM-DD format
@@ -31,9 +51,14 @@ VENV_PATH=~/containers/venvs/research-DVAE/
 DATA_HOST_PATH=/bucket/DoyaU/stash/research-DVAE/data
 SAVED_HOST_PATH=/flash/DoyaU/stash/research-DVAE/saved_model
 
-# Loop over each experiment directory in the dictionary
-for EXPERIMENT_DIR in "${!experiments[@]}"; do
-    FULL_ARGS="${experiments[$EXPERIMENT_DIR]}"
+# Loop over each experiment entry in the array
+job_index=0
+for entry in "${experiments[@]}"; do
+    job_index=$((job_index + 1))
+
+    # Extract directory (first word) and arguments (everything else)
+    EXPERIMENT_DIR="${entry%% *}"
+    FULL_ARGS="${entry#* }"
 
     if [ -z "$FULL_ARGS" ]; then
         echo "[bash] Skipping entry with empty arguments for directory: $EXPERIMENT_DIR"
@@ -89,18 +114,18 @@ for EXPERIMENT_DIR in "${!experiments[@]}"; do
     mkdir -p "$OUTPUT_DIR_HOST"
 
     # Temporary SLURM script
-    SLURM_SCRIPT="scripts/slurm/temp/run_agg_${EXPERIMENT_BASENAME}.slurm"
+    SLURM_SCRIPT="scripts/slurm/temp/run_agg_${EXPERIMENT_BASENAME}_${job_index}.slurm"
 
     cat > "$SLURM_SCRIPT" <<EOL
 #!/bin/bash
-#SBATCH --job-name=${EXPERIMENT_BASENAME}_agg
+#SBATCH --job-name=${EXPERIMENT_BASENAME}_agg_${job_index}
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=04:00:00
-#SBATCH --output=${LOG_DIR}/%j_agg_${EXPERIMENT_BASENAME}.log
-#SBATCH --error=${LOG_DIR}/%j_agg_${EXPERIMENT_BASENAME}.err
+#SBATCH --output=${LOG_DIR}/%j_agg_${EXPERIMENT_BASENAME}_${job_index}.log
+#SBATCH --error=${LOG_DIR}/%j_agg_${EXPERIMENT_BASENAME}_${job_index}.err
 #SBATCH --partition=compute
 
 # Define variables
@@ -115,7 +140,7 @@ LOG_DIR=$LOG_DIR
 echo "[slurm] Time BEGIN: \$(date)"
 echo "[slurm] Running on host: \$(hostname)"
 echo "[slurm] Under SLURM JobID: \$SLURM_JOBID"
-echo "[slurm] Log file: \${LOG_DIR}/%j_agg_${EXPERIMENT_BASENAME}.log"
+echo "[slurm] Log file: \${LOG_DIR}/%j_agg_${EXPERIMENT_BASENAME}_${job_index}.log"
 echo "[slurm] EXPERIMENT_CONTAINER_PATH: $EXPERIMENT_CONTAINER_PATH"
 echo "[slurm] Parameters: $PARAMETERS"
 echo "[slurm] Filters: $FILTERS"
