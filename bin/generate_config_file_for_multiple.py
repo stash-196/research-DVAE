@@ -53,23 +53,23 @@ if __name__ == "__main__":
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
     experiment_name = (
-        "20260212_"
+        "20260421-"
         # + "XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
-        + "Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh"
+        + "Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNNonly_hdimS"
     )
     print("Experiment name:", experiment_name)
 
     models = [
-        "RNN",
+        # "RNN",
         # "VRNN",
-        # "MT_RNN",
+        "MT_RNN",
         # "MT_VRNN"
     ]
     rnn_types = [
         # "PLRNN",
-        # "RNN",
+        "RNN",
         # "shPLRNN",
-        "LSTM",
+        # "LSTM",
     ]
 
     # Change to dictionary of lists
@@ -79,7 +79,7 @@ if __name__ == "__main__":
     z_dim = [9]
     dense_z = [[16, 32]]
 
-    dim_rnn = [20]
+    dim_rnn = [5, 10, 20, 40]
     alphas = [
         [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
         # [0.1],
@@ -120,13 +120,13 @@ if __name__ == "__main__":
         # 0.6,
         0.7,
         0.8,
-        # 0.9,
+        0.9,
     ]
     auto_warm_start = [
-        # 0.0,
+        0.0,
         # 0.1,
         # 0.2,
-        0.5,
+        # 0.5,
     ]
 
     mask_autonomous_filled = [False]
