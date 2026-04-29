@@ -257,10 +257,7 @@ if __name__ == "__main__":
         # For longer sequence
         ############################################################################
 
-        if learning_algo.dataset_name == "Lorenz63":
-            new_seq_len = 10000
-        else:
-            new_seq_len = min(10000, len(test_dataloader.dataset.seq))
+        new_seq_len = min(20000, len(test_dataloader.dataset.seq))
         print(f"[Eval] New sequence length: {new_seq_len}")
         test_dataloader.dataset.update_sequence_length(new_seq_len)
         # Prepare the long sequence data
@@ -337,6 +334,22 @@ if __name__ == "__main__":
             ):
                 metrics[f"spectrum_error_{key}"] = float(error)
 
+            # Compute MSE for GT vs TF and GT vs Auto
+            gt_tf = batch_data_long[~autonomous_mode_selector_long.bool()]
+            recon_tf = recon_data_long[~autonomous_mode_selector_long.bool()]
+            mse_tf = np.mean((gt_tf - recon_tf) ** 2)
+            
+            gt_auto = batch_data_long[autonomous_mode_selector_long.bool()]
+            recon_auto = recon_data_long[autonomous_mode_selector_long.bool()]
+            mse_auto = np.mean((gt_auto - recon_auto) ** 2)
+            
+            print(f"[Eval] MSE Teacher-forced: {mse_tf:.6f}")
+            print(f"[Eval] MSE Autonomous: {mse_auto:.6f}")
+            
+            # Add MSE to metrics
+            metrics["mse_tf"] = float(mse_tf)
+            metrics["mse_auto"] = float(mse_auto)
+
             if learning_algo.dataset_name == "Lorenz63":
                 time_delay = 10
                 delay_embedding_dimensions = 3
@@ -398,6 +411,8 @@ if __name__ == "__main__":
             with open(log_file, "w") as f:
                 f.write(f"KL Teacher-forced: {kl_tf_error:.4f}\n")
                 f.write(f"KL Autonomous: {kl_auto_error:.4f}\n")
+                f.write(f"MSE Teacher-forced: {mse_tf:.6f}\n")
+                f.write(f"MSE Autonomous: {mse_auto:.6f}\n")
 
             if True:
                 visualize_delay_embedding(
@@ -480,80 +495,80 @@ if __name__ == "__main__":
     # Wait for parallel visualizations to complete (optional - can be removed if not needed)
     # The YAML is already saved above, so we can exit early if desired
 
-        #     ############################################################################
-        #     # Prepare shorter sequence data
-        #     # Single batch for demonstration
-        #     new_seq_len = 2000
-        #     test_dataloader.dataset.update_sequence_length(new_seq_len)
-        #     batch_data = next(iter(test_dataloader))
-        #     batch_data = batch_data.to(device)
-        #     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
-        #     batch_data = batch_data.permute(1, 0, 2)
-        #     seq_len, batch_size, x_dim = batch_data.shape
-        #     half_point = seq_len // 2
-        #     num_iterations = 100
-        #     # iterated batch data of single series To calculate the accuracy measure for the same time series
-        #     batch_data_repeated = batch_data.repeat(1, num_iterations, 1)
+    #     ############################################################################
+    #     # Prepare shorter sequence data
+    #     # Single batch for demonstration
+    #     new_seq_len = 2000
+    #     test_dataloader.dataset.update_sequence_length(new_seq_len)
+    #     batch_data = next(iter(test_dataloader))
+    #     batch_data = batch_data.to(device)
+    #     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
+    #     batch_data = batch_data.permute(1, 0, 2)
+    #     seq_len, batch_size, x_dim = batch_data.shape
+    #     half_point = seq_len // 2
+    #     num_iterations = 100
+    #     # iterated batch data of single series To calculate the accuracy measure for the same time series
+    #     batch_data_repeated = batch_data.repeat(1, num_iterations, 1)
 
-        #     autonomous_mode_selector = create_autonomous_mode_selector(
-        #         seq_len,
-        #         "even_bursts",
-        #         autonomous_ratio=0.1,
-        #     ).astype(bool)
-        #     expanded_autonomous_mode_selector = expand_autonomous_mode_selector(
-        #         autonomous_mode_selector, x_dim
-        #     )
+    #     autonomous_mode_selector = create_autonomous_mode_selector(
+    #         seq_len,
+    #         "even_bursts",
+    #         autonomous_ratio=0.1,
+    #     ).astype(bool)
+    #     expanded_autonomous_mode_selector = expand_autonomous_mode_selector(
+    #         autonomous_mode_selector, x_dim
+    #     )
 
-        #     # turn input into tensor and send to GPU if needed
-        #     batch_data_repeated_tensor = torch.tensor(
-        #         batch_data_repeated, device=dvae.device
-        #     )
-        #     recon_data_repeated = (
-        #         dvae(batch_data_repeated_tensor, mode_selector=autonomous_mode_selector)
-        #         .cpu()
-        #         .numpy()
-        #     )
+    #     # turn input into tensor and send to GPU if needed
+    #     batch_data_repeated_tensor = torch.tensor(
+    #         batch_data_repeated, device=dvae.device
+    #     )
+    #     recon_data_repeated = (
+    #         dvae(batch_data_repeated_tensor, mode_selector=autonomous_mode_selector)
+    #         .cpu()
+    #         .numpy()
+    #     )
 
-        #     batch_data_repeated = batch_data_repeated.reshape(
-        #         seq_len, batch_size, num_iterations, x_dim
-        #     )
-        #     recon_data_repeated = recon_data_repeated.reshape(
-        #         seq_len, batch_size, num_iterations, x_dim
-        #     )
+    #     batch_data_repeated = batch_data_repeated.reshape(
+    #         seq_len, batch_size, num_iterations, x_dim
+    #     )
+    #     recon_data_repeated = recon_data_repeated.reshape(
+    #         seq_len, batch_size, num_iterations, x_dim
+    #     )
 
-        #     # Calculate expected RMSE
-        #     expected_rmse, expected_rmse_variance = calculate_expected_accuracy(
-        #         batch_data_repeated, recon_data_repeated, rmse
-        #     )
+    #     # Calculate expected RMSE
+    #     expected_rmse, expected_rmse_variance = calculate_expected_accuracy(
+    #         batch_data_repeated, recon_data_repeated, rmse
+    #     )
 
-        #     # Calculate expected R^2
-        #     expected_r2, expected_r2_variance = calculate_expected_accuracy(
-        #         batch_data_repeated, recon_data_repeated, r_squared
-        #     )
+    #     # Calculate expected R^2
+    #     expected_r2, expected_r2_variance = calculate_expected_accuracy(
+    #         batch_data_repeated, recon_data_repeated, r_squared
+    #     )
 
-        #     # Visualize results
-        #     save_dir = os.path.dirname(params["saved_dict"])
+    #     # Visualize results
+    #     save_dir = os.path.dirname(params["saved_dict"])
 
-        #     visualize_accuracy_over_time(
-        #         expected_rmse,
-        #         expected_rmse_variance,
-        #         save_dir,
-        #         measure="rsme",
-        #         num_batches=batch_size,
-        #         num_iter=num_iterations,
-        #         explain="over multiple series",
-        #         autonomous_mode_selector=expanded_autonomous_mode_selector,
-        #     )
-        #     visualize_accuracy_over_time(
-        #         expected_r2,
-        #         expected_r2_variance,
-        #         save_dir,
-        #         measure="r2",
-        #         num_batches=batch_size,
-        #         num_iter=num_iterations,
-        #         explain="over multiple series",
-        #         autonomous_mode_selector=expanded_autonomous_mode_selector,
-        #     )
+    #     visualize_accuracy_over_time(
+    #         expected_rmse,
+    #         expected_rmse_variance,
+    #         save_dir,
+    #         measure="rsme",
+    #         num_batches=batch_size,
+    #         num_iter=num_iterations,
+    #         explain="over multiple series",
+    #         autonomous_mode_selector=expanded_autonomous_mode_selector,
+    #     )
+    #     visualize_accuracy_over_time(
+    #         expected_r2,
+    #         expected_r2_variance,
+    #         save_dir,
+    #         measure="r2",
+    #         num_batches=batch_size,
+    #         num_iter=num_iterations,
+    #         explain="over multiple series",
+    #         autonomous_mode_selector=expanded_autonomous_mode_selector,
+    #     )
 
     #     # Check if the model has a z variable
     #     if hasattr(dvae, "z_mean"):
