@@ -316,6 +316,8 @@ if __name__ == "__main__":
             )
 
             # Run spectrum analysis and visualization
+            print("[Eval] [CHECKPOINT] Starting spectrum analysis...")
+            sys.stdout.flush()
             spectrum_results = run_spectrum_analysis(
                 test_dataloader=test_dataloader,
                 recon_data_long=recon_data_long,
@@ -327,6 +329,8 @@ if __name__ == "__main__":
                 cfg=cfg,
                 dvae_model=dvae,
             )
+            print("[Eval] [CHECKPOINT] Spectrum analysis completed")
+            sys.stdout.flush()
 
             # Add spectrum errors to metrics
             for key, error in zip(
@@ -335,6 +339,8 @@ if __name__ == "__main__":
             ):
                 metrics[f"spectrum_error_{key}"] = float(error)
 
+            print("[Eval] [CHECKPOINT] Starting MSE analysis...")
+            sys.stdout.flush()
             mse_results = run_mse_analysis(
                 test_dataloader=test_dataloader,
                 recon_data_long=recon_data_long,
@@ -344,11 +350,16 @@ if __name__ == "__main__":
                 dataset_name=learning_algo.dataset_name,
                 batch_data_long=batch_data_long,
             )
+            print("[Eval] [CHECKPOINT] MSE analysis completed")
+            sys.stdout.flush()
+
             for key, error in zip(
                 mse_results["signal_keys"], mse_results["mse_errors"]
             ):
                 metrics[f"mse_{key}"] = float(error)
 
+            print("[Eval] [CHECKPOINT] Starting geometry analysis...")
+            sys.stdout.flush()
             geom_results = run_geometry_analysis(
                 test_dataloader=test_dataloader,
                 recon_data_long=recon_data_long,
@@ -358,6 +369,9 @@ if __name__ == "__main__":
                 dataset_name=learning_algo.dataset_name,
                 batch_data_long=batch_data_long,
             )
+            print("[Eval] [CHECKPOINT] Geometry analysis completed")
+            sys.stdout.flush()
+
             for key, error in zip(
                 geom_results["signal_keys"], geom_results["kld_scores"]
             ):
@@ -450,10 +464,15 @@ if __name__ == "__main__":
             with open(metrics_file, "w") as f:
                 yaml.dump(metrics, f, default_flow_style=False)
             print(f"[Eval] Metrics saved to: {metrics_file}")
+            sys.stdout.flush()
 
+            print("[Eval] [CHECKPOINT] Starting parallel visualizations...")
+            sys.stdout.flush()
             run_parallel_visualizations(
                 visualize_embedding_space, vis_embedding_space_params
             )
+            print("[Eval] [CHECKPOINT] Parallel visualizations completed")
+            sys.stdout.flush()
 
             # break after the first batch
             break
@@ -472,6 +491,8 @@ if __name__ == "__main__":
         #   - We compute ΔMSE = ||d||^2 + 2*(d^T e), which directly measures
         #     the change in MSE when switching from TF to Auto.
         #
+        print("[Eval] [CHECKPOINT] Starting local drift statistics computation...")
+        sys.stdout.flush()
         new_seq_len_short = 60  # Short sequences to stay in linear regime
         test_dataloader.dataset.update_sequence_length(new_seq_len_short)
 
@@ -481,6 +502,8 @@ if __name__ == "__main__":
         drift_per_step_delta_mse_list = []
 
         for batch_idx, batch_data in enumerate(test_dataloader):
+            print(f"[Eval] [CHECKPOINT] Processing drift batch {batch_idx}...")
+            sys.stdout.flush()
             batch_data = batch_data.to(device).permute(
                 1, 0, 2
             )  # (seq_len, batch_size, x_dim)
@@ -498,6 +521,9 @@ if __name__ == "__main__":
                 auto_len=auto_len,
                 device=device,
             )
+            print(f"[Eval] [CHECKPOINT] Drift batch {batch_idx} computed")
+            sys.stdout.flush()
+
             drift_stats_list.append(stats)
             # Average per-step values across samples so each batch contributes
             # a (auto_len,) vector. This avoids shape mismatches when the
@@ -511,6 +537,9 @@ if __name__ == "__main__":
             # Limit to first 50 batches for computational efficiency
             if batch_idx >= 49:
                 break
+
+        print("[Eval] [CHECKPOINT] Local drift statistics computation completed")
+        sys.stdout.flush()
 
         # Aggregate drift statistics across all batches
         # Each stat in drift_stats_list is a dict with 'd_norm', 'cross_term', 'delta_mse'
@@ -566,130 +595,15 @@ if __name__ == "__main__":
     # Wait for parallel visualizations to complete (optional - can be removed if not needed)
     # The YAML is already saved above, so we can exit early if desired
 
-    #     ############################################################################
-    #     # Prepare shorter sequence data
-    #     # Single batch for demonstration
-    #     new_seq_len = 2000
-    #     test_dataloader.dataset.update_sequence_length(new_seq_len)
-    #     batch_data = next(iter(test_dataloader))
-    #     batch_data = batch_data.to(device)
-    #     # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
-    #     batch_data = batch_data.permute(1, 0, 2)
-    #     seq_len, batch_size, x_dim = batch_data.shape
-    #     half_point = seq_len // 2
-    #     num_iterations = 100
-    #     # iterated batch data of single series To calculate the accuracy measure for the same time series
-    #     batch_data_repeated = batch_data.repeat(1, num_iterations, 1)
-
-    #     autonomous_mode_selector = create_autonomous_mode_selector(
-    #         seq_len,
-    #         "even_bursts",
-    #         autonomous_ratio=0.1,
-    #     ).astype(bool)
-    #     expanded_autonomous_mode_selector = expand_autonomous_mode_selector(
-    #         autonomous_mode_selector, x_dim
-    #     )
-
-    #     # turn input into tensor and send to GPU if needed
-    #     batch_data_repeated_tensor = torch.tensor(
-    #         batch_data_repeated, device=dvae.device
-    #     )
-    #     recon_data_repeated = (
-    #         dvae(batch_data_repeated_tensor, mode_selector=autonomous_mode_selector)
-    #         .cpu()
-    #         .numpy()
-    #     )
-
-    #     batch_data_repeated = batch_data_repeated.reshape(
-    #         seq_len, batch_size, num_iterations, x_dim
-    #     )
-    #     recon_data_repeated = recon_data_repeated.reshape(
-    #         seq_len, batch_size, num_iterations, x_dim
-    #     )
-
-    #     # Calculate expected RMSE
-    #     expected_rmse, expected_rmse_variance = calculate_expected_accuracy(
-    #         batch_data_repeated, recon_data_repeated, rmse
-    #     )
-
-    #     # Calculate expected R^2
-    #     expected_r2, expected_r2_variance = calculate_expected_accuracy(
-    #         batch_data_repeated, recon_data_repeated, r_squared
-    #     )
-
-    #     # Visualize results
-    #     save_dir = os.path.dirname(params["saved_dict"])
-
-    #     visualize_accuracy_over_time(
-    #         expected_rmse,
-    #         expected_rmse_variance,
-    #         save_dir,
-    #         measure="rsme",
-    #         num_batches=batch_size,
-    #         num_iter=num_iterations,
-    #         explain="over multiple series",
-    #         autonomous_mode_selector=expanded_autonomous_mode_selector,
-    #     )
-    #     visualize_accuracy_over_time(
-    #         expected_r2,
-    #         expected_r2_variance,
-    #         save_dir,
-    #         measure="r2",
-    #         num_batches=batch_size,
-    #         num_iter=num_iterations,
-    #         explain="over multiple series",
-    #         autonomous_mode_selector=expanded_autonomous_mode_selector,
-    #     )
-
-    #     # Check if the model has a z variable
-    #     if hasattr(dvae, "z_mean"):
-    #         # visualize the latent states
-    #         visualize_variable_evolution(
-    #             dvae.z_mean,
-    #             batch_data=batch_data,
-    #             save_dir=save_fig_dir,
-    #             variable_name=f"z_mean_posterior",
-    #             add_lines_lst=[half_point],
-    #         )
-    #         visualize_variable_evolution(
-    #             dvae.z_logvar,
-    #             batch_data=batch_data,
-    #             save_dir=save_fig_dir,
-    #             variable_name=f"z_logvar_posterior",
-    #             add_lines_lst=[half_point],
-    #         )
-    #         visualize_variable_evolution(
-    #             dvae.z_mean_p,
-    #             batch_data=batch_data,
-    #             save_dir=save_fig_dir,
-    #             variable_name=f"z_mean_prior",
-    #             add_lines_lst=[half_point],
-    #         )
-    #         visualize_variable_evolution(
-    #             dvae.z_logvar_p,
-    #             batch_data=batch_data,
-    #             save_dir=save_fig_dir,
-    #             variable_name=f"z_logvar_prior",
-    #             add_lines_lst=[half_point],
-    #         )
-
-    #     # Plot the reconstruction vs true sequence
-    #     visualize_teacherforcing_2_autonomous(
-    #         batch_data,
-    #         dvae,
-    #         mode_selector=autonomous_mode_selector,
-    #         save_path=save_fig_dir,
-    #         explain="final_generative_mode",
-    #         inference_mode=False,
-    #     )
-    #     visualize_teacherforcing_2_autonomous(
-    #         batch_data,
-    #         dvae,
-    #         mode_selector=autonomous_mode_selector,
-    #         save_path=save_fig_dir,
-    #         explain="final_inference_mode",
-    #         inference_mode=True,
-    #     )
+    print("[Eval] [CHECKPOINT] Saving final evaluation summary YAML...")
+    sys.stdout.flush()
+    # Save the metrics as YAML (human-readable JSON-like format)
+    metrics_file = os.path.join(save_dir, "evaluation_summary.yaml")
+    with open(metrics_file, "w") as f:
+        yaml.dump(metrics, f, default_flow_style=False)
+    print(f"[Eval] Metrics saved to: {metrics_file}")
+    print("[Eval] [CHECKPOINT] Evaluation completed successfully!")
+    sys.stdout.flush()
 
     # Save the metrics as YAML (human-readable JSON-like format)
     metrics_file = os.path.join(save_dir, "evaluation_summary.yaml")

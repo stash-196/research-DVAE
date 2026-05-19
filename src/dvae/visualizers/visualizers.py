@@ -23,6 +23,9 @@ matplotlib.use("Agg")  # Set the backend to 'Agg' to avoid GUI issues
 # plt.rcParams["font.family"] = "Liberation Serif"
 
 
+import torch
+
+
 def get_plot_config(paper_ready=True):
     """
     Updates Matplotlib's global plotting settings for exploratory or publication-quality figures,
@@ -556,9 +559,22 @@ def visualize_teacherforcing_2_autonomous(
             auto_mode_selector[:n_seq, 0, :].reshape(-1).cpu().numpy()
         )
         if noise_selector is not None:
-            noise_series = (
-                dvae.noise_vals[:n_seq, 0, :].reshape(-1).cpu().numpy()
-            )  # not used for now
+            nv = None
+            if hasattr(dvae, "noise_values"):
+                nv = getattr(dvae, "noise_values")
+            elif hasattr(dvae, "noise_vals"):
+                nv = getattr(dvae, "noise_vals")
+
+            if nv is not None:
+                if torch.is_tensor(nv):
+                    tmp = nv[:n_seq, 0, :].reshape(-1)
+                    if getattr(tmp, "requires_grad", False):
+                        tmp = tmp.detach()
+                    noise_series = tmp.cpu().numpy()
+                else:
+                    noise_series = np.array(nv[:n_seq, 0, :].reshape(-1))
+            else:
+                noise_series = None
         else:
             noise_series = None
     else:
@@ -569,9 +585,22 @@ def visualize_teacherforcing_2_autonomous(
         )  # Shape: (n_seq, x_dim)
         expanded_mode_selector = auto_mode_selector[:n_seq, 0, :].cpu().numpy()
         if noise_selector is not None:
-            noise_series = (
-                dvae.noise_vals[:n_seq, 0, :].cpu().numpy()
-            )  # not used for now
+            nv = None
+            if hasattr(dvae, "noise_values"):
+                nv = getattr(dvae, "noise_values")
+            elif hasattr(dvae, "noise_vals"):
+                nv = getattr(dvae, "noise_vals")
+
+            if nv is not None:
+                if torch.is_tensor(nv):
+                    tmp = nv[:n_seq, 0, :]
+                    if getattr(tmp, "requires_grad", False):
+                        tmp = tmp.detach()
+                    noise_series = tmp.cpu().numpy()
+                else:
+                    noise_series = np.array(nv[:n_seq, 0, :])
+            else:
+                noise_series = None
         else:
             noise_series = None
 
