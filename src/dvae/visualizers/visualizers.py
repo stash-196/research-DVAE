@@ -557,7 +557,7 @@ def visualize_teacherforcing_2_autonomous(
         )
         if noise_selector is not None:
             noise_series = (
-                dvae.noise_values[:n_seq, 0, :].reshape(-1).cpu().numpy()
+                dvae.noise_vals[:n_seq, 0, :].reshape(-1).cpu().numpy()
             )  # not used for now
         else:
             noise_series = None
@@ -570,7 +570,7 @@ def visualize_teacherforcing_2_autonomous(
         expanded_mode_selector = auto_mode_selector[:n_seq, 0, :].cpu().numpy()
         if noise_selector is not None:
             noise_series = (
-                dvae.noise_values[:n_seq, 0, :].cpu().numpy()
+                dvae.noise_vals[:n_seq, 0, :].cpu().numpy()
             )  # not used for now
         else:
             noise_series = None

@@ -4,7 +4,7 @@
 BASE_DIR=~/workspace/research-DVAE/config/general_signal/generated
 
 # Define a list of experiment names, each corresponding to a subdirectory under BASE_DIR
-declare -a experiments=("20260421-Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNNonly_hdimS")
+declare -a experiments=("20260426-2-Lorenz_noise0.2-0.8_epoch10000_len1000_NoMiss_clip1_LossNone_MTRNN_alphas3d_hdim40")
 
 # Get the current date in YYYY-MM-DD format
 today=$(date +%Y-%m-%d)
@@ -47,7 +47,7 @@ for experiment in "${experiments[@]}"; do
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --time=2-00:00:00
+#SBATCH --time=3-00:00:00
 #SBATCH --output=${LOG_DIR}/%j_training_${CONFIG_BASENAME}.log
 #SBATCH --error=${LOG_DIR}/%j_training_${CONFIG_BASENAME}.err
 #SBATCH --partition=compute

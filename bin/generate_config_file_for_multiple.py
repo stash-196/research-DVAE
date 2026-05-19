@@ -53,9 +53,9 @@ if __name__ == "__main__":
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
     experiment_name = (
-        "20260421-"
+        "20260519-"
         # + "XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
-        + "Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNNonly_hdimS"
+        + "Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_MTRNN_alphas3d_hdim40"
     )
     print("Experiment name:", experiment_name)
 
@@ -79,9 +79,9 @@ if __name__ == "__main__":
     z_dim = [9]
     dense_z = [[16, 32]]
 
-    dim_rnn = [5, 10, 20, 40]
+    dim_rnn = [40]
     alphas = [
-        [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
+        [0.1, 0.1, 0.1],
         # [0.1],
         # [0.1, 0.1],
         # [0.1, 0.1, 0.1],
@@ -93,6 +93,7 @@ if __name__ == "__main__":
         0.0,
         # 0.1,
     ]
+
 
     # Training
     lr = [0.001]
@@ -112,15 +113,15 @@ if __name__ == "__main__":
         0.0,
         # 0.01,
         # 0.05,
-        0.1,
-        # 0.2,
-        0.3,
-        # 0.4,
-        0.5,
-        # 0.6,
-        0.7,
-        0.8,
-        0.9,
+        # 0.1,
+        # # 0.2,
+        # 0.3,
+        # # 0.4,
+        # 0.5,
+        # # 0.6,
+        # 0.7,
+        # 0.8,
+        # 0.9,
     ]
     auto_warm_start = [
         0.0,
@@ -135,6 +136,20 @@ if __name__ == "__main__":
         # "weighted",
         # "strict",
     ]
+
+    noise_init_ratio = [0.1]
+    noise_mix_ratio = [0.2, 0.5, 0.8]
+    noise_std_factor = [1.0]
+    noise_target = [
+        "both",
+        # "tf_only",
+        # "ar_only", "hybrid_ar",
+        #
+        ]
+    noise_sampling_method = ["ss"]
+    tie_noise_to_auto = [False]
+    noise_warm_reset_on_window = [False]
+    noise_window_size = [100]
 
     # DataFrame
     dataset_name = [
@@ -190,16 +205,16 @@ if __name__ == "__main__":
     elif dataset_name[0] == "Lorenz63":
         mask_label = [
             "None",
-            # "Markov_AvgLen15_0.0",
-            "Markov_AvgLen15_0.1",
-            # "Markov_AvgLen15_0.2",
-            "Markov_AvgLen15_0.3",
-            # "Markov_AvgLen15_0.4",
-            "Markov_AvgLen15_0.5",
-            # "Markov_AvgLen15_0.6",
-            "Markov_AvgLen15_0.7",
-            "Markov_AvgLen15_0.8",
-            # "Markov_AvgLen15_0.9",
+            # # "Markov_AvgLen15_0.0",
+            # "Markov_AvgLen15_0.1",
+            # # "Markov_AvgLen15_0.2",
+            # "Markov_AvgLen15_0.3",
+            # # "Markov_AvgLen15_0.4",
+            # "Markov_AvgLen15_0.5",
+            # # "Markov_AvgLen15_0.6",
+            # "Markov_AvgLen15_0.7",
+            # "Markov_AvgLen15_0.8",
+            # # "Markov_AvgLen15_0.9",
         ]
     else:
         mask_label = [
@@ -268,6 +283,16 @@ if __name__ == "__main__":
             "mask_autonomous_filled": mask_autonomous_filled,
             "auto_warm_start": auto_warm_start,
             "loss_mask_mode": loss_mask_mode,
+            ###### Noise parameters
+            "noise_init_ratio": noise_init_ratio,
+            "noise_mix_ratio": noise_mix_ratio,
+            "noise_std_factor": noise_std_factor,
+            "noise_target": noise_target,
+            "noise_sampling_method": noise_sampling_method,
+            "tie_noise_to_auto": tie_noise_to_auto,
+            "noise_warm_reset_on_window": noise_warm_reset_on_window,
+            "noise_window_size": noise_window_size,
+
             # DataFrame
             "dataset_name": dataset_name,
             "dataset_label": dataset_label,

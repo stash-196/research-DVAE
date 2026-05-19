@@ -39,6 +39,12 @@ experiments=(
     # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNN_hdi20_ptientHigh --parameters sampling_ratio mask_label --filter tag=MT-RNN"
     # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_hdi20s_ptientHigh --parameters sampling_ratio mask_label"
     # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MTRNN_hdi20-40_ptientHigh --parameters sampling_ratio mask_label"
+
+    # 2026-04-2
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-04-21/deigo_cluster/20260421-Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNNonly_hdimS --parameters sampling_ratio mask_label --filter dim_rnn=5"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-04-21/deigo_cluster/20260421-Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNNonly_hdimS --parameters sampling_ratio mask_label --filter dim_rnn=10"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-04-21/deigo_cluster/20260421-Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNNonly_hdimS --parameters sampling_ratio mask_label --filter dim_rnn=20"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-04-21/deigo_cluster/20260421-Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNNonly_hdimS --parameters sampling_ratio mask_label --filter dim_rnn=40"
 )
 
 # Get the current date in YYYY-MM-DD format
