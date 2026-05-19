@@ -7,6 +7,7 @@ Year 2020
 Contact : xiaoyu.bie@inria.fr
 License agreement in LICENSE.txt
 """
+
 import os
 import shutil
 import socket
@@ -179,10 +180,7 @@ class LearningAlgorithm:
         if self.device == "cuda":
             basic_info.append("Cuda verion: {}".format(torch.version.cuda))
         basic_info.append("Model name: {}".format(self.model_name))
-        basic_info.append(
-            "Total params: %.2fM"
-            % (sum(p.numel() for p in self.model.parameters()) / 1000000.0)
-        )
+        basic_info.append("Total params: {:,}".format(self.model.parameter_count()))
 
         return basic_info
 

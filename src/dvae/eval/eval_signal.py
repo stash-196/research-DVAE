@@ -8,7 +8,6 @@ License agreement in LICENSE.txt
 
 import os
 import uuid
-from sklearn import metrics
 import torch
 import argparse
 import json
@@ -43,8 +42,11 @@ from dvae.visualizers import (
 )
 from dvae.eval.utils import (
     run_spectrum_analysis,
+    run_mse_analysis,
+    run_geometry_analysis,
     compute_delay_embedding,
     state_space_kl,
+    compute_local_drift_statistics,
 )
 
 from torch.nn.functional import mse_loss
@@ -52,6 +54,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import pickle
 import configparser
+from typing import Any
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
 
 
@@ -108,10 +111,7 @@ if __name__ == "__main__":
 
     dvae.eval()
     cfg = learning_algo.cfg
-    print(
-        "[Eval] Total params: %.2fM"
-        % (sum(p.numel() for p in dvae.parameters()) / 1000000.0)
-    )
+    print("[Eval] Total params: {:,}".format(dvae.parameter_count()))
 
     # Convert config to dict for YAML
     config_dict = {section: dict(cfg[section]) for section in cfg.sections()}
@@ -153,7 +153,8 @@ if __name__ == "__main__":
     loss_file = os.path.join(save_dir, "loss_model.pckl")
 
     # Initialize metrics
-    metrics = {"params": params}
+    metrics: dict[str, Any] = {"params": params}
+    metrics["total_params"] = int(dvae.parameter_count())
     # Add config to metrics
     metrics["config"] = config_dict
 
@@ -334,67 +335,52 @@ if __name__ == "__main__":
             ):
                 metrics[f"spectrum_error_{key}"] = float(error)
 
-            # Compute MSE for GT vs TF and GT vs Auto
-            gt_tf = batch_data_long[~autonomous_mode_selector_long.bool()]
-            recon_tf = recon_data_long[~autonomous_mode_selector_long.bool()]
-            mse_tf = np.mean((gt_tf - recon_tf) ** 2)
-            
-            gt_auto = batch_data_long[autonomous_mode_selector_long.bool()]
-            recon_auto = recon_data_long[autonomous_mode_selector_long.bool()]
-            mse_auto = np.mean((gt_auto - recon_auto) ** 2)
-            
+            mse_results = run_mse_analysis(
+                test_dataloader=test_dataloader,
+                recon_data_long=recon_data_long,
+                save_fig_dir=save_fig_dir,
+                i=i,
+                autonomous_mode_selector_long=autonomous_mode_selector_long,
+                dataset_name=learning_algo.dataset_name,
+                batch_data_long=batch_data_long,
+            )
+            for key, error in zip(
+                mse_results["signal_keys"], mse_results["mse_errors"]
+            ):
+                metrics[f"mse_{key}"] = float(error)
+
+            geom_results = run_geometry_analysis(
+                test_dataloader=test_dataloader,
+                recon_data_long=recon_data_long,
+                save_fig_dir=save_fig_dir,
+                i=i,
+                autonomous_mode_selector_long=autonomous_mode_selector_long,
+                dataset_name=learning_algo.dataset_name,
+                batch_data_long=batch_data_long,
+            )
+            for key, error in zip(
+                geom_results["signal_keys"], geom_results["kld_scores"]
+            ):
+                metrics[f"kld_{key}"] = float(error)
+
+            # Extract TF and Auto metrics from the analysis results
+            tf_index = geom_results["signal_keys"].index("tf")
+            auto_index = geom_results["signal_keys"].index("auto")
+            mse_tf = mse_results["mse_errors"][tf_index]
+            mse_auto = mse_results["mse_errors"][auto_index]
+            kld_tf = geom_results["kld_scores"][tf_index]
+            kld_auto = geom_results["kld_scores"][auto_index]
+
             print(f"[Eval] MSE Teacher-forced: {mse_tf:.6f}")
             print(f"[Eval] MSE Autonomous: {mse_auto:.6f}")
-            
-            # Add MSE to metrics
-            metrics["mse_tf"] = float(mse_tf)
-            metrics["mse_auto"] = float(mse_auto)
-
-            if learning_algo.dataset_name == "Lorenz63":
-                time_delay = 10
-                delay_embedding_dimensions = 3
-            elif learning_algo.dataset_name in ["Xhro", "SHO", "DampedSHO"]:
-                time_delay = 5
-                delay_embedding_dimensions = 3
-
-            embedded_true_x = compute_delay_embedding(
-                observation=batch_data_long[:, 0, :].reshape(-1).numpy(),
-                delay=time_delay,
-                dimensions=delay_embedding_dimensions,
-            )
-
-            embedded_recon_teacher = compute_delay_embedding(
-                observation=recon_data_long[
-                    ~autonomous_mode_selector_long.bool()  # , 0, :
-                ].reshape(-1),
-                delay=time_delay,
-                dimensions=delay_embedding_dimensions,
-            )
-
-            embedded_recon_auto = compute_delay_embedding(
-                observation=recon_data_long[
-                    autonomous_mode_selector_long.bool(),  # , 0, :
-                ].reshape(-1),
-                delay=time_delay,
-                dimensions=delay_embedding_dimensions,
-            )
-
-            kl_tf_error = state_space_kl(
-                true_traj=embedded_true_x,
-                gen_traj=embedded_recon_teacher,
-                use_gmm=True,
-            )
-            print(f"[Eval] KL Teacher-forced: {kl_tf_error:.4f}")
-            kl_auto_error = state_space_kl(
-                true_traj=embedded_true_x,
-                gen_traj=embedded_recon_auto,
-                use_gmm=True,
-            )
-            print(f"[Eval] KL Autonomous: {kl_auto_error:.4f}")
+            print(f"[Eval] KL Teacher-forced: {kld_tf:.4f}")
+            print(f"[Eval] KL Autonomous: {kld_auto:.4f}")
 
             # Add to metrics
-            metrics["kld_tf"] = float(kl_tf_error)
-            metrics["kld_auto"] = float(kl_auto_error)
+            metrics["mse_tf"] = float(mse_tf)
+            metrics["mse_auto"] = float(mse_auto)
+            metrics["kld_tf"] = float(kld_tf)
+            metrics["kld_auto"] = float(kld_auto)
 
             # Add spectrum distance metrics
             if spectrum_results:
@@ -409,30 +395,10 @@ if __name__ == "__main__":
             # Log the metrics to a file in the same directory as the .pt file
             log_file = os.path.join(save_dir, "evaluation_log.txt")
             with open(log_file, "w") as f:
-                f.write(f"KL Teacher-forced: {kl_tf_error:.4f}\n")
-                f.write(f"KL Autonomous: {kl_auto_error:.4f}\n")
+                f.write(f"KL Teacher-forced: {kld_tf:.4f}\n")
+                f.write(f"KL Autonomous: {kld_auto:.4f}\n")
                 f.write(f"MSE Teacher-forced: {mse_tf:.6f}\n")
                 f.write(f"MSE Autonomous: {mse_auto:.6f}\n")
-
-            if True:
-                visualize_delay_embedding(
-                    embedded=embedded_true_x,
-                    save_dir=save_fig_dir,
-                    variable_name=f"true_signal_inference_mode_τ{time_delay}_d{delay_embedding_dimensions}",
-                    base_color="Blues",
-                )
-                visualize_delay_embedding(
-                    embedded=embedded_recon_teacher,
-                    save_dir=save_fig_dir,
-                    variable_name=f"teacher-forced_reconstruction_inference_mode_τ{time_delay}_d{delay_embedding_dimensions}",
-                    base_color="Greens",
-                )
-                visualize_delay_embedding(
-                    embedded=embedded_recon_auto,
-                    save_dir=save_fig_dir,
-                    variable_name=f"autonomous_reconstruction_inference_mode_τ{time_delay}_d{delay_embedding_dimensions}",
-                    base_color="Reds",
-                )
 
             teacher_forced_mask = ~autonomous_mode_selector_long[:, 0, 0].bool()
             autonomous_mask = autonomous_mode_selector_long[:, 0, 0].bool()
@@ -491,6 +457,111 @@ if __name__ == "__main__":
 
             # break after the first batch
             break
+
+        ##############################################################################
+        # ============================================================
+        # 2. Local drift statistics (NEW - short controlled segments)
+        # ============================================================
+        # This section validates the implicit regularizer theory by measuring
+        # how quickly the autonomous trajectory drifts from the teacher-forced (TF)
+        # trajectory in the *early phase* (20-40 steps) after a fork point.
+        #
+        # Intuition:
+        #   - Small drift + negative cross-term → Auto is self-correcting (good).
+        #   - Large drift or positive cross-term → Auto amplifies errors (bad).
+        #   - We compute ΔMSE = ||d||^2 + 2*(d^T e), which directly measures
+        #     the change in MSE when switching from TF to Auto.
+        #
+        new_seq_len_short = 60  # Short sequences to stay in linear regime
+        test_dataloader.dataset.update_sequence_length(new_seq_len_short)
+
+        drift_stats_list = []
+        drift_per_step_d_norm_list = []
+        drift_per_step_cross_list = []
+        drift_per_step_delta_mse_list = []
+
+        for batch_idx, batch_data in enumerate(test_dataloader):
+            batch_data = batch_data.to(device).permute(
+                1, 0, 2
+            )  # (seq_len, batch_size, x_dim)
+
+            # Choose where to flip from TF to Auto
+            # Typically around 50-60% through the short sequence
+            flip_point = 30
+            auto_len = new_seq_len_short - flip_point
+
+            # Compute drift statistics for this batch
+            stats = compute_local_drift_statistics(
+                dvae=dvae,
+                batch_data=batch_data,
+                flip_point=flip_point,
+                auto_len=auto_len,
+                device=device,
+            )
+            drift_stats_list.append(stats)
+            # Average per-step values across samples so each batch contributes
+            # a (auto_len,) vector. This avoids shape mismatches when the
+            # last batch has a smaller batch_size.
+            drift_per_step_d_norm_list.append(np.mean(stats["per_step_d_norm"], axis=1))
+            drift_per_step_cross_list.append(np.mean(stats["per_step_cross"], axis=1))
+            drift_per_step_delta_mse_list.append(
+                np.mean(stats["per_step_delta_mse"], axis=1)
+            )
+
+            # Limit to first 50 batches for computational efficiency
+            if batch_idx >= 49:
+                break
+
+        # Aggregate drift statistics across all batches
+        # Each stat in drift_stats_list is a dict with 'd_norm', 'cross_term', 'delta_mse'
+        all_d_norm = np.array([s["d_norm"] for s in drift_stats_list])
+        all_cross = np.array([s["cross_term"] for s in drift_stats_list])
+        all_delta_mse = np.array([s["delta_mse"] for s in drift_stats_list])
+
+        # Compute mean and std across batches
+        metrics["local_drift_avg_d_norm"] = float(np.mean(all_d_norm))
+        metrics["local_drift_avg_d_norm_std"] = float(np.std(all_d_norm))
+        metrics["local_drift_avg_cross_term"] = float(np.mean(all_cross))
+        metrics["local_drift_avg_cross_term_std"] = float(np.std(all_cross))
+        metrics["local_drift_avg_delta_mse"] = float(np.mean(all_delta_mse))
+        metrics["local_drift_avg_delta_mse_std"] = float(np.std(all_delta_mse))
+
+        print(
+            f"[Eval] Local Drift - Mean ||d||²: {metrics['local_drift_avg_d_norm']:.6f}"
+        )
+        print(
+            f"[Eval] Local Drift - Mean d^T e: {metrics['local_drift_avg_cross_term']:.6f}"
+        )
+        print(
+            f"[Eval] Local Drift - Mean ΔMSE: {metrics['local_drift_avg_delta_mse']:.6f}"
+        )
+
+        # Optionally save per-step drift growth for visualization
+        # Stack all per-step arrays: (n_batches, auto_len)
+        all_per_step_d_norm = np.stack(drift_per_step_d_norm_list, axis=0)
+        all_per_step_cross = np.stack(drift_per_step_cross_list, axis=0)
+        all_per_step_delta_mse = np.stack(drift_per_step_delta_mse_list, axis=0)
+
+        # Compute mean and std across batches at each step
+        mean_d_norm_over_time = np.mean(all_per_step_d_norm, axis=0)  # (auto_len,)
+        std_d_norm_over_time = np.std(all_per_step_d_norm, axis=0)
+        mean_cross_over_time = np.mean(all_per_step_cross, axis=0)
+        std_cross_over_time = np.std(all_per_step_cross, axis=0)
+        mean_delta_mse_over_time = np.mean(all_per_step_delta_mse, axis=0)
+
+        # Store time series for later visualization/analysis
+        metrics["local_drift_per_step_d_norm_mean"] = mean_d_norm_over_time.tolist()
+        metrics["local_drift_per_step_d_norm_std"] = std_d_norm_over_time.tolist()
+        metrics["local_drift_per_step_cross_mean"] = mean_cross_over_time.tolist()
+        metrics["local_drift_per_step_cross_std"] = std_cross_over_time.tolist()
+        metrics["local_drift_per_step_delta_mse_mean"] = (
+            mean_delta_mse_over_time.tolist()
+        )
+        metrics["local_drift_flip_point"] = int(flip_point)
+        metrics["local_drift_auto_len"] = int(auto_len)
+        metrics["local_drift_n_batches"] = len(drift_stats_list)
+
+        print(f"[Eval] Local Drift computed from {len(drift_stats_list)} batches")
 
     # Wait for parallel visualizations to complete (optional - can be removed if not needed)
     # The YAML is already saved above, so we can exit early if desired

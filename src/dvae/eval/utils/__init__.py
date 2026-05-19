@@ -11,3 +11,6 @@ from dvae.eval.utils.durstewitz_eval_metrics import (
     n_step_prediction_error,
     state_space_kl,
 )
+from dvae.eval.utils.run_mse_analysis import run_mse_analysis
+from dvae.eval.utils.run_geometry_analysis import run_geometry_analysis
+from dvae.eval.utils.local_drift_analysis import compute_local_drift_statistics

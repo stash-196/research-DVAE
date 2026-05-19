@@ -18,6 +18,7 @@ import glob
 import csv
 from PIL import Image
 from dvae.visualizers.visualizers import get_plot_config
+from matplotlib.colors import SymLogNorm
 
 # Dictionary for display names
 DISPLAY_NAMES = {
@@ -33,6 +34,14 @@ METRIC_DISPLAY_NAMES = {
     "spectrum_error_tf": "Spectrum Error Teacher Forced",
     "spectrum_error_auto": "Spectrum Error Autonomous",
 }
+
+
+def sort_key(x):
+    """Sort key for numerical values, fallback to string."""
+    try:
+        return float(x)
+    except (ValueError, TypeError):
+        return str(x)
 
 
 def get_display_name(param):
@@ -112,7 +121,7 @@ def extract_param_values(data, param):
         val = get_param_value(d, param)
         if val is not None:
             values.add(val)
-    return sorted(list(values))
+    return sorted(list(values), key=sort_key)
 
 
 def plot_1d(data, param, metric, output_dir):
@@ -137,13 +146,14 @@ def plot_1d(data, param, metric, output_dir):
 
     # Sort values and use a scatter plot if there are overlapping X-axis entries
     # to prevent a messy zig-zag line graph
-    pairs = sorted(zip(param_values, metric_values), key=lambda x: str(x[0]))
+    pairs = sorted(zip(param_values, metric_values), key=lambda x: sort_key(x[0]))
     sorted_p, sorted_m = zip(*pairs)
 
     has_dups = len(set(sorted_p)) < len(sorted_p)
 
     config = get_plot_config(paper_ready=True)
     plt.figure(figsize=(8, 6))
+    plt.yscale("symlog")
 
     if has_dups:
         # Multiple secondary parameters exist, rendering scatter plot to avoid vertical/overlap lines
@@ -203,6 +213,7 @@ def plot_2d(data, param1, metric, output_dir, param2=None):
         grid,
         origin="lower",
         aspect="auto",
+        norm=SymLogNorm(linthresh=0.01),
     )
     plt.colorbar(label=get_metric_display_name(metric))
 
@@ -258,9 +269,23 @@ def aggregate_delay_embeddings(data, args, output_dir):
     param1 = args.parameters[0]
     param2 = args.parameters[1] if len(args.parameters) > 1 else None
 
-    unique_param1 = sorted(set(get_param_value(d, param1) for d in data if get_param_value(d, param1) is not None))
+    unique_param1 = sorted(
+        set(
+            get_param_value(d, param1)
+            for d in data
+            if get_param_value(d, param1) is not None
+        ),
+        key=sort_key,
+    )
     if param2:
-        unique_param2 = sorted(set(get_param_value(d, param2) for d in data if get_param_value(d, param2) is not None))
+        unique_param2 = sorted(
+            set(
+                get_param_value(d, param2)
+                for d in data
+                if get_param_value(d, param2) is not None
+            ),
+            key=sort_key,
+        )
     else:
         unique_param2 = ["-"]
 

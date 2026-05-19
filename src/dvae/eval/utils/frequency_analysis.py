@@ -1,7 +1,4 @@
-from dvae.utils import (
-    calculate_power_spectrum_error,
-)
-
+from dvae.utils import calculate_power_spectrum_error
 from dvae.visualizers.visualizers import (
     visualize_spectral_analysis,
     visualize_errors_from_lst,
@@ -9,6 +6,7 @@ from dvae.visualizers.visualizers import (
 )
 import numpy as np
 import pandas as pd
+from dvae.eval.utils.benchmark_signals import get_benchmark_signals
 
 
 def run_spectrum_analysis(
@@ -21,86 +19,22 @@ def run_spectrum_analysis(
     model_name,
     cfg,
     dvae_model,
+    batch_data_long=None,
 ):
-    if dataset_name == "Lorenz63":
-        full_xyz_data = test_dataloader.dataset.get_full_xyz(i)
-        # Visualize the spectral analysis
-        long_data_lst = [
-            full_xyz_data[:, 2],
-            full_xyz_data[:, 1],
-            # batch_data_long[:, 0, :].reshape(-1), update to interpolate linearly later
-            full_xyz_data[:, 0],
-            recon_data_long[~autonomous_mode_selector_long.bool()],
-            recon_data_long[autonomous_mode_selector_long.bool()],
-        ]
-        name_lst = ["z", "y", "Ground\nTruth", "Teacher-\nForced", "Autonomous"]
-        key_lst = ["z", "y", "gt", "tf", "auto"]
-        true_signal_index = 2
-        colors_lst = ["orange", "magenta", "blue", "green", "red"]
-
-        dt = 1e-2
-
-    elif dataset_name == "DampedSHO":
-        full_xyz_data = test_dataloader.dataset.get_full_xyz(i)
-        # Visualize the spectral analysis
-        long_data_lst = [
-            full_xyz_data[:1000, 0],
-            recon_data_long[~autonomous_mode_selector_long.bool()],
-            recon_data_long[autonomous_mode_selector_long.bool()],
-        ]
-        name_lst = ["Ground Truth", "teacher-forced", "autonomous"]
-        key_lst = ["gt", "tf", "auto"]
-        true_signal_index = 2
-        colors_lst = ["blue", "green", "red"]
-        dt = 1e-2
-
-    elif dataset_name == "SHO":
-        full_xyz_data = test_dataloader.dataset.get_full_xyz(i)
-        # Visualize the spectral analysis
-        long_data_lst = [
-            full_xyz_data[:1000, 0],
-            recon_data_long[~autonomous_mode_selector_long.bool()],
-            recon_data_long[autonomous_mode_selector_long.bool()],
-        ]
-        name_lst = ["Ground\nTruth", "Teacher-\nForced", "Autonomous"]
-        key_lst = ["gt", "tf", "auto"]
-        true_signal_index = 2
-        colors_lst = ["blue", "green", "red"]
-        dt = 1e-2
-
-    elif dataset_name == "Xhro":
-
-        full_xyz_data = test_dataloader.dataset.get_full_xyz(i)[
-            ["ch1", "ch2", "ch3", "ch4"]
-        ].to_numpy()  # Convert to NumPy array
-        # Interpolate NaNs linearly in the selected column
-        data_slice = full_xyz_data[:10000]  # Now works as 2D NumPy indexing
-        interpolated_data = (
-            pd.DataFrame(data_slice, columns=["ch1", "ch2", "ch3", "ch4"])
-            .interpolate(method="linear")
-            .values
-        )
-        # Visualize the spectral analysis
-        long_data_lst = [
-            interpolated_data[:, 0],
-            interpolated_data[:, 1],
-            interpolated_data[:, 2],
-            interpolated_data[:, 3],
-            recon_data_long[~autonomous_mode_selector_long.bool()],
-            recon_data_long[autonomous_mode_selector_long.bool()],
-        ]
-        name_lst = [
-            "ch1",
-            "ch2",
-            "ch3",
-            "Ground\nTruth",
-            "Teacher-\nForced",
-            "Autonomous",
-        ]
-        key_lst = ["ch1", "ch2", "ch3", "gt", "tf", "auto"]
-        true_signal_index = 3
-        colors_lst = ["cyan", "orange", "magenta", "blue", "green", "red"]
-        dt = 1 / 250
+    sig_info = get_benchmark_signals(
+        dataset_name,
+        test_dataloader,
+        i,
+        recon_data_long,
+        autonomous_mode_selector_long,
+        batch_data_long,
+    )
+    long_data_lst = sig_info["long_data_lst"]
+    name_lst = sig_info["name_lst"]
+    key_lst = sig_info["key_lst"]
+    true_signal_index = sig_info["true_signal_index"]
+    colors_lst = sig_info["colors_lst"]
+    dt = sig_info["dt"]
 
     sampling_rate = 1 / dt
     power_spectrum_lst, frequencies, periods = visualize_spectral_analysis(
@@ -111,7 +45,7 @@ def run_spectrum_analysis(
         sampling_rate=sampling_rate,
         max_sequences=50000,
     )
-    power_spectrum_lst, frequencies, periods = visualize_spectral_analysis(
+    visualize_spectral_analysis(
         data_lst=long_data_lst,
         name_lst=name_lst,
         colors_lst=colors_lst,
@@ -120,7 +54,6 @@ def run_spectrum_analysis(
         max_sequences=50000,
         use_log_scale=True,
     )
-
     power_spectrum_error_lst = calculate_power_spectrum_error(
         power_spectrum_lst, true_signal_index, filter_std=3
     )
@@ -135,31 +68,7 @@ def run_spectrum_analysis(
         error_unit="dB",
         colors=colors_lst,
     )
-
     return {
         "power_spectrum_errors": power_spectrum_error_lst,
         "signal_keys": key_lst,
     }
-
-    # # Visualize the alphas against the power spectral density
-    # if model_name == "MT_RNN" or model_name == "MT_VRNN":
-    #     sigmas_history = loaded_data["sigmas_history"]
-    #     kl_warm_epochs = loaded_data["kl_warm_epochs"]
-    #     # Visualize the alphas
-    #     # if lorenz63, true_alphas = [0.00490695, 0.02916397, 0.01453569]
-    #     if test_dataloader.dataset.true_alphas is not None:
-    #         true_alphas = test_dataloader.dataset.true_alphas
-    #     else:
-    #         true_alphas = []
-
-    #     visualize_alpha_history_and_spectrums(
-    #         sigmas_history=sigmas_history,
-    #         power_spectrum_lst=power_spectrum_lst[:3],
-    #         spectrum_color_lst=colors_lst[:3],
-    #         spectrum_name_lst=name_lst,
-    #         frequencies=frequencies,
-    #         dt=dt,
-    #         save_dir=save_fig_dir,
-    #         kl_warm_epochs=kl_warm_epochs,
-    #         true_alphas=true_alphas,
-    #     )

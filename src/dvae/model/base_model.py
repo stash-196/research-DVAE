@@ -20,6 +20,14 @@ class BaseModel(nn.Module):
     def build(self):
         raise NotImplementedError("Each model must implement its own build method.")
 
+    def parameter_count(self, trainable_only=False):
+        if trainable_only:
+            return sum(p.numel() for p in self.parameters() if p.requires_grad)
+        return sum(p.numel() for p in self.parameters())
+
+    def parameter_count_millions(self, trainable_only=False):
+        return self.parameter_count(trainable_only=trainable_only) / 1000000.0
+
     def _get_activation(self, activation):
         if activation == "relu":
             return nn.ReLU()
