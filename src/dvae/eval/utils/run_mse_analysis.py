@@ -44,7 +44,7 @@ def run_mse_analysis(
 
         err = calc_mse(gt_signal, sig)
         mse_errors.append(float(err))
-        print(f"  MSE {name.replace(chr(10), " ")}: {err:.4f}")
+        print(f"  MSE {name.replace(chr(10), ' ')}: {err:.4f}")
 
     # Visualize MSE error bars
     visualize_errors_from_lst(

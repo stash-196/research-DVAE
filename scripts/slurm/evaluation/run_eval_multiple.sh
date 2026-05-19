@@ -6,8 +6,8 @@
 # Define a list of experiment directories
 declare -a experiments=(
 
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2024-11-02/ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2024-11-01/ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2024-11-02/ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2024-11-01/ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
 
 #     2025-11-12/
 #     "/flash/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_MissingHigh_ssptf_MTRNN-markovMiss_varySampRatios"
@@ -73,8 +73,8 @@ declare -a experiments=(
 #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-06/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
 
 # # 2026-02-12/
-#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh"
-#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNN_hdi20_ptientHigh"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNN_hdi20_ptientHigh"
 #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_hdi20s_ptientHigh"
 #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MTRNN_hdi20-40_ptientHigh"
 
@@ -113,7 +113,7 @@ find "$EXPERIMENT_DIR" -type f -name "*final*.pt" | while read MODEL_FILE; do
 #SBATCH --job-name=${MODEL_BASENAME}_eval
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
 #SBATCH --time=1-00:00:00
 #SBATCH --output=${LOG_DIR}/%j_eval_${MODEL_BASENAME}.log
@@ -154,6 +154,13 @@ for PATH_VAR in "\$CONTAINER_PATH" "\$PROJECT_PATH" "\$VENV_PATH" "\$DATA_HOST_P
 done
 
 ml singularity
+
+# Set environment variables to prevent buffering and thread oversubscription
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
 
 # Run the Apptainer container
 singularity exec \\

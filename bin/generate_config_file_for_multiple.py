@@ -53,9 +53,9 @@ if __name__ == "__main__":
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
     experiment_name = (
-        "20260519-"
+        "20260520-"
         # + "XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
-        + "Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_MTRNN_alphas3d_hdim40"
+        + "Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_MTRNN_hdim40"
     )
     print("Experiment name:", experiment_name)
 
@@ -113,15 +113,15 @@ if __name__ == "__main__":
         0.0,
         # 0.01,
         # 0.05,
-        # 0.1,
-        # # 0.2,
-        # 0.3,
-        # # 0.4,
-        # 0.5,
-        # # 0.6,
-        # 0.7,
-        # 0.8,
-        # 0.9,
+        0.1,
+        # 0.2,
+        0.3,
+        # 0.4,
+        0.5,
+        # 0.6,
+        0.7,
+        0.8,
+        0.9,
     ]
     auto_warm_start = [
         0.0,
@@ -137,8 +137,11 @@ if __name__ == "__main__":
         # "strict",
     ]
 
-    noise_init_ratio = [0.1]
-    noise_mix_ratio = [0.2, 0.5, 0.8]
+    noise_init_ratio = [0.0]
+    noise_mix_ratio = [
+        0.0,
+        # 0.2, 0.5, 0.8
+        ]
     noise_std_factor = [1.0]
     noise_target = [
         "both",
@@ -146,7 +149,7 @@ if __name__ == "__main__":
         # "ar_only", "hybrid_ar",
         #
         ]
-    noise_sampling_method = ["ss"]
+    noise_sampling_method = ["none"]
     tie_noise_to_auto = [False]
     noise_warm_reset_on_window = [False]
     noise_window_size = [100]
@@ -205,16 +208,16 @@ if __name__ == "__main__":
     elif dataset_name[0] == "Lorenz63":
         mask_label = [
             "None",
-            # # "Markov_AvgLen15_0.0",
-            # "Markov_AvgLen15_0.1",
-            # # "Markov_AvgLen15_0.2",
-            # "Markov_AvgLen15_0.3",
-            # # "Markov_AvgLen15_0.4",
-            # "Markov_AvgLen15_0.5",
-            # # "Markov_AvgLen15_0.6",
-            # "Markov_AvgLen15_0.7",
-            # "Markov_AvgLen15_0.8",
-            # # "Markov_AvgLen15_0.9",
+            # "Markov_AvgLen15_0.0",
+            "Markov_AvgLen15_0.1",
+            # "Markov_AvgLen15_0.2",
+            "Markov_AvgLen15_0.3",
+            # "Markov_AvgLen15_0.4",
+            "Markov_AvgLen15_0.5",
+            # "Markov_AvgLen15_0.6",
+            "Markov_AvgLen15_0.7",
+            "Markov_AvgLen15_0.8",
+            # "Markov_AvgLen15_0.9",
         ]
     else:
         mask_label = [
@@ -353,6 +356,11 @@ if __name__ == "__main__":
     keys_being_compared = [
         key for key, value in model_params["MT_VRNN"].items() if len(value) > 1
     ]
+
+    print("Parameters being compared (len > 1) for MT_VRNN:")
+    for key in keys_being_compared:
+        values = model_params["MT_VRNN"][key]
+        print(f"> {key} (n={len(values)}): {values}")
 
     # exclude models that are not in models. Don't run this before getting `params_being`
     model_params = {key: value for key, value in model_params.items() if key in models}

@@ -16,6 +16,7 @@ import os
 import glob
 import argparse
 import configparser
+import yaml
 from collections import OrderedDict
 from datetime import datetime
 
@@ -98,7 +99,7 @@ def collect_for_dates(dates, saved_model_root):
             for fn in files:
                 if fn.lower().endswith(".ini"):
                     ini_count += 1
-                    
+
                     # Print progress every 100 files to avoid spamming the log
                     if ini_count % 100 == 0:
                         print(f"       ... processed {ini_count} .ini files inside {date}")
@@ -125,8 +126,38 @@ def collect_for_dates(dates, saved_model_root):
                     if matches:
                         row["final_pt_paths"] = ";".join(os.path.relpath(m, start=saved_model_root) for m in matches)
 
+                    # Check for evaluation_summary.yaml
+                    yaml_path = os.path.join(parent_dir, "evaluation_summary.yaml")
+                    if os.path.exists(yaml_path):
+                        try:
+                            with open(yaml_path, 'r') as yf:
+                                yaml_data = yaml.safe_load(yf)
+                                if isinstance(yaml_data, dict):
+                                    def flatten_dict(d, parent_key='', sep='.'):
+                                        items = []
+                                        for k, v in d.items():
+                                            new_key = f"{parent_key}{sep}{k}" if parent_key else k
+                                            if isinstance(v, dict):
+                                                items.extend(flatten_dict(v, new_key, sep=sep).items())
+                                            else:
+                                                items.append((new_key, v))
+                                        return dict(items)
+
+                                    flat_yaml = flatten_dict(yaml_data)
+                                    for yk, yv in flat_yaml.items():
+                                        # Ignore the duplicated .ini configurations often stored under 'config' in yaml
+                                        if yk.startswith('config.'):
+                                            continue
+                                        # Ignore vector/list entries
+                                        if isinstance(yv, list):
+                                            continue
+                                        if yk not in row:
+                                            row[yk] = yv
+                        except Exception as e:
+                            print(f"[warning] Error reading YAML {yaml_path}: {e}")
+
                     rows.append(row)
-                    
+
         print(f"[info] Finished {date}: found {ini_count} .ini files.")
 
     return rows
