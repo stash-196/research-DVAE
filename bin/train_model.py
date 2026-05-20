@@ -5,6 +5,7 @@ Copyright (c) 2020 by Inria
 Authoried by Xiaoyu BIE (xiaoyu.bie@inria.fr)
 License agreement in LICENSE.txt
 """
+
 import os
 import uuid
 from dvae.utils import find_project_root, Options
@@ -16,6 +17,10 @@ if __name__ == "__main__":
 
     # Parse command-line arguments
     params = Options().get_params()
+
+    # When resuming, default to the directory containing the config file.
+    if params["reload"] and not params.get("model_dir"):
+        params["model_dir"] = os.path.dirname(os.path.abspath(params["cfg"]))
 
     # Load device-specific paths
     device_config = load_device_paths(

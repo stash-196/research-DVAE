@@ -21,7 +21,10 @@ class Options:
             "--reload", action="store_true", help="resume training"
         )
         self.parser.add_argument(
-            "--model_dir", type=str, default=None, help="model directory"
+            "--model_dir",
+            type=str,
+            default=None,
+            help="model directory (defaults to the cfg directory when reloading)",
         )
         self.parser.add_argument(
             "--job_id", type=str, default=None, help="SLURM job ID"

@@ -83,6 +83,22 @@
             ]
         },
         {
+            "name": "Python: resume train_model.py (Local)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/train_model.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "pythonArgs": [
+                "-Xfrozen_modules=off"
+            ],
+            "args": [
+                // "--cfg", "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh/Lorenz63_sigma10_rho28_beta8d3_N108k_dt0.01_Markov_AvgLen15_0.1_RNN_ptf_0.1_20260212-21.07.43_23668536/config.ini",
+                "--cfg", "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-01-30/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh/Xhro_XHRO_02_XH070_None_RNN_ptf_0.6_20260130-13.16.47_23217716/config.ini"
+                "--reload"
+            ]
+        },
+        {
             "name": "Python: estimate_model_params.py (Local)",
             "type": "python",
             "request": "launch",

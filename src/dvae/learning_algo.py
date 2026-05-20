@@ -241,9 +241,12 @@ class LearningAlgorithm:
             tag = self.cfg.get("Network", "tag")
             save_dir = self.params["model_dir"]
 
-        # Save the experiment configuration
+        # Save the experiment configuration, unless src and dst are the same file.
         save_cfg = os.path.join(save_dir, "config.ini")
-        shutil.copy(self.config_file, save_cfg)
+        src_cfg = os.path.abspath(self.config_file)
+        dst_cfg = os.path.abspath(save_cfg)
+        if not (os.path.exists(dst_cfg) and os.path.samefile(src_cfg, dst_cfg)):
+            shutil.copy(src_cfg, dst_cfg)
 
         # Create logger
         log_file = os.path.join(save_dir, "log.txt")
@@ -338,7 +341,10 @@ class LearningAlgorithm:
                 sigmas_history[:, 0] = sigmoid_reverse_10(alphas_init)
         else:
             cp_file = os.path.join(save_dir, "{}_checkpoint.pt".format(self.model_name))
-            checkpoint = torch.load(cp_file)
+            try:
+                checkpoint = torch.load(cp_file, weights_only=False)
+            except TypeError:
+                checkpoint = torch.load(cp_file)
             self.model.load_state_dict(checkpoint["model_state_dict"])
             optimizer.load_state_dict(checkpoint["optim_state_dict"])
             start_epoch = checkpoint["epoch"]

@@ -123,7 +123,7 @@ singularity run \\
   --bind \$DATA_HOST_PATH:/data \\
   --bind \$SAVED_HOST_PATH:/saved_model \\
   \$CONTAINER_PATH \\
-  bin/train_model.py --job_id \$SLURM_JOBID --cfg \$CONFIG_CONTAINER_PATH --reload --model_dir \$RUN_CONTAINER_PATH
+    bin/train_model.py --job_id \$SLURM_JOBID --cfg \$CONFIG_CONTAINER_PATH --reload
 
 # Check exit code
 EXIT_CODE=\$?
