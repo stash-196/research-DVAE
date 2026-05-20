@@ -1,4 +1,4 @@
-#\!/bin/bash
+#!/bin/bash
 
 # Script to generate and submit SLURM jobs for resuming training of models
 # Edit the experiments array below to add/remove target directories
@@ -67,9 +67,9 @@ for EXPERIMENT_DIR in "${experiments[@]}"; do
             
             CONFIG_CONTAINER_PATH="${RUN_CONTAINER_PATH}/config.ini"
 
-            # Create a temporary SLURM script for this run
+# Create a temporary SLURM script for this run
             cat > "$TEMP_DIR/run_resume_$RUN_BASENAME.slurm" <<EOL
-#\!/bin/bash
+#!/bin/bash
 #SBATCH --job-name=${RUN_BASENAME}_resume
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
