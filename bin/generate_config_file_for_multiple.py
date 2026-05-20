@@ -54,15 +54,15 @@ if __name__ == "__main__":
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
     experiment_name = (
         "20260520-"
-        # + "XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
-        + "Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_MTRNN_hdim40"
+        + "XHRO_ptf0.5-7_RNN_Subj70_ch3-4_hdim20-40"
+        # + "Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_LSTM_hdim20"
     )
     print("Experiment name:", experiment_name)
 
     models = [
-        # "RNN",
+        "RNN",
         # "VRNN",
-        "MT_RNN",
+        # "MT_RNN",
         # "MT_VRNN"
     ]
     rnn_types = [
@@ -79,7 +79,7 @@ if __name__ == "__main__":
     z_dim = [9]
     dense_z = [[16, 32]]
 
-    dim_rnn = [40]
+    dim_rnn = [20, 40]
     alphas = [
         [0.1, 0.1, 0.1],
         # [0.1],
@@ -87,6 +87,7 @@ if __name__ == "__main__":
         # [0.1, 0.1, 0.1],
         # [ 0.09183, 0.64830, 0.73307, ],
         # [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
+        [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, ]
     ]
     activation = ["relu"]
     dropout_p = [
@@ -110,18 +111,18 @@ if __name__ == "__main__":
         # "sm"
     ]
     sampling_ratio = [
-        0.0,
+        # 0.0,
         # 0.01,
         # 0.05,
-        0.1,
+        # 0.1,
         # 0.2,
-        0.3,
+        # 0.3,
         # 0.4,
         0.5,
-        # 0.6,
+        0.6,
         0.7,
-        0.8,
-        0.9,
+        # 0.8,
+        # 0.9,
     ]
     auto_warm_start = [
         0.0,
@@ -144,20 +145,23 @@ if __name__ == "__main__":
         ]
     noise_std_factor = [1.0]
     noise_target = [
-        "both",
+        "none",
+        # "both",
         # "tf_only",
         # "ar_only", "hybrid_ar",
         #
         ]
-    noise_sampling_method = ["none"]
+    noise_sampling_method = [
+        "none"
+    ]
     tie_noise_to_auto = [False]
     noise_warm_reset_on_window = [False]
     noise_window_size = [100]
 
     # DataFrame
     dataset_name = [
-        # "Xhro",
-        "Lorenz63",
+        "Xhro",
+        # "Lorenz63",
         # "SHO",
         # "DampedSHO"
     ]
@@ -234,10 +238,10 @@ if __name__ == "__main__":
     if dataset_name[0] == "Xhro":
         observation_process = [
             # "raw_all",
-            "raw_ch1",
-            "raw_ch2",
+            # "raw_ch1",
+            # "raw_ch2",
             "raw_ch3",
-            # "raw_ch4",
+            "raw_ch4",
             # "ch4_relative_powers",
             # "ch4_3_vars",
             # "ch4_alpha",
@@ -357,7 +361,7 @@ if __name__ == "__main__":
         key for key, value in model_params["MT_VRNN"].items() if len(value) > 1
     ]
 
-    print("Parameters being compared (len > 1) for MT_VRNN:")
+    print("Parameters being compared (len > 1) for models:")
     for key in keys_being_compared:
         values = model_params["MT_VRNN"][key]
         print(f"> {key} (n={len(values)}): {values}")
