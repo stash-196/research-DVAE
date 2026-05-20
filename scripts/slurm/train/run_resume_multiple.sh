@@ -22,6 +22,11 @@ VENV_PATH=~/containers/venvs/research-DVAE/
 DATA_HOST_PATH=/bucket/DoyaU/stash/research-DVAE/data
 SAVED_HOST_PATH=/flash/DoyaU/stash/research-DVAE/saved_model
 
+# Compute script directory and temp dir relative to this script (robust to caller cwd)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEMP_DIR="$SCRIPT_DIR/../temp"
+mkdir -p "$TEMP_DIR"
+
 # Loop over each experiment directory
 for EXPERIMENT_DIR in "${experiments[@]}"; do
     # Create log directory under the experiment directory
@@ -63,7 +68,7 @@ for EXPERIMENT_DIR in "${experiments[@]}"; do
             CONFIG_CONTAINER_PATH="${RUN_CONTAINER_PATH}/config.ini"
 
             # Create a temporary SLURM script for this run
-            cat > "scripts/slurm/temp/run_resume_$RUN_BASENAME.slurm" <<EOL
+            cat > "$TEMP_DIR/run_resume_$RUN_BASENAME.slurm" <<EOL
 #\!/bin/bash
 #SBATCH --job-name=${RUN_BASENAME}_resume
 #SBATCH --nodes=1
@@ -127,10 +132,10 @@ EOL
 
             # Submit the temporary SLURM script to the queue
             echo "[bash] Submitting resume job for $RUN_BASENAME"
-            sbatch "scripts/slurm/temp/run_resume_$RUN_BASENAME.slurm"
+            sbatch "$TEMP_DIR/run_resume_$RUN_BASENAME.slurm"
 
             # Optionally, remove the temporary SLURM script after submission
-            # rm "scripts/slurm/temp/run_resume_$RUN_BASENAME.slurm"
+            # rm "$TEMP_DIR/run_resume_$RUN_BASENAME.slurm"
         fi
     done
 done

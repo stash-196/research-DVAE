@@ -24,6 +24,11 @@ OUTPUT_TODAY_DIR="$SAVED_HOST_PATH/$today"
 echo "[bash] OUTPUT_TODAY_DIR: $OUTPUT_TODAY_DIR"
 mkdir -p "$OUTPUT_TODAY_DIR"
 
+# Compute script directory and temp dir relative to this script (robust to caller cwd)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEMP_DIR="$SCRIPT_DIR/../temp"
+mkdir -p "$TEMP_DIR"
+
 # Loop over each experiment name to process its configuration files
 for experiment in "${experiments[@]}"; do
     CONFIG_DIR="$BASE_DIR/$experiment"
@@ -40,7 +45,7 @@ for experiment in "${experiments[@]}"; do
         CONFIG_CONTAINER_PATH=${CONFIG_FILE/#$PROJECT_PATH/\/workspace\/project}
 
         # Create a temporary SLURM script for this configuration
-        cat > "scripts/slurm/temp/run_training_$CONFIG_BASENAME.slurm" <<EOL
+        cat > "$TEMP_DIR/run_training_$CONFIG_BASENAME.slurm" <<EOL
 #!/bin/bash
 #SBATCH --job-name=${CONFIG_BASENAME}_training
 #SBATCH --nodes=1
@@ -110,9 +115,9 @@ EOL
 
         # Submit the temporary SLURM script to the queue
         echo "[bash] Submitting $experiment / run_training_$CONFIG_BASENAME.slurm"
-        sbatch "scripts/slurm/temp/run_training_$CONFIG_BASENAME.slurm"
+        sbatch "$TEMP_DIR/run_training_$CONFIG_BASENAME.slurm"
 
         # Optionally, remove the temporary SLURM script after submission
-        # rm "scripts/slurm/temp/run_training_$CONFIG_BASENAME.slurm"
+        # rm "$TEMP_DIR/run_training_$CONFIG_BASENAME.slurm"
     done
 done
