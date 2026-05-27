@@ -58,6 +58,13 @@ if __name__ == "__main__":
         + "Lorenz_auto0-0.8_miss0-0.7_clip1_ep20000_LossNone_RNN_hdim40"
     )
     print("Experiment name:", experiment_name)
+    #  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< data name >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+    dataset_name = [
+        # "Xhro",
+        "Lorenz63",
+        # "SHO",
+        # "DampedSHO"
+    ]
 
     models = [
         "RNN",
@@ -87,14 +94,23 @@ if __name__ == "__main__":
         # [0.1, 0.1, 0.1],
         # [ 0.09183, 0.64830, 0.73307, ],
         # [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
-        [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, ]
+        [
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+        ],
     ]
     activation = ["relu"]
     dropout_p = [
         0.0,
         # 0.1,
     ]
-
 
     # Training
     lr = [0.001]
@@ -110,20 +126,31 @@ if __name__ == "__main__":
         # 'mtf',
         # "sm"
     ]
-    sampling_ratio = [
-        0.0,
-        # 0.01,
-        # 0.05,
-        0.1,
-        # 0.2,
-        0.3,
-        # 0.4,
-        0.5,
-        # 0.6,
-        0.7,
-        0.8,
-        0.9,
-    ]
+
+    if dataset_name[0] == "Xhro":
+        sampling_ratio = [
+            0.0,
+            0.5,
+            0.6,
+            0.7,
+            # 0.8,
+            # 0.9,
+        ]
+    else:
+        sampling_ratio = [
+            0.0,
+            # 0.01,
+            # 0.05,
+            0.1,
+            # 0.2,
+            0.3,
+            # 0.4,
+            0.5,
+            # 0.6,
+            0.7,
+            0.8,
+            0.9,
+        ]
     auto_warm_start = [
         0.0,
         # 0.1,
@@ -142,7 +169,7 @@ if __name__ == "__main__":
     noise_mix_ratio = [
         0.0,
         # 0.2, 0.5, 0.8
-        ]
+    ]
     noise_std_factor = [1.0]
     noise_target = [
         "none",
@@ -150,22 +177,14 @@ if __name__ == "__main__":
         # "tf_only",
         # "ar_only", "hybrid_ar",
         #
-        ]
-    noise_sampling_method = [
-        "none"
     ]
+    noise_sampling_method = ["none"]
     tie_noise_to_auto = [False]
     noise_warm_reset_on_window = [False]
     noise_window_size = [100]
 
     # DataFrame
-    #  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< data name >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-    dataset_name = [
-        # "Xhro",
-        "Lorenz63",
-        # "SHO",
-        # "DampedSHO"
-    ]
+
     if dataset_name[0] == "Lorenz63":
         dataset_label = [
             # "None",
@@ -300,7 +319,6 @@ if __name__ == "__main__":
             "tie_noise_to_auto": tie_noise_to_auto,
             "noise_warm_reset_on_window": noise_warm_reset_on_window,
             "noise_window_size": noise_window_size,
-
             # DataFrame
             "dataset_name": dataset_name,
             "dataset_label": dataset_label,

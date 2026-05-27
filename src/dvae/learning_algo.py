@@ -189,6 +189,55 @@ class LearningAlgorithm:
 
         return basic_info
 
+    def _prepare_masked_loss(
+        self,
+        batch_data,
+        recon_batch_data,
+        loss_mask,
+        model_mode_selector,
+        dataset_config,
+    ):
+        """
+        Helper for masking baseline (Che et al. GRU-D, Lipton et al. 2016):
+        When observation_process == "only_x_indicate", enforce:
+        - 100% teacher forcing on the mask channel (dimension 1)
+        - Loss computed only on the signal channel (dimension 0)
+
+        Args:
+            batch_data: (seq_len, batch_size, x_dim) ground truth
+            recon_batch_data: (seq_len, batch_size, x_dim) reconstruction
+            loss_mask: (seq_len, batch_size, x_dim) masking indicator (1 = compute loss, 0 = ignore)
+            model_mode_selector: (seq_len, batch_size, x_dim) mode selector (0 = TF, 1 = autonomous)
+            dataset_config: dataset configuration object
+
+        Returns:
+            loss_recon: scalar reconstruction loss (only on observed signal values)
+        """
+        is_masking_baseline = (
+            getattr(dataset_config, "observation_process", None) == "only_x_indicate"
+        )
+
+        if is_masking_baseline:
+            # Force 100% teacher forcing on the mask channel (dimension 1)
+            model_mode_selector = model_mode_selector.clone()
+            model_mode_selector[:, :, 1] = 0.0
+
+            # Compute loss only on signal dimension (dimension 0)
+            target_signal = batch_data[:, :, 0:1]
+            pred_signal = recon_batch_data[:, :, 0:1]
+            loss_mask_signal = loss_mask[:, :, 0:1]
+        else:
+            target_signal = batch_data
+            pred_signal = recon_batch_data
+            loss_mask_signal = loss_mask
+
+        # Apply mask and convert NaNs to zero
+        target_masked = target_signal * loss_mask_signal
+        target_masked = torch.nan_to_num(target_masked, nan=0.0)
+        recon_masked = pred_signal * loss_mask_signal
+
+        return loss_MSE(target_masked, recon_masked)
+
     def train(self, profiler=None):
         # Build model
         self.build_model()
@@ -546,6 +595,14 @@ class LearningAlgorithm:
                 else:
                     model_mode_selector = base_mode_selector
 
+                # [Masking Baseline] For observation_process == "only_x_indicate", force 100% TF on mask dimension
+                if (
+                    getattr(dataset_config, "observation_process", None)
+                    == "only_x_indicate"
+                ):
+                    model_mode_selector = model_mode_selector.clone()
+                    model_mode_selector[:, :, 1] = 0.0  # Force pure TF on mask channel
+
                 # START: Compute masked batch std for adaptive noise #####################
                 noise_config = noise_configs.get(self.noise_sampling_method)
                 noise_selector = None
@@ -624,22 +681,38 @@ class LearningAlgorithm:
                             f"Invalid loss_mask_mode: {self.loss_mask_mode}"
                         )
 
-                    # Apply mask and handle NaNs
-                    batch_data_masked_for_loss_func = batch_data * loss_mask
-                    batch_data_masked_for_loss_func = torch.nan_to_num(
-                        batch_data_masked_for_loss_func, nan=0.0
-                    )
-                    recon_batch_data_masked_for_loss_func = recon_batch_data * loss_mask
-                    # Sanity check for NaNs (shouldn't happen after nan_to_num)
-                    if batch_data_masked_for_loss_func.isnan().any():
-                        logger.warning(
-                            f"[Learning Algo][epoch{epoch}][train] NaN detected in batch_data_masked_for_loss_func!! This shouldn't happen."
+                    # Compute loss (using masking baseline if applicable)
+                    if (
+                        getattr(dataset_config, "observation_process", None)
+                        == "only_x_indicate"
+                    ):
+                        # [Masking Baseline] Loss computed only on signal dimension (ch 0), only on observed timesteps
+                        loss_recon = self._prepare_masked_loss(
+                            batch_data,
+                            recon_batch_data,
+                            loss_mask,
+                            model_mode_selector,
+                            dataset_config,
                         )
+                    else:
+                        # Standard loss computation (all dimensions, based on loss_mask_mode)
+                        batch_data_masked_for_loss_func = batch_data * loss_mask
+                        batch_data_masked_for_loss_func = torch.nan_to_num(
+                            batch_data_masked_for_loss_func, nan=0.0
+                        )
+                        recon_batch_data_masked_for_loss_func = (
+                            recon_batch_data * loss_mask
+                        )
+                        # Sanity check for NaNs (shouldn't happen after nan_to_num)
+                        if batch_data_masked_for_loss_func.isnan().any():
+                            logger.warning(
+                                f"[Learning Algo][epoch{epoch}][train] NaN detected in batch_data_masked_for_loss_func!! This shouldn't happen."
+                            )
 
-                    loss_recon = loss_MSE(
-                        batch_data_masked_for_loss_func,
-                        recon_batch_data_masked_for_loss_func,
-                    )
+                        loss_recon = loss_MSE(
+                            batch_data_masked_for_loss_func,
+                            recon_batch_data_masked_for_loss_func,
+                        )
 
                     # Raise warning if nan is detected in recon loss
                     assert not torch.isnan(
@@ -779,6 +852,14 @@ class LearningAlgorithm:
                 else:
                     model_mode_selector = base_mode_selector
 
+                # [Masking Baseline] For observation_process == "only_x_indicate", force 100% TF on mask dimension
+                if (
+                    getattr(dataset_config, "observation_process", None)
+                    == "only_x_indicate"
+                ):
+                    model_mode_selector = model_mode_selector.clone()
+                    model_mode_selector[:, :, 1] = 0.0  # Force pure TF on mask channel
+
                 # START: Compute masked batch std for adaptive noise #####################
                 noise_config = noise_configs.get(self.noise_sampling_method)
                 noise_selector = None
@@ -859,22 +940,38 @@ class LearningAlgorithm:
                             f"Invalid loss_mask_mode: {self.loss_mask_mode}"
                         )
 
-                    # Apply mask and handle NaNs
-                    batch_data_masked_for_loss_func = batch_data * loss_mask
-                    batch_data_masked_for_loss_func = torch.nan_to_num(
-                        batch_data_masked_for_loss_func, nan=0.0
-                    )
-                    recon_batch_data_masked_for_loss_func = recon_batch_data * loss_mask
-                    # Sanity check for NaNs (shouldn't happen after nan_to_num)
-                    if batch_data_masked_for_loss_func.isnan().any():
-                        logger.warning(
-                            f"[Learning Algo][epoch{epoch}][train] NaN detected in batch_data_masked_for_loss_func!! This shouldn't happen."
+                    # Compute loss (using masking baseline if applicable)
+                    if (
+                        getattr(dataset_config, "observation_process", None)
+                        == "only_x_indicate"
+                    ):
+                        # [Masking Baseline] Loss computed only on signal dimension (ch 0), only on observed timesteps
+                        loss_recon = self._prepare_masked_loss(
+                            batch_data,
+                            recon_batch_data,
+                            loss_mask,
+                            model_mode_selector,
+                            dataset_config,
                         )
+                    else:
+                        # Standard loss computation (all dimensions, based on loss_mask_mode)
+                        batch_data_masked_for_loss_func = batch_data * loss_mask
+                        batch_data_masked_for_loss_func = torch.nan_to_num(
+                            batch_data_masked_for_loss_func, nan=0.0
+                        )
+                        recon_batch_data_masked_for_loss_func = (
+                            recon_batch_data * loss_mask
+                        )
+                        # Sanity check for NaNs (shouldn't happen after nan_to_num)
+                        if batch_data_masked_for_loss_func.isnan().any():
+                            logger.warning(
+                                f"[Learning Algo][epoch{epoch}][train] NaN detected in batch_data_masked_for_loss_func!! This shouldn't happen."
+                            )
 
-                    loss_recon = loss_MSE(
-                        batch_data_masked_for_loss_func,
-                        recon_batch_data_masked_for_loss_func,
-                    )
+                        loss_recon = loss_MSE(
+                            batch_data_masked_for_loss_func,
+                            recon_batch_data_masked_for_loss_func,
+                        )
 
                     # Raise warning if nan is detected in recon loss
                     assert not torch.isnan(
@@ -1343,6 +1440,54 @@ class LearningAlgorithm:
                 )
                 first_batch = next(iter(train_dataloader))
                 temp_batch_data = first_batch.permute(1, 0, 2).to(self.device)
+
+                # Extract missing mask for this batch
+                temp_missing_mask = None
+                observation_process = getattr(
+                    dataset_config, "observation_process", None
+                )
+
+                if (
+                    observation_process == "only_x_indicate"
+                    and temp_batch_data.size(2) >= 2
+                ):
+                    # For only_x_indicate, dimension 1 is the is_observed indicator (1.0=observed, 0.0=missing)
+                    # Derive missing_mask directly from this indicator to ensure perfect alignment
+                    is_observed = temp_batch_data[:, :, 1]  # (seq_len, batch_size)
+                    # missing_mask = True where is_observed == 0.0
+                    temp_missing_mask = (
+                        (is_observed < 0.5).float().unsqueeze(-1)
+                    )  # (seq_len, batch_size, 1)
+
+                elif hasattr(train_dataloader.dataset, "missing_mask"):
+                    # Fallback for other observation processes
+                    seq_len_temp, batch_size_temp, x_dim_temp = temp_batch_data.shape
+                    batch_start_idx = (
+                        train_dataloader.dataset.data_idx[0]
+                        if len(train_dataloader.dataset.data_idx) > 0
+                        else 0
+                    )
+                    batch_end_idx = min(
+                        batch_start_idx + seq_len_temp,
+                        len(train_dataloader.dataset.missing_mask),
+                    )
+                    missing_mask_slice = train_dataloader.dataset.missing_mask[
+                        batch_start_idx:batch_end_idx
+                    ]
+
+                    # Convert to tensor and expand to batch size
+                    if isinstance(missing_mask_slice, np.ndarray):
+                        temp_missing_mask = (
+                            torch.from_numpy(missing_mask_slice)
+                            .float()
+                            .unsqueeze(1)
+                            .expand(-1, batch_size_temp, -1)
+                        )
+                    else:
+                        temp_missing_mask = missing_mask_slice.unsqueeze(1).expand(
+                            -1, batch_size_temp, -1
+                        )
+
                 # Reset sequence length back to current_sequence_len
                 train_dataloader.dataset.update_sequence_length(current_sequence_len)
 
@@ -1392,6 +1537,8 @@ class LearningAlgorithm:
                     ),
                     explain=f"training_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
                     inference_mode=True,
+                    missing_mask=temp_missing_mask,
+                    hide_mask_output=(getattr(dataset_config, "observation_process", None) == "only_x_indicate"),
                 )
 
                 # START: Compute autonomous mode selector for Even Bursts visualization #################
@@ -1437,6 +1584,8 @@ class LearningAlgorithm:
                     ),
                     explain=f"even_bursts_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
                     inference_mode=True,
+                    missing_mask=temp_missing_mask,
+                    hide_mask_output=(getattr(dataset_config, "observation_process", None) == "only_x_indicate"),
                 )
 
                 # START: Compute autonomous mode selector for Half-Half visualization #################
@@ -1481,6 +1630,8 @@ class LearningAlgorithm:
                     ),
                     explain=f"half_half_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
                     inference_mode=True,
+                    missing_mask=temp_missing_mask,
+                    hide_mask_output=(getattr(dataset_config, "observation_process", None) == "only_x_indicate"),
                 )
 
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":

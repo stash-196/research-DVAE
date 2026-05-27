@@ -198,6 +198,51 @@ if __name__ == "__main__":
             batch_data_long = batch_data_long.permute(1, 0, 2)
             seq_len_long, batch_size_long, _ = batch_data_long.shape
             half_point_long = seq_len_long // 2
+
+            # Extract missing mask for this batch
+            missing_mask_long = None
+            observation_process = getattr(dataset_config, "observation_process", None)
+
+            if (
+                observation_process == "only_x_indicate"
+                and batch_data_long.size(2) >= 2
+            ):
+                # For only_x_indicate, dimension 1 is the is_observed indicator (1.0=observed, 0.0=missing)
+                # Derive missing_mask directly from this indicator to ensure perfect alignment
+                is_observed = batch_data_long[:, :, 1]  # (seq_len, batch_size)
+                # missing_mask = True where is_observed == 0.0
+                missing_mask_long = (
+                    (is_observed < 0.5).float().unsqueeze(-1)
+                )  # (seq_len, batch_size, 1)
+
+            elif hasattr(test_dataloader.dataset, "missing_mask"):
+                # Fallback for other observation processes
+                batch_start_idx = (
+                    test_dataloader.dataset.data_idx[i]
+                    if i < len(test_dataloader.dataset.data_idx)
+                    else 0
+                )
+                batch_end_idx = min(
+                    batch_start_idx + seq_len_long,
+                    len(test_dataloader.dataset.missing_mask),
+                )
+                missing_mask_slice = test_dataloader.dataset.missing_mask[
+                    batch_start_idx:batch_end_idx
+                ]
+
+                # Convert to tensor and expand to batch size
+                if isinstance(missing_mask_slice, np.ndarray):
+                    missing_mask_long = (
+                        torch.from_numpy(missing_mask_slice)
+                        .float()
+                        .unsqueeze(1)
+                        .expand(-1, batch_size_long, -1)
+                    )
+                else:
+                    missing_mask_long = missing_mask_slice.unsqueeze(1).expand(
+                        -1, batch_size_long, -1
+                    )
+
             # Plot the spectral analysis
             autonomous_mode_selector_long = create_autonomous_mode_selector(
                 seq_len_long,
@@ -205,6 +250,18 @@ if __name__ == "__main__":
                 batch_size=batch_size_long,
                 x_dim=dataset_config.x_dim,
             )
+            # === MASKING BASELINE: Force pure teacher-forcing on mask dimension during evaluation ===
+            # For observation_process == "only_x_indicate", the mask channel must always be 100% TF
+            # to keep evaluation consistent with training behavior.
+            if (
+                getattr(dataset_config, "observation_process", None)
+                == "only_x_indicate"
+            ):
+                autonomous_mode_selector_long = autonomous_mode_selector_long.clone()
+                autonomous_mode_selector_long[:, :, 1] = (
+                    0.0  # mask dimension always 100% TF
+                )
+            # ====================================================================================
             # turn input into tensor and send to GPU if needed
             batch_data_long_tensor = batch_data_long.clone().detach().to(device)
             recon_data_long = (
@@ -233,6 +290,8 @@ if __name__ == "__main__":
                 save_path=save_fig_dir,
                 explain=f"final_short_inference_mode_half_half_short",
                 inference_mode=True,
+                missing_mask=(missing_mask_long[1:, :, :] if missing_mask_long is not None else None),
+                hide_mask_output=(getattr(dataset_config, "observation_process", None) == "only_x_indicate"),
             )
 
         # visualize the hidden states
@@ -243,6 +302,7 @@ if __name__ == "__main__":
             variable_name=f"hidden",
             alphas=alphas_per_unit,
             add_lines_lst=[half_point_long],
+            is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
         )
 
         # visualize the x_features
@@ -252,6 +312,7 @@ if __name__ == "__main__":
             save_dir=save_fig_dir,
             variable_name=f"x_features",
             add_lines_lst=[half_point_long],
+            is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
         )
 
         ############################################################################
@@ -269,6 +330,51 @@ if __name__ == "__main__":
             batch_data_long = batch_data_long.permute(1, 0, 2)
             seq_len_long, batch_size_long, _ = batch_data_long.shape
             half_point_long = seq_len_long // 2
+
+            # Extract missing mask for this batch
+            missing_mask_long = None
+            observation_process = getattr(dataset_config, "observation_process", None)
+
+            if (
+                observation_process == "only_x_indicate"
+                and batch_data_long.size(2) >= 2
+            ):
+                # For only_x_indicate, dimension 1 is the is_observed indicator (1.0=observed, 0.0=missing)
+                # Derive missing_mask directly from this indicator to ensure perfect alignment
+                is_observed = batch_data_long[:, :, 1]  # (seq_len, batch_size)
+                # missing_mask = True where is_observed == 0.0
+                missing_mask_long = (
+                    (is_observed < 0.5).float().unsqueeze(-1)
+                )  # (seq_len, batch_size, 1)
+
+            elif hasattr(test_dataloader.dataset, "missing_mask"):
+                # Fallback for other observation processes
+                batch_start_idx = (
+                    test_dataloader.dataset.data_idx[i]
+                    if i < len(test_dataloader.dataset.data_idx)
+                    else 0
+                )
+                batch_end_idx = min(
+                    batch_start_idx + seq_len_long,
+                    len(test_dataloader.dataset.missing_mask),
+                )
+                missing_mask_slice = test_dataloader.dataset.missing_mask[
+                    batch_start_idx:batch_end_idx
+                ]
+
+                # Convert to tensor and expand to batch size
+                if isinstance(missing_mask_slice, np.ndarray):
+                    missing_mask_long = (
+                        torch.from_numpy(missing_mask_slice)
+                        .float()
+                        .unsqueeze(1)
+                        .expand(-1, batch_size_long, -1)
+                    )
+                else:
+                    missing_mask_long = missing_mask_slice.unsqueeze(1).expand(
+                        -1, batch_size_long, -1
+                    )
+
             # Plot the spectral analysis
             autonomous_mode_selector_long = create_autonomous_mode_selector(
                 seq_len_long,
@@ -278,6 +384,18 @@ if __name__ == "__main__":
                 batch_size=batch_size_long,
                 x_dim=dataset_config.x_dim,
             )
+            # === MASKING BASELINE: Force pure teacher-forcing on mask dimension during evaluation ===
+            # For observation_process == "only_x_indicate", the mask channel must always be 100% TF
+            # to keep evaluation consistent with training behavior.
+            if (
+                getattr(dataset_config, "observation_process", None)
+                == "only_x_indicate"
+            ):
+                autonomous_mode_selector_long = autonomous_mode_selector_long.clone()
+                autonomous_mode_selector_long[:, :, 1] = (
+                    0.0  # mask dimension always 100% TF
+                )
+            # ====================================================================================
             # turn input into tensor and send to GPU if needed
             batch_data_long_tensor = batch_data_long.clone().detach().to(device)
             recon_data_long = (
@@ -305,6 +423,8 @@ if __name__ == "__main__":
                 save_path=save_fig_dir,
                 explain="final_long_inference_mode_even_burst",
                 inference_mode=True,
+                missing_mask=missing_mask_long,
+                hide_mask_output=(getattr(dataset_config, "observation_process", None) == "only_x_indicate"),
             )
             visualize_teacherforcing_2_autonomous(
                 batch_data_long,
@@ -313,6 +433,8 @@ if __name__ == "__main__":
                 save_path=save_fig_dir,
                 explain="final_long_generative_mode",
                 inference_mode=False,
+                missing_mask=missing_mask_long,
+                hide_mask_output=(getattr(dataset_config, "observation_process", None) == "only_x_indicate"),
             )
 
             # Run spectrum analysis and visualization

@@ -190,7 +190,9 @@ def visualize_combined_parameters(
     plt.close()
 
 
-def visualize_sequences(sequences, mode_selector, save_dir, explain=""):
+def visualize_sequences(
+    sequences, mode_selector, save_dir, explain="", missing_mask=None
+):
     linewidth = 2
     true_data = sequences[0]["data"]  # Assuming the first entry is the true sequence
     recon_data = sequences[1][
@@ -218,6 +220,21 @@ def visualize_sequences(sequences, mode_selector, save_dir, explain=""):
 
     n_seq, x_dim = true_data.shape
 
+    # Reshape missing_mask if provided to match dimensions
+    if missing_mask is not None:
+        if missing_mask.ndim == 1:
+            missing_mask = missing_mask[:, np.newaxis]
+        # Ensure missing_mask has same time dimension as true_data
+        if missing_mask.shape[0] != n_seq:
+            if missing_mask.shape[0] == n_seq:
+                pass  # Already correct
+            else:
+                # Warn if shape mismatch and zero it out
+                print(
+                    f"[Warning] missing_mask shape {missing_mask.shape} doesn't match data shape {true_data.shape}"
+                )
+                missing_mask = None
+
     # Create subplots with constrained_layout to handle spacing
     fig, axes = plt.subplots(
         x_dim, 1, figsize=(10, 4 * x_dim), sharex=True, constrained_layout=True
@@ -231,6 +248,42 @@ def visualize_sequences(sequences, mode_selector, save_dir, explain=""):
     # Plot each dimension in its own subplot
     for dim in range(x_dim):
         ax = axes[dim]
+
+        # Add gray background shading for missing regions
+        if missing_mask is not None:
+            missing_dim = (
+                missing_mask
+                if missing_mask.ndim == 1
+                else missing_mask[:, min(dim, missing_mask.shape[1] - 1)]
+            )
+            # Find contiguous missing regions and shade them
+            in_missing = False
+            start_missing = None
+            for i in range(len(missing_dim)):
+                if missing_dim[i] and not in_missing:
+                    # Start of a missing region
+                    start_missing = i - 0.5
+                    in_missing = True
+                elif not missing_dim[i] and in_missing:
+                    # End of a missing region
+                    ax.axvspan(
+                        start_missing,
+                        i - 0.5,
+                        alpha=0.15,
+                        color="gray",
+                        label="Missing Data" if i == 1 else "",
+                    )
+                    in_missing = False
+            # Handle case where sequence ends with missing data
+            if in_missing:
+                ax.axvspan(
+                    start_missing,
+                    len(missing_dim) - 0.5,
+                    alpha=0.15,
+                    color="gray",
+                    label="Missing Data" if dim == 0 else "",
+                )
+
         # Plot added noise if present
         if noise_data is not None:
             ax.plot(noise_data[:, dim], label="Added Noise", color="purple")
@@ -267,6 +320,12 @@ def visualize_sequences(sequences, mode_selector, save_dir, explain=""):
     ]
     if noise_data is not None:
         handles.append(plt.Line2D([0], [0], color="purple", label="Added Noise"))
+    if missing_mask is not None:
+        handles.append(
+            plt.Rectangle(
+                (0, 0), 1, 1, fc="gray", alpha=0.15, label="Missing Data (Original)"
+            )
+        )
     labels = [h.get_label() for h in handles]
     fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(1.0, 1.2))
 
@@ -425,11 +484,15 @@ def visualize_spectral_analysis(
 
 
 def visualize_variable_evolution(
-    states, batch_data, save_dir, variable_name="h", alphas=None, add_lines_lst=[]
+    states,
+    batch_data,
+    save_dir,
+    variable_name="h",
+    alphas=None,
+    add_lines_lst=[],
+    is_segmented_1d=False,
 ):
     seq_len, batch_size, x_dim = batch_data.shape
-    # Assuming batch size is at least 1
-    reshaped_batch_data = batch_data[:, 0, :].reshape(-1).cpu().numpy()
 
     num_dims = states.shape[2]
 
@@ -439,12 +502,26 @@ def visualize_variable_evolution(
     else:
         colors = plt.cm.viridis(np.linspace(0, 1, num_dims))
 
-    # Create a figure with two subplots, making the bottom subplot smaller
-    fig, axs = plt.subplots(
-        2, 1, figsize=(16, 8), gridspec_kw={"height_ratios": [3, 1]}
-    )
+    # Determine the layout based on is_segmented_1d
+    if is_segmented_1d:
+        # For segmented 1D data, use 2 rows: upper for state evolution, lower for reconstructed 1D signal
+        fig, axs = plt.subplots(
+            2, 1, figsize=(16, 8), gridspec_kw={"height_ratios": [3, 1]}
+        )
+        axs = np.atleast_1d(axs)  # Ensure axs is always iterable
+    else:
+        # For true multi-dimensional data, use 1 row for state evolution and multiple rows for signal dimensions
+        num_signal_dims = min(x_dim, 4)  # Cap at 4 dimensions for readability
+        total_rows = 1 + num_signal_dims
+        fig, axs = plt.subplots(
+            total_rows,
+            1,
+            figsize=(16, 4 * total_rows),
+            gridspec_kw={"height_ratios": [3] + [1] * num_signal_dims},
+        )
+        axs = np.atleast_1d(axs)  # Ensure axs is iterable
 
-    # Plotting the variables
+    # Plotting the variables on the first subplot
     for dim in range(num_dims):
         axs[0].plot(
             states[:, 0, dim].cpu().numpy(), label=f"Dim {dim}", color=colors[dim]
@@ -475,7 +552,8 @@ def visualize_variable_evolution(
     # Add vertical lines at specified epochs
     for t in add_lines_lst:
         axs[0].axvline(x=t, color="r", linestyle="--")
-        axs[1].axvline(x=t, color="r", linestyle="--")
+        for ax_idx in range(1, len(axs)):
+            axs[ax_idx].axvline(x=t, color="r", linestyle="--")
 
     str_alphas = (
         f" α: {[round(float(a), 4) for a in sorted(set(alphas.cpu().detach().numpy()))]}"
@@ -496,20 +574,65 @@ def visualize_variable_evolution(
         axs[0].legend(loc="upper right", bbox_to_anchor=(1.25, 1))
     axs[0].grid(True)
 
-    # Plotting the true signal with synchronized time axis
-    time_steps = np.arange(len(reshaped_batch_data)) / x_dim
-    axs[1].plot(time_steps, reshaped_batch_data, label="True Signal", color="blue")
-    axs[1].set_title(
-        textwrap.fill(
-            f"True Signal for {variable_name}",
-            width=50,
-            break_long_words=True,
+    # Plotting the true signal(s) with synchronized time axis
+    if is_segmented_1d:
+        # Reconstruct 1D signal from segmented chunks
+        batch_data_np = batch_data[:, 0, :].cpu().numpy()
+        reshaped_batch_data = batch_data_np.reshape(-1)
+        time_steps = np.arange(len(reshaped_batch_data)) / x_dim
+        axs[1].plot(time_steps, reshaped_batch_data, label="True Signal", color="blue")
+        axs[1].set_title(
+            textwrap.fill(
+                f"True Signal for {variable_name} (reconstructed from {x_dim}-D chunks)",
+                width=50,
+                break_long_words=True,
+            )
         )
-    )
-    axs[1].set_xlabel("Time steps")
-    axs[1].set_ylabel("Signal value")
-    axs[1].legend()
-    axs[1].grid(True)
+        axs[1].set_xlabel("Time steps (original 1D)")
+        axs[1].set_ylabel("Signal value")
+        axs[1].legend()
+        axs[1].grid(True)
+    else:
+        # Plot each input dimension separately
+        batch_data_np = batch_data[:, 0, :].cpu().numpy()  # Shape: (seq_len, x_dim)
+        time_steps = np.arange(batch_data_np.shape[0])
+
+        # Plot each dimension in its own subplot
+        dim_colors = plt.cm.Set2(np.linspace(0, 1, x_dim))
+        for dim in range(min(x_dim, 4)):  # Limit to 4 dimensions for readability
+            ax_idx = 1 + dim
+            ax = axs[ax_idx] if len(axs) > ax_idx else axs[-1]
+            ax.plot(
+                time_steps,
+                batch_data_np[:, dim],
+                label=f"Dim {dim}",
+                color=dim_colors[dim],
+            )
+            ax.set_title(
+                textwrap.fill(
+                    f"True Signal - Input Dimension {dim}",
+                    width=50,
+                    break_long_words=True,
+                )
+            )
+            ax.set_xlabel("Time steps")
+            ax.set_ylabel("Value")
+            ax.legend()
+            ax.grid(True)
+
+        # If x_dim > 4, add a note on the last subplot
+        if x_dim > 4:
+            axs[-1].text(
+                0.5,
+                0.5,
+                f"(Showing 4 out of {x_dim} dimensions)",
+                ha="center",
+                va="center",
+                transform=axs[-1].transAxes,
+                fontsize=12,
+                style="italic",
+                color="gray",
+            )
 
     # Save the figure
     fig_file = os.path.join(save_dir, f"vis_evolution_of_{variable_name}_state.png")
@@ -527,6 +650,8 @@ def visualize_teacherforcing_2_autonomous(
     seq_len=None,
     is_segmented_1d=False,
     noise_selector=None,
+    missing_mask=None,
+    hide_mask_output=False,
 ):
     # Get sequence length and dimensions
     seq_len_total, batch_size, x_dim = batch_data.shape
@@ -558,6 +683,24 @@ def visualize_teacherforcing_2_autonomous(
         expanded_mode_selector = (
             auto_mode_selector[:n_seq, 0, :].reshape(-1).cpu().numpy()
         )
+        # Flatten missing_mask to match flattened data
+        expanded_missing_mask = None
+        if missing_mask is not None:
+            expanded_missing_mask = missing_mask[:n_seq, 0, :].reshape(-1)
+        # If requested, hide mask output channel (e.g., only_x_indicate)
+        if hide_mask_output:
+            # When flattened, keep only the first channel
+            if recon_series.ndim > 1:
+                recon_series = recon_series[:, :1].reshape(-1)
+            if true_series.ndim > 1:
+                true_series = true_series[:, :1].reshape(-1)
+            if expanded_mode_selector is not None:
+                expanded_mode_selector = (
+                    auto_mode_selector[:n_seq, 0, :1].reshape(-1).cpu().numpy()
+                )
+            if expanded_missing_mask is not None:
+                # expanded_missing_mask already flattened per channel; take first channel
+                expanded_missing_mask = expanded_missing_mask
         if noise_selector is not None:
             nv = None
             if hasattr(dvae, "noise_values"):
@@ -584,6 +727,17 @@ def visualize_teacherforcing_2_autonomous(
             recon_batch_data[:n_seq, 0, :].cpu().numpy()
         )  # Shape: (n_seq, x_dim)
         expanded_mode_selector = auto_mode_selector[:n_seq, 0, :].cpu().numpy()
+        # Extract missing_mask slice
+        expanded_missing_mask = None
+        if missing_mask is not None:
+            expanded_missing_mask = missing_mask[:n_seq, 0, :]
+        # Optionally hide the mask output dimension from plots
+        if hide_mask_output and true_series.ndim > 1 and true_series.shape[1] > 1:
+            true_series = true_series[:, :1]
+            recon_series = recon_series[:, :1]
+            expanded_mode_selector = auto_mode_selector[:n_seq, 0, :1].cpu().numpy()
+            if expanded_missing_mask is not None:
+                expanded_missing_mask = expanded_missing_mask[:, :1]
         if noise_selector is not None:
             nv = None
             if hasattr(dvae, "noise_values"):
@@ -619,8 +773,14 @@ def visualize_teacherforcing_2_autonomous(
                 "color": "purple",
             }
         )
-    # Call visualization function
-    visualize_sequences(sequences, expanded_mode_selector, save_path, explain)
+    # Call visualization function with missing_mask
+    visualize_sequences(
+        sequences,
+        expanded_mode_selector,
+        save_path,
+        explain,
+        missing_mask=expanded_missing_mask,
+    )
 
 
 def reduce_dimensions(embeddings, technique="pca", n_components=3):

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """ """
+
 import torch
 from torch.utils.data import Dataset
 import os
@@ -96,7 +97,8 @@ class Xhro(Dataset):
 
         # Store the full sequence before applying any observation process
         self.full_sequence = the_sequence
-
+        # Extract and store the missing mask before applying observation process
+        self.missing_mask = self._extract_missing_mask(the_sequence)
         # Process the sequence based on the observation process
         the_sequence = self.apply_observation_process(the_sequence)
 
@@ -140,6 +142,16 @@ class Xhro(Dataset):
 
         self.update_sequence_length(self.seq_len)
 
+    def _extract_missing_mask(self, sequence):
+        """
+        Extracts a boolean mask indicating which values are missing (NaN) in the input sequence.
+        This is called before observation_process so the mask is tied to the original data.
+
+        Returns:
+            np.ndarray: Boolean mask where True indicates a missing value (NaN).
+        """
+        return np.isnan(sequence)
+
     def apply_observation_process(self, sequence) -> torch.Tensor:
         """
         Applies an observation process to the sequence data.
@@ -170,6 +182,37 @@ class Xhro(Dataset):
             )
             normalized_data = self.normalize(data)
             return torch.tensor(normalized_data, dtype=torch.float32)
+        elif self.observation_process == "only_x_interpolate":
+            # take only x (first dimension) and linearly interpolate NaNs
+            x = sequence.iloc[:, 0].to_numpy(dtype=np.float64)
+            nan_mask = np.isnan(x)
+            n_nan_before = int(np.sum(nan_mask))
+            if n_nan_before > 0:
+                idx = np.arange(x.shape[0])
+                valid = ~nan_mask
+                if valid.any():
+                    x[nan_mask] = np.interp(idx[nan_mask], idx[valid], x[valid])
+                else:
+                    x[:] = 0.0
+            n_nan_after = int(np.isnan(x).sum())
+            normalized_x = self.normalize(x.reshape(-1, 1))[:, 0]
+            print(
+                f"[Xhro][only_x_interpolate] NaNs before: {n_nan_before}, after: {n_nan_after}"
+            )
+            return torch.tensor(normalized_x, dtype=torch.float32)
+        elif self.observation_process == "only_x_indicate":
+            # produce two-dimensional observation: [x_imputed, is_observed]
+            x = sequence.iloc[:, 0].to_numpy(dtype=np.float32)
+            missing_mask = np.isnan(x)
+            missing_count = int(np.sum(missing_mask))
+            x_imputed = np.nan_to_num(x, nan=0.0).astype(np.float32)
+            x_normalized = self.normalize(x_imputed.reshape(-1, 1))[:, 0]
+            is_observed = (~missing_mask).astype(np.float32)
+            result = np.stack([x_normalized, is_observed], axis=1)
+            print(
+                f"[Xhro][only_x_indicate] missing_count: {missing_count}, result_shape: {result.shape}"
+            )
+            return torch.tensor(result, dtype=torch.float32)
         else:
             raise ValueError(f"Invalid observation process: {self.observation_process}")
 
@@ -196,6 +239,21 @@ class Xhro(Dataset):
         end_frame = min(start_frame + self.seq_len, len(self.full_sequence))
         # Return the full (x, y, z) data
         return self.full_sequence[start_frame:end_frame]
+
+    def get_missing_mask(self, index):
+        """
+        Retrieves the missing value mask for the given index.
+        Indicates which values were originally NaN before imputation/interpolation.
+
+        Args:
+            index (int): Index of the desired data sequence.
+
+        Returns:
+            np.ndarray: Boolean mask where True indicates a missing value.
+        """
+        start_frame = self.data_idx[index]
+        end_frame = min(start_frame + self.seq_len, len(self.missing_mask))
+        return self.missing_mask[start_frame:end_frame]
 
     @staticmethod
     def create_moving_window_sequences(sequence, window_size):
