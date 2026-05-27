@@ -53,9 +53,9 @@ if __name__ == "__main__":
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
     experiment_name = (
-        "20260526-"
+        "20260527-"
         # + "XHRO_ep20000_ptf0,0.4-7_MtRNN_Subj70_ch1-4_hdim200_alpha3-9d"
-        + "Lorenz_auto0-0.8_miss0-0.7_clip1_ep20000_LossNone_RNN_hdim40"
+        + "Lorenz_auto0-0.8_miss0-0.7_clip1_ep20000_LossNone_MTRNN3d_hdim40_fixed_patience"
     )
     print("Experiment name:", experiment_name)
     #  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< data name >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -67,9 +67,9 @@ if __name__ == "__main__":
     ]
 
     models = [
-        "RNN",
+        # "RNN",
         # "VRNN",
-        # "MT_RNN",
+        "MT_RNN",
         # "MT_VRNN"
     ]
     rnn_types = [
@@ -94,17 +94,7 @@ if __name__ == "__main__":
         # [0.1, 0.1, 0.1],
         # [ 0.09183, 0.64830, 0.73307, ],
         # [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
-        [
-            0.1,
-            0.1,
-            0.1,
-            0.1,
-            0.1,
-            0.1,
-            0.1,
-            0.1,
-            0.1,
-        ],
+        # [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, ]
     ]
     activation = ["relu"]
     dropout_p = [
