@@ -108,11 +108,9 @@ class LearningAlgorithm:
             "Training", "tie_noise_to_auto", fallback=False
         )  # True: force noise_warm = auto_warm (for tied ablations)
         self.enable_autonomous_warmup = self.autonomous_sampling_method == "ss"
-        self.enable_noise_warmup = (
-            self.enable_autonomous_warmup
-            and self.cfg.get("Training", "noise_sampling_method", fallback="none")
-            in ["ss", "sm"]
-        )
+        self.enable_noise_warmup = self.enable_autonomous_warmup and self.cfg.get(
+            "Training", "noise_sampling_method", fallback="none"
+        ) in ["ss", "sm"]
         self.enable_kl_warmup = self.model_name in ["VRNN", "MT_VRNN"]
 
         # Get host name and date
@@ -430,9 +428,7 @@ class LearningAlgorithm:
         )
         self.noise_target = self.cfg.get("Training", "noise_target", fallback="both")
         current_noise_warm = (
-            self.noise_warm_start
-            if self.enable_noise_warmup
-            else self.noise_warm_limit
+            self.noise_warm_start if self.enable_noise_warmup else self.noise_warm_limit
         )
         noise_warm_values = np.zeros((epochs,))
 
@@ -997,6 +993,10 @@ class LearningAlgorithm:
             noise_warm_values[epoch] = current_noise_warm
             sequence_len_values[epoch] = current_sequence_len
             # Stop traning if early-stop triggers
+            # Only stop when all enabled warm-ups are finished AND the sequence
+            # length has already been increased to the requested maximum. This
+            # allows the sequence-length warm-up to still occur when other
+            # warm-ups are disabled.
             if cpt_patience > early_stop_patience:
                 if (
                     (not self.enable_kl_warmup or current_kl_warm >= 1.0)
@@ -1008,6 +1008,7 @@ class LearningAlgorithm:
                         not self.enable_noise_warmup
                         or current_noise_warm >= self.noise_warm_limit
                     )
+                    and current_sequence_len >= self.sequence_len
                 ):
                     logger.info("Early stop patience achieved")
                     break
@@ -1016,6 +1017,7 @@ class LearningAlgorithm:
                     warm_up_happened = True
                     warm_up_value = 0.1  # Your bump size
 
+                    # Priority: autonomous+noise bump -> KL bump -> sequence-length bump
                     if self.enable_autonomous_warmup and (
                         current_auto_warm < self.auto_warm_limit
                         or (
@@ -1038,7 +1040,7 @@ class LearningAlgorithm:
                         if (
                             self.enable_noise_warmup
                             and current_noise_warm < self.noise_warm_limit
-                        ):  # New: Parallel bump for noise (after auto, before KL/seq)
+                        ):
                             logger.info("Bumping noise warm-up")
                             current_noise_warm = min(
                                 self.noise_warm_limit,
@@ -1090,7 +1092,7 @@ class LearningAlgorithm:
                         if self.enable_kl_warmup:
                             current_kl_warm = 0
                         current_auto_warm = self.auto_warm_start
-                        if self.noise_warm_reset_on_window and self.enable_noise_warmup:  # New: Configurable reset
+                        if self.noise_warm_reset_on_window and self.enable_noise_warmup:
                             current_noise_warm = self.noise_warm_start
                         logger.info("Resetting KL & auto & noise warm-ups")
 

@@ -78,7 +78,8 @@
                 // "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/general_signal/generated/debug_test/cfg_mt_rnn_xhro_test.ini",
                 // "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/general_signal/generated/debug_test/cfg_debug_test_PLRNN.ini",
 
-                "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/general_signal/generated/debug_test/cfg_debug_test_MT_RNN_noise.ini"
+                // "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/general_signal/generated/debug_test/cfg_debug_test_MT_RNN_noise.ini"
+                "--cfg", "/Users/stashtomonaga/workspace/research-DVAE/config/general_signal/generated/debug_test/cfg_debug_test_windowsize.ini"
 
             ]
         },
