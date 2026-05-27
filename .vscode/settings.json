@@ -1,12 +1,54 @@
 {
+    // === Python / Formatting ===
     "python.analysis.autoFormatStrings": true,
     "editor.defaultFormatter": "ms-python.black-formatter",
-    "editor.codeActionsOnSave": {
-
-    },
     "editor.formatOnSave": true,
     "notebook.defaultFormatter": "ms-python.black-formatter",
+    "editor.codeActionsOnSave": {},
+
+    // === Files ===
     "files.autoSave": "onFocusChange",
+
+    // === Python Environment ===
     "python-envs.defaultEnvManager": "ms-python.python:pyenv",
-    "python-envs.pythonProjects": []
+    "python-envs.pythonProjects": [],
+
+    // === GitHub Copilot - Sandbox & Terminal Approvals ===
+    // Disable sandboxing (required on cluster since we can't install socat/bubblewrap)
+    "chat.agent.sandbox.enabled": "off",
+
+    // Auto-approve safe/read-only terminal commands (reduces approval spam)
+    "chat.tools.terminal.autoApprove": {
+        // Safe read-only / inspection commands
+        "ls": true,
+        "cat": true,
+        "head": true,
+        "tail": true,
+        "wc": true,
+        "pwd": true,
+        "echo": true,
+        "which": true,
+        "type": true,
+        "file": true,
+        "stat": true,
+
+        // Git (read-only operations)
+        "git status": true,
+        "git diff": true,
+        "git log": true,
+        "git show": true,
+        "git branch": true,
+        "git remote": true,
+
+        // Python / syntax checks
+        "python": true,
+        "python3": true,
+        "bash -n": true,
+        "bash --version": true,
+
+        // Common safe commands
+        "find": true,
+        "grep": true,
+        "rg": true
+    }
 }
