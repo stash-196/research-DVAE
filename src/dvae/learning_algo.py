@@ -1538,7 +1538,10 @@ class LearningAlgorithm:
                     explain=f"training_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
                     inference_mode=True,
                     missing_mask=temp_missing_mask,
-                    hide_mask_output=(getattr(dataset_config, "observation_process", None) == "only_x_indicate"),
+                    hide_mask_output=(
+                        getattr(dataset_config, "observation_process", None)
+                        == "only_x_indicate"
+                    ),
                 )
 
                 # START: Compute autonomous mode selector for Even Bursts visualization #################
@@ -1585,7 +1588,10 @@ class LearningAlgorithm:
                     explain=f"even_bursts_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
                     inference_mode=True,
                     missing_mask=temp_missing_mask,
-                    hide_mask_output=(getattr(dataset_config, "observation_process", None) == "only_x_indicate"),
+                    hide_mask_output=(
+                        getattr(dataset_config, "observation_process", None)
+                        == "only_x_indicate"
+                    ),
                 )
 
                 # START: Compute autonomous mode selector for Half-Half visualization #################
@@ -1631,7 +1637,10 @@ class LearningAlgorithm:
                     explain=f"half_half_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
                     inference_mode=True,
                     missing_mask=temp_missing_mask,
-                    hide_mask_output=(getattr(dataset_config, "observation_process", None) == "only_x_indicate"),
+                    hide_mask_output=(
+                        getattr(dataset_config, "observation_process", None)
+                        == "only_x_indicate"
+                    ),
                 )
 
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":

@@ -290,8 +290,15 @@ if __name__ == "__main__":
                 save_path=save_fig_dir,
                 explain=f"final_short_inference_mode_half_half_short",
                 inference_mode=True,
-                missing_mask=(missing_mask_long[1:, :, :] if missing_mask_long is not None else None),
-                hide_mask_output=(getattr(dataset_config, "observation_process", None) == "only_x_indicate"),
+                missing_mask=(
+                    missing_mask_long[1:, :, :]
+                    if missing_mask_long is not None
+                    else None
+                ),
+                hide_mask_output=(
+                    getattr(dataset_config, "observation_process", None)
+                    == "only_x_indicate"
+                ),
             )
 
         # visualize the hidden states
@@ -424,7 +431,10 @@ if __name__ == "__main__":
                 explain="final_long_inference_mode_even_burst",
                 inference_mode=True,
                 missing_mask=missing_mask_long,
-                hide_mask_output=(getattr(dataset_config, "observation_process", None) == "only_x_indicate"),
+                hide_mask_output=(
+                    getattr(dataset_config, "observation_process", None)
+                    == "only_x_indicate"
+                ),
             )
             visualize_teacherforcing_2_autonomous(
                 batch_data_long,
@@ -434,7 +444,10 @@ if __name__ == "__main__":
                 explain="final_long_generative_mode",
                 inference_mode=False,
                 missing_mask=missing_mask_long,
-                hide_mask_output=(getattr(dataset_config, "observation_process", None) == "only_x_indicate"),
+                hide_mask_output=(
+                    getattr(dataset_config, "observation_process", None)
+                    == "only_x_indicate"
+                ),
             )
 
             # Run spectrum analysis and visualization
