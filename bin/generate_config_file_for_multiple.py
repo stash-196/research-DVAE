@@ -53,9 +53,9 @@ if __name__ == "__main__":
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
     experiment_name = (
-        "20260520-"
-        + "XHRO_ptf0.5-7_RNN_Subj70_ch3-4_hdim20-40"
-        # + "Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_LSTM_hdim20"
+        "20260526-"
+        # + "XHRO_ep20000_ptf0,0.4-7_MtRNN_Subj70_ch1-4_hdim200_alpha3-9d"
+        + "Lorenz_auto0-0.8_miss0-0.7_clip1_ep20000_LossNone_RNN_hdim40"
     )
     print("Experiment name:", experiment_name)
 
@@ -79,7 +79,7 @@ if __name__ == "__main__":
     z_dim = [9]
     dense_z = [[16, 32]]
 
-    dim_rnn = [20, 40]
+    dim_rnn = [40]
     alphas = [
         [0.1, 0.1, 0.1],
         # [0.1],
@@ -99,7 +99,7 @@ if __name__ == "__main__":
     # Training
     lr = [0.001]
     alpha_lr = [0.01]
-    epochs = [10000]
+    epochs = [20000]
     early_stop_patience = [200]
     save_frequency = [200]
     gradient_clip = [1.0]
@@ -111,18 +111,18 @@ if __name__ == "__main__":
         # "sm"
     ]
     sampling_ratio = [
-        # 0.0,
+        0.0,
         # 0.01,
         # 0.05,
-        # 0.1,
+        0.1,
         # 0.2,
-        # 0.3,
+        0.3,
         # 0.4,
         0.5,
-        0.6,
+        # 0.6,
         0.7,
-        # 0.8,
-        # 0.9,
+        0.8,
+        0.9,
     ]
     auto_warm_start = [
         0.0,
@@ -159,9 +159,10 @@ if __name__ == "__main__":
     noise_window_size = [100]
 
     # DataFrame
+    #  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< data name >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     dataset_name = [
-        "Xhro",
-        # "Lorenz63",
+        # "Xhro",
+        "Lorenz63",
         # "SHO",
         # "DampedSHO"
     ]
@@ -238,8 +239,8 @@ if __name__ == "__main__":
     if dataset_name[0] == "Xhro":
         observation_process = [
             # "raw_all",
-            # "raw_ch1",
-            # "raw_ch2",
+            "raw_ch1",
+            "raw_ch2",
             "raw_ch3",
             "raw_ch4",
             # "ch4_relative_powers",

@@ -24,6 +24,7 @@ from matplotlib.colors import SymLogNorm
 DISPLAY_NAMES = {
     "mask_label": "Missing Ratio",
     "sampling_ratio": "Auto Ratio",
+    "observation_process": "Channel",
 }
 
 # Dictionary for metric display names
@@ -34,6 +35,57 @@ METRIC_DISPLAY_NAMES = {
     "spectrum_error_tf": "Spectrum Error Teacher Forced",
     "spectrum_error_auto": "Spectrum Error Autonomous",
 }
+
+# Dictionary for value display names (map raw labels to nicer labels)
+VALUE_DISPLAY_NAMES = {
+    "raw_ch1": "Ch1",
+    "raw_ch2": "Ch2",
+    "raw_ch3": "Ch3",
+    "raw_ch4": "Ch4",
+}
+
+
+def is_numeric(val):
+    try:
+        float(val)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def get_value_display_name(val):
+    """Map raw parameter values to nicer display strings if available."""
+    if isinstance(val, (list, tuple)):
+        return [get_value_display_name(v) for v in val]
+    if val in VALUE_DISPLAY_NAMES:
+        return VALUE_DISPLAY_NAMES[val]
+    return val
+
+
+def find_delay_embedding_gif(yaml_dir, mode):
+    """Find a delay embedding GIF for the requested mode.
+
+    The TF output name has varied across runs, so we try a small set of glob
+    patterns before giving up.
+    """
+    post_dir = os.path.join(yaml_dir, "post_training_figs")
+    if mode == "tf":
+        patterns = [
+            os.path.join(post_dir, "vis_delay_embedding_of_*teacher-forced*.gif"),
+            os.path.join(post_dir, "vis_delay_embedding_of_*teacher_forced*.gif"),
+            os.path.join(post_dir, "vis_delay_embedding_of_*teacher-_forced*.gif"),
+            os.path.join(post_dir, "vis_delay_embedding_of_*teacher*forced*.gif"),
+        ]
+    else:
+        patterns = [
+            os.path.join(post_dir, "vis_delay_embedding_of_*autonomous*.gif"),
+        ]
+
+    for pattern in patterns:
+        gif_files = glob.glob(pattern)
+        if gif_files:
+            return gif_files[0]
+    return None
 
 
 def sort_key(x):
@@ -155,11 +207,21 @@ def plot_1d(data, param, metric, output_dir):
     plt.figure(figsize=(8, 6))
     plt.yscale("symlog")
 
-    if has_dups:
-        # Multiple secondary parameters exist, rendering scatter plot to avoid vertical/overlap lines
-        plt.plot(sorted_p, sorted_m, "o", alpha=0.7, markersize=8)
+    # If x-values are categorical (non-numeric), plot against indices and set tick labels
+    if not all(is_numeric(v) for v in sorted_p):
+        x_vals = list(range(len(sorted_p)))
+        if has_dups:
+            plt.plot(x_vals, list(sorted_m), "o", alpha=0.7, markersize=8)
+        else:
+            plt.plot(x_vals, list(sorted_m), "o-")
+        plt.xticks(x_vals, [get_value_display_name(p) for p in sorted_p], rotation=45)
     else:
-        plt.plot(sorted_p, sorted_m, "o-")
+        # numeric x-axis
+        num_x = [float(v) for v in sorted_p]
+        if has_dups:
+            plt.plot(num_x, sorted_m, "o", alpha=0.7, markersize=8)
+        else:
+            plt.plot(num_x, sorted_m, "o-")
 
     plt.xlabel(get_display_name(param))
     plt.ylabel(get_metric_display_name(metric))
@@ -223,9 +285,9 @@ def plot_2d(data, param1, metric, output_dir, param2=None):
     ax.xaxis.set_label_position("top")
 
     ax.set_xticks(range(len(param2_values)))
-    ax.set_xticklabels(param2_values)
+    ax.set_xticklabels([get_value_display_name(v) for v in param2_values])
     ax.set_yticks(range(len(param1_values)))
-    ax.set_yticklabels(param1_values)
+    ax.set_yticklabels([get_value_display_name(v) for v in param1_values])
 
     if param2:
         plt.xlabel(get_display_name(param2))
@@ -328,21 +390,8 @@ def aggregate_delay_embeddings(data, args, output_dir):
 
             # Find the output dir
             yaml_dir = os.path.dirname(d["yaml_file"])
-            # Assume the GIF is in post_training_figs/vis_delay_embedding_of_*mode*.gif
-            if mode == "tf":
-                gif_pattern = os.path.join(
-                    yaml_dir,
-                    "post_training_figs",
-                    "vis_delay_embedding_of_*teacher-forced*.gif",
-                )
-            else:
-                gif_pattern = os.path.join(
-                    yaml_dir,
-                    "post_training_figs",
-                    "vis_delay_embedding_of_*autonomous*.gif",
-                )
-            gif_files = glob.glob(gif_pattern)
-            if not gif_files:
+            gif_path = find_delay_embedding_gif(yaml_dir, mode)
+            if not gif_path:
                 print(f"No delay embedding GIF found for {yaml_dir}")
                 axs[i, j].text(
                     0.5,
@@ -355,8 +404,6 @@ def aggregate_delay_embeddings(data, args, output_dir):
                 filled[(i, j)] = True
                 continue
 
-            # Take the first one
-            gif_path = gif_files[0]
             try:
                 with Image.open(gif_path) as im:
                     im.seek(0)
@@ -403,10 +450,10 @@ def aggregate_delay_embeddings(data, args, output_dir):
 
                 # Top row prints param2, left column prints param1
                 if i == 0:
-                    axs[i, j].set_title(str(unique_param2[j]), fontsize=45, pad=15)
+                    axs[i, j].set_title(str(get_value_display_name(unique_param2[j])), fontsize=45, pad=15)
                 if j == 0:
                     axs[i, j].set_ylabel(
-                        str(unique_param1[i]), fontsize=45, labelpad=15
+                        str(get_value_display_name(unique_param1[i])), fontsize=45, labelpad=15
                     )
 
         # Global axis labels
@@ -628,20 +675,28 @@ def main():
             row[param] = get_param_value(d, param)
         param_table.append(row)
 
-    # Print table
-    if param_table:
+    # Create a display version of the table using the mapping for nicer labels
+    display_table = []
+    for row in param_table:
+        display_row = {}
+        for param in args.parameters:
+            display_row[param] = get_value_display_name(row.get(param))
+        display_table.append(display_row)
+
+    # Print table (display names)
+    if display_table:
         print("\nParameter values across runs:")
         headers = args.parameters
         print("\t".join(headers))
-        for row in param_table:
+        for row in display_table:
             print("\t".join(str(row.get(h, "N/A")) for h in headers))
 
-    # Save to CSV
+    # Save to CSV (display names)
     csv_file = os.path.join(args.output_dir, "parameter_values.csv")
     with open(csv_file, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=args.parameters)
         writer.writeheader()
-        for row in param_table:
+        for row in display_table:
             writer.writerow({k: v for k, v in row.items() if k in args.parameters})
 
     if args.verbose:

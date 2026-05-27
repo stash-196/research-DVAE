@@ -863,6 +863,9 @@ def visualize_delay_embedding(
     if not isinstance(embedded, np.ndarray) or embedded.shape[1] != 3:
         raise ValueError("embedded must be (N, 3) NumPy array.")
 
+    def normalize_filename_token(token):
+        return token.replace("-_", "-")
+
     fig = plt.figure(figsize=(12, 8))
     ax = fig.add_subplot(111, projection="3d")
 
@@ -922,7 +925,8 @@ def visualize_delay_embedding(
     )
 
     fig_file = os.path.join(
-        save_dir, f"vis_delay_embedding_of_{variable_name}_{explain}.gif"
+        save_dir,
+        f"vis_delay_embedding_of_{normalize_filename_token(variable_name)}_{normalize_filename_token(explain)}.gif",
     )
     print(f"Saving animation at: {fig_file}")
     start_time = time.time()

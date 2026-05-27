@@ -3,19 +3,34 @@
 # Script to generate and submit SLURM jobs for resuming training of models
 # Set DRY_RUN=1 to test without submitting (prints sbatch commands instead)
 # Set DRY_RUN=0 to actually submit jobs
-DRY_RUN=1
+DRY_RUN=0
 
 # Edit the experiments array below to add/remove target directories
 
 # Define a list of experiment directories
 declare -a experiments=(
+    # # 2026-01-22/
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-22/deigo_cluster/20260122_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MT-RNN_Subj70_ch1-2_h1000"
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-22/deigo_cluster/20260122_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_v-LSRNN_Subj70_ch3-4_h1000"
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-22/deigo_cluster/20260122_XHRO_len1000_drop0_ptf0.6-_clip1_AllLoss_MT-RNN_Subj70_ch3-4_h1000"
+
 
     # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh"
     # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNN_hdi20_ptientHigh"
 
-   "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-30/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
+#    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-30/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
 
-    # Add more directories here as needed
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-30/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh"
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-04-21/deigo_cluster/20260421-Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNNonly_hdimS"
+
+# 2026-05-20/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_LSTM_hdim20"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_MTRNN_hdim40"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_RNN_hdim40"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-XHRO_ptf0.5-7_MTRNN_Subj70_ch3-4_hdim20-40_alphas3-9d"
+#     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-XHRO_ptf0.5-7_RNN_Subj70_ch3-4_hdim20-40"
+
+
 )
 
 # Get the current date in YYYY-MM-DD format
@@ -76,7 +91,7 @@ for EXPERIMENT_DIR in "${experiments[@]}"; do
 # Create a temporary SLURM script for this run
             cat > "$TEMP_DIR/run_resume_$RUN_BASENAME.slurm" <<EOL
 #!/bin/bash
-#SBATCH --job-name=${RUN_BASENAME}_resume
+#SBATCH --job-name=resume_${RUN_BASENAME}
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8

@@ -2,10 +2,10 @@ import pandas as pd
 import numpy as np
 
 def get_benchmark_signals(
-    dataset_name, 
-    test_dataloader, 
-    i, 
-    recon_data_long, 
+    dataset_name,
+    test_dataloader,
+    i,
+    recon_data_long,
     autonomous_mode_selector_long,
     batch_data_long
 ):
@@ -37,7 +37,7 @@ def get_benchmark_signals(
             name_lst = ["Ground Truth", "Teacher-Forced", "Autonomous"]
         else:
             name_lst = ["Ground\nTruth", "Teacher-\nForced", "Autonomous"]
-            
+
         key_lst = ["gt", "tf", "auto"]
         true_signal_index = 0
         colors_lst = ["blue", "green", "red"]

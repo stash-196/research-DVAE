@@ -6,28 +6,67 @@
 # Define experiment runs as a standard array (list).
 # Format: "experiment_directory --parameters param1 param2 --filter key=val"
 experiments=(
-    #
-    # "/flash/DoyaU/stash/research-DVAE/saved_model/2024-11-02/ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios --parameters sampling_ratio mask_label"
-    # "/flash/DoyaU/stash/research-DVAE/saved_model/2024-11-01/ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios --parameters sampling_ratio mask_label"
+    # # 2026-01-14/
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch"
 
-        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch --parameters observation_process sampling_ratio"
-        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch --parameters observation_process sampling_ratio"
+    # # 2026-01-16/
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-16/deigo_cluster/20260116_XHRO_len500_drop0.1_ss0.1-AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000 --parameters observation_process sampling_ratio"
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-16/deigo_cluster/20260116_XHRO_len500_drop0.1_ss0.1-AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000 --parameters sampling_ratio observation_process"
+
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-16/deigo_cluster/20260116_XHRO_ss0.1-AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000 --parameters observation_process sampling_ratio"
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-16/deigo_cluster/20260116_XHRO_ss0.1-AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000 --parameters sampling_ratio observation_process"
+
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-16/deigo_cluster/20260116_XHRO_sss-AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000 --parameters observation_process sampling_ratio"
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-16/deigo_cluster/20260116_XHRO_sss-AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000 --parameters sampling_ratio observation_process"
+
+    # # 2026-01-18/
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-18/deigo_cluster/20260118_XHRO_len500_drop0.1_ss0.4-_AllLoss_v-LS-sh-PL-RNN_Subj70_ch4_h1000"
+
+    # # 2026-01-21/
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-21/deigo_cluster/20260121_XHRO_len1000_drop0_ss0.5-_AllLoss_MT-RNN_Subj70_ch3-4_h1000 --parameters sampling_ratio observation_process"
+
+    # # # 2026-01-22/
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-22/deigo_cluster/20260122_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MT-RNN_Subj70_ch1-2_h1000 --parameters sampling_ratio observation_process"
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-22/deigo_cluster/20260122_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_v-LSRNN_Subj70_ch3-4_h1000 --parameters sampling_ratio observation_process"
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-22/deigo_cluster/20260122_XHRO_len1000_drop0_ptf0.6-_clip1_AllLoss_MT-RNN_Subj70_ch3-4_h1000 --parameters sampling_ratio observation_process"
+
+    # 2026-01-24/
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-24/deigo_cluster/20260123_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSRNN_Subj70_ch3-4_h100 --parameters sampling_ratio observation_process --filter loss_mask_mode=strict"
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-24/deigo_cluster/20260123_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSRNN_Subj70_ch3-4_h100 --parameters sampling_ratio observation_process --filter loss_mask_mode=none"
+
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-24/deigo_cluster/20260123_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSRNN_Subj70_ch3-4_h100"
+
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2024-11-02/ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios --parameters sampling_ratio mask_label"
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2024-11-01/ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios --parameters sampling_ratio mask_label"
+
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch --parameters sampling_ratio observation_process --filter dataset_label=XHRO_02_XH070 tag=MT_RNN"
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch --parameters sampling_ratio observation_process --filter dataset_label=XHRO_02_XH070 tag=MT_RNN"
     # # 2026-01-25/
-    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-25/deigo_cluster/20260125_32mem_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100 --parameters observation_process sampling_ratio"
-    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-25/deigo_cluster/20260125_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100 --parameters observation_process sampling_ratio"
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-25/deigo_cluster/20260125_32mem_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100 --parameters sampling_ratio observation_process"
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-25/deigo_cluster/20260125_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100 --parameters sampling_ratio observation_process"
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-25/deigo_cluster/20260125_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100 --parameters sampling_ratio observation_process --filter loss_mask_mode=strict"
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-25/deigo_cluster/20260125_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100 --parameters sampling_ratio observation_process --filter loss_mask_mode=none"
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-25/deigo_cluster/20260125_32mem_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100 --parameters sampling_ratio observation_process --filter loss_mask_mode=strict"
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-25/deigo_cluster/20260125_32mem_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100 --parameters sampling_ratio observation_process --filter loss_mask_mode=none"
+
+    # 2026-01-26/
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-26/deigo_cluster/20260126_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100 --parameters sampling_ratio observation_process --filter loss_mask_mode=strict"
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-26/deigo_cluster/20260126_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100 --parameters sampling_ratio observation_process --filter loss_mask_mode=none"
+
+
 
     # # 2026-01-27/
-    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-27/deigo_cluster/20260126_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100 --parameters observation_process sampling_ratio"
-    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-27/deigo_cluster/20260127_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_hdims --parameters observation_process sampling_ratio"
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-27/deigo_cluster/20260126_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_h100 --parameters sampling_ratio observation_process"
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-27/deigo_cluster/20260127_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_hdims --parameters sampling_ratio observation_process"
 
     # 2026-01-28/
         # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-28/deigo_cluster/20260128_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_hdims_ptientHigh --parameters dim_rnn sampling_ratio"
 
     # # 2026-01-29/
-    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-29/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh --parameters observation_process sampling_ratio"
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-29/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh --parameters sampling_ratio observation_process"
 
     # # 2026-01-30/
-    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-30/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh --parameters observation_process sampling_ratio"
+        # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-30/deigo_cluster/20260129_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch1-2_hdi20s_ptientHigh --parameters sampling_ratio observation_process"
 
     # 2026-01-14/
     # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-01-14/deigo_cluster/20260114_XHRO_ssHIGH-AllLoss_v-MT-RNN_ss_3Subjs_h256_1Dch --parameters sampling_ratio --filter loss_mask_mode=none dataset_label=XHRO_02_XH070"
@@ -40,11 +79,60 @@ experiments=(
     # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_hdi20s_ptientHigh --parameters sampling_ratio mask_label"
     # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MTRNN_hdi20-40_ptientHigh --parameters sampling_ratio mask_label"
 
-    # 2026-04-2
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-04-21/deigo_cluster/20260421-Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNNonly_hdimS --parameters sampling_ratio mask_label --filter dim_rnn=5"
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-04-21/deigo_cluster/20260421-Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNNonly_hdimS --parameters sampling_ratio mask_label --filter dim_rnn=10"
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-04-21/deigo_cluster/20260421-Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNNonly_hdimS --parameters sampling_ratio mask_label --filter dim_rnn=20"
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-04-21/deigo_cluster/20260421-Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNNonly_hdimS --parameters sampling_ratio mask_label --filter dim_rnn=40"
+
+    # 2026-04-21/
+	"/flash/DoyaU/stash/research-DVAE/saved_model/2026-04-21/deigo_cluster/20260421-Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNNonly_hdimS --parameters sampling_ratio mask_label --filter dim_rnn=5"
+	"/flash/DoyaU/stash/research-DVAE/saved_model/2026-04-21/deigo_cluster/20260421-Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNNonly_hdimS --parameters sampling_ratio mask_label --filter dim_rnn=10"
+	"/flash/DoyaU/stash/research-DVAE/saved_model/2026-04-21/deigo_cluster/20260421-Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNNonly_hdimS --parameters sampling_ratio mask_label --filter dim_rnn=20"
+	"/flash/DoyaU/stash/research-DVAE/saved_model/2026-04-21/deigo_cluster/20260421-Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_MTRNNonly_hdimS --parameters sampling_ratio mask_label --filter dim_rnn=40"
+
+
+    # # 2026-04-24/
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-04-24/deigo_cluster/20260424-Lorenz_epoch10000_len1000_nois_NoMiss_clip1_LossNone_MTRNNonly_hdim40 --parameters sampling_ratio mask_label"
+
+    # # 2026-04-26/
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-04-26/deigo_cluster/ 20260426-Lorenz_noise0.2-0.8_epoch10000_len1000_NoMiss_clip1_LossNone_MTRNNonly_hdim40"
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-04-26/deigo_cluster/20260426-2-Lorenz_noise0.2-0.8_epoch10000_len1000_NoMiss_clip1_LossNone_MTRNN_alphas3d_hdim40"
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-04-26/deigo_cluster/20260426-2-Lorenz_noise0.2-0.8_epoch10000_len1000_NoMiss_clip1_LossNone_MTRNNonly_hdim40"
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-04-26/deigo_cluster/20260426-Lorenz_noise0.2-0.8_epoch10000_len1000_NoMiss_clip1_LossNone_MTRNNonly_hdim40"
+
+    # # 2026-05-20/
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_LSTM_hdim20 --parameters sampling_ratio mask_label"
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_MTRNN_hdim40 --parameters sampling_ratio mask_label"
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_RNN_hdim40 --parameters sampling_ratio mask_label"
+
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-XHRO_ptf0.5-7_MTRNN_Subj70_ch3-4_hdim20-40_alphas3-9d --parameters sampling_ratio observation_process --filter alphas='0.1, 0.1, 0.1'"
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-XHRO_ptf0.5-7_MTRNN_Subj70_ch3-4_hdim20-40_alphas3-9d --parameters sampling_ratio observation_process --filter alphas='0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1'"
+
+    #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-XHRO_ptf0.5-7_RNN_Subj70_ch3-4_hdim20-40 --parameters sampling_ratio observation_process"
+
+    # 2026-05-20/
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_LSTM_hdim20 --parameters sampling_ratio mask_label"
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_MTRNN_hdim40 --parameters sampling_ratio mask_label"
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_RNN_hdim40 --parameters sampling_ratio mask_label"
+
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-XHRO_ptf0.5-7_MTRNN_Subj70_ch3-4_hdim20-40_alphas3-9d --parameters sampling_ratio observation_process --filter alphas='0.1, 0.1, 0.1' dim_rnn=20"
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-XHRO_ptf0.5-7_MTRNN_Subj70_ch3-4_hdim20-40_alphas3-9d --parameters sampling_ratio observation_process --filter alphas='0.1, 0.1, 0.1' dim_rnn=40"
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-XHRO_ptf0.5-7_MTRNN_Subj70_ch3-4_hdim20-40_alphas3-9d --parameters sampling_ratio observation_process --filter alphas='0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1' dim_rnn=20"
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-XHRO_ptf0.5-7_MTRNN_Subj70_ch3-4_hdim20-40_alphas3-9d --parameters sampling_ratio observation_process --filter alphas='0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1' dim_rnn=40"
+
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-XHRO_ptf0.5-7_RNN_Subj70_ch3-4_hdim20-40 --parameters sampling_ratio observation_process --filter dim_rnn=20"
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-XHRO_ptf0.5-7_RNN_Subj70_ch3-4_hdim20-40 --parameters sampling_ratio observation_process --filter dim_rnn=40"
+
+    # 2026-05-21/
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-21/deigo_cluster/20260521-XHRO_ptf0.5-7_MTRNN_Subj70_ch1-2_hdim20-40 --parameters sampling_ratio observation_process --filter alphas='0.1, 0.1, 0.1' dim_rnn=20"
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-21/deigo_cluster/20260521-XHRO_ptf0.5-7_MTRNN_Subj70_ch1-2_hdim20-40 --parameters sampling_ratio observation_process --filter alphas='0.1, 0.1, 0.1' dim_rnn=40"
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-21/deigo_cluster/20260521-XHRO_ptf0.5-7_MTRNN_Subj70_ch1-2_hdim20-40 --parameters sampling_ratio observation_process --filter alphas='0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1' dim_rnn=20"
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-21/deigo_cluster/20260521-XHRO_ptf0.5-7_MTRNN_Subj70_ch1-2_hdim20-40 --parameters sampling_ratio observation_process --filter alphas='0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1' dim_rnn=40"
+
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-21/deigo_cluster/20260521-XHRO_ptf0.5-7_RNN_Subj70_ch1-2_hdim20-40 --parameters sampling_ratio observation_process --filter dim_rnn=20"
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-21/deigo_cluster/20260521-XHRO_ptf0.5-7_RNN_Subj70_ch1-2_hdim20-40 --parameters sampling_ratio observation_process --filter dim_rnn=40"
+
+    # 2026-05-23/
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-23/deigo_cluster/20260523-XHRO_ptf0.5-7_MTRNN_Subj70_ch1-4_hdim200_alphas --parameters sampling_ratio observation_process --filter alphas='0.1, 0.1, 0.1' "
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-23/deigo_cluster/20260523-XHRO_ptf0.5-7_MTRNN_Subj70_ch1-4_hdim200_alphas --parameters sampling_ratio observation_process --filter alphas='0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1' "
+
+        "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-23/deigo_cluster/20260523-XHRO_ptf0.5-7_RNN_Subj70_ch1-4_hdim200 --parameters sampling_ratio observation_process"
 )
 
 # Get the current date in YYYY-MM-DD format

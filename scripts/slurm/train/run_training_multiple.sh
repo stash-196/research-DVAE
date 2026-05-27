@@ -4,7 +4,7 @@
 BASE_DIR=~/workspace/research-DVAE/config/general_signal/generated
 
 # Define a list of experiment names, each corresponding to a subdirectory under BASE_DIR
-declare -a experiments=("20260520-Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_LSTM_hdim20")
+declare -a experiments=("20260526-Lorenz_auto0-0.8_miss0-0.7_clip1_ep20000_LossNone_RNN_hdim40")
 
 # Get the current date in YYYY-MM-DD format
 today=$(date +%Y-%m-%d)
@@ -47,7 +47,7 @@ for experiment in "${experiments[@]}"; do
         # Create a temporary SLURM script for this configuration
         cat > "$TEMP_DIR/run_training_$CONFIG_BASENAME.slurm" <<EOL
 #!/bin/bash
-#SBATCH --job-name=${CONFIG_BASENAME}_training
+#SBATCH --job-name=train_${CONFIG_BASENAME}
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
