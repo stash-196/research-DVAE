@@ -107,6 +107,13 @@ class LearningAlgorithm:
         self.tie_noise_to_auto = self.cfg.getboolean(
             "Training", "tie_noise_to_auto", fallback=False
         )  # True: force noise_warm = auto_warm (for tied ablations)
+        self.enable_autonomous_warmup = self.autonomous_sampling_method == "ss"
+        self.enable_noise_warmup = (
+            self.enable_autonomous_warmup
+            and self.cfg.get("Training", "noise_sampling_method", fallback="none")
+            in ["ss", "sm"]
+        )
+        self.enable_kl_warmup = self.model_name in ["VRNN", "MT_VRNN"]
 
         # Get host name and date
         self.hostname = socket.gethostname()
@@ -401,15 +408,15 @@ class LearningAlgorithm:
                 # set initial values of sigmas_history with alphas_init
                 sigmas_history[:, 0] = sigmoid_reverse_10(alphas_init)
 
-        current_auto_warm = self.auto_warm_start
-        if self.autonomous_sampling_method in ["ss", "sm"]:
-            current_auto_warm = self.auto_warm_start
-        else:
-            current_auto_warm = self.auto_warm_limit
+        current_auto_warm = (
+            self.auto_warm_start
+            if self.enable_autonomous_warmup
+            else self.auto_warm_limit
+        )
         auto_warm_values = np.zeros((epochs,))
 
         # if model is vrnn or mt_vrnn, then kl_warm is used
-        if self.model_name in ["VRNN", "MT_VRNN"]:
+        if self.enable_kl_warmup:
             current_kl_warm = 0
         else:
             current_kl_warm = 1
@@ -422,11 +429,11 @@ class LearningAlgorithm:
             "Training", "noise_std_factor", fallback=0.1
         )
         self.noise_target = self.cfg.get("Training", "noise_target", fallback="both")
-        current_noise_warm = self.noise_warm_start
-        if self.noise_sampling_method in ["ss", "sm"]:
-            current_noise_warm = self.noise_warm_start
-        else:
-            current_noise_warm = self.noise_warm_limit
+        current_noise_warm = (
+            self.noise_warm_start
+            if self.enable_noise_warmup
+            else self.noise_warm_limit
+        )
         noise_warm_values = np.zeros((epochs,))
 
         # stores the value of kl_warm at the epoch
@@ -475,7 +482,7 @@ class LearningAlgorithm:
             }
 
             # New: parallel structure just for noise
-            if self.tie_noise_to_auto:
+            if self.tie_noise_to_auto and self.enable_noise_warmup:
                 current_noise_warm = (
                     current_auto_warm  # Direct tie for confounding-free baselines
                 )
@@ -992,11 +999,15 @@ class LearningAlgorithm:
             # Stop traning if early-stop triggers
             if cpt_patience > early_stop_patience:
                 if (
-                    current_kl_warm >= 1.0
-                    and current_auto_warm >= self.auto_warm_limit
-                    and current_noise_warm
-                    >= self.noise_warm_limit  # New: wait for noise too
-                    and current_sequence_len >= self.sequence_len
+                    (not self.enable_kl_warmup or current_kl_warm >= 1.0)
+                    and (
+                        not self.enable_autonomous_warmup
+                        or current_auto_warm >= self.auto_warm_limit
+                    )
+                    and (
+                        not self.enable_noise_warmup
+                        or current_noise_warm >= self.noise_warm_limit
+                    )
                 ):
                     logger.info("Early stop patience achieved")
                     break
@@ -1005,9 +1016,12 @@ class LearningAlgorithm:
                     warm_up_happened = True
                     warm_up_value = 0.1  # Your bump size
 
-                    if (
+                    if self.enable_autonomous_warmup and (
                         current_auto_warm < self.auto_warm_limit
-                        or current_noise_warm < self.noise_warm_limit
+                        or (
+                            self.enable_noise_warmup
+                            and current_noise_warm < self.noise_warm_limit
+                        )
                     ):
                         if current_auto_warm < self.auto_warm_limit:
                             logger.info("Bumping auto warm-up")
@@ -1022,7 +1036,8 @@ class LearningAlgorithm:
                                 )
                             )
                         if (
-                            current_noise_warm < self.noise_warm_limit
+                            self.enable_noise_warmup
+                            and current_noise_warm < self.noise_warm_limit
                         ):  # New: Parallel bump for noise (after auto, before KL/seq)
                             logger.info("Bumping noise warm-up")
                             current_noise_warm = min(
@@ -1035,7 +1050,7 @@ class LearningAlgorithm:
                                     current_noise_warm
                                 )
                             )
-                    elif current_kl_warm < 1.0:
+                    elif self.enable_kl_warmup and current_kl_warm < 1.0:
                         logger.info("Bumping KL warm-up")
                         current_kl_warm += warm_up_value
 
@@ -1072,10 +1087,10 @@ class LearningAlgorithm:
                             )
                         )
 
-                        if self.model_name in ["VRNN", "MT_VRNN"]:
+                        if self.enable_kl_warmup:
                             current_kl_warm = 0
                         current_auto_warm = self.auto_warm_start
-                        if self.noise_warm_reset_on_window:  # New: Configurable reset
+                        if self.noise_warm_reset_on_window and self.enable_noise_warmup:  # New: Configurable reset
                             current_noise_warm = self.noise_warm_start
                         logger.info("Resetting KL & auto & noise warm-ups")
 
