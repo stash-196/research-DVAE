@@ -40,6 +40,7 @@ from dvae.visualizers import (
     visualize_alpha_history_and_spectrums,
     visualize_errors_from_lst,
 )
+from dvae.visualizers import get_plot_config
 from dvae.eval.utils import (
     run_spectrum_analysis,
     run_mse_analysis,
@@ -68,6 +69,13 @@ class Options:
         self.parser.add_argument(
             "--saved_dict", type=str, required=True, help="trained model dict"
         )
+        self.parser.add_argument(
+            "--save-3d",
+            dest="save_3d",
+            type=lambda s: str(s).lower() in ("true", "1", "yes", "y"),
+            default=True,
+            help="Whether to save 3D visualizations (True/False). Default: True",
+        )
 
     def get_params(self):
         self._initial()
@@ -78,6 +86,211 @@ class Options:
                 os.path.dirname(params["saved_dict"]), "config.ini"
             )
         return params
+
+
+def visualize_training_mode_short_sequence(
+    dataset_name,
+    dataset_config,
+    device,
+    dvae,
+    save_fig_dir,
+    seq_len=1000,
+):
+    """
+    Visualize a short sequence with training-mode missingness applied (half-half TF/auto).
+    This shows what the model sees during training, with proper NaN overlay on mode selector.
+
+    Args:
+    - dataset_name: Name of the dataset
+    - dataset_config: DatasetConfig object for building the dataloader
+    - device: Device to use
+    - dvae: The trained model
+    - save_fig_dir: Directory to save visualizations
+    - seq_len: Sequence length to use
+    """
+    try:
+        # Build training dataloader with same config but split="train"
+        train_dataloader_result = build_dataloader(
+            dataset_name, dataset_config, split="train", eval_mode=False
+        )
+        if isinstance(train_dataloader_result, tuple):
+            train_dataloader = train_dataloader_result[0]
+        else:
+            train_dataloader = train_dataloader_result
+
+        # Update sequence length to the short eval length
+        train_dataloader.dataset.update_sequence_length(seq_len)
+
+        # Get first batch
+        batch_data = next(iter(train_dataloader))
+        batch_data = batch_data.to(device)
+        batch_data = batch_data.permute(1, 0, 2)  # (seq_len, batch_size, x_dim)
+        seq_len_short, batch_size_short, x_dim_short = batch_data.shape
+
+        # Extract missing mask for training batch (for visualization only)
+        missing_mask_short = None
+        observation_process = getattr(dataset_config, "observation_process", None)
+
+        if observation_process == "only_x_indicate" and batch_data.size(2) >= 2:
+            # For only_x_indicate, dimension 1 is the is_observed indicator
+            is_observed = batch_data[:, :, 1]  # (seq_len, batch_size)
+            missing_mask_short = (
+                (is_observed < 0.5).float().unsqueeze(-1)
+            )  # (seq_len, batch_size, 1)
+
+        elif hasattr(train_dataloader.dataset, "missing_mask"):
+            # Fallback: extract from dataset.missing_mask
+            batch_start_idx = (
+                train_dataloader.dataset.data_idx[0]
+                if len(train_dataloader.dataset.data_idx) > 0
+                else 0
+            )
+            batch_end_idx = min(
+                batch_start_idx + seq_len_short,
+                len(train_dataloader.dataset.missing_mask),
+            )
+            missing_mask_slice = train_dataloader.dataset.missing_mask[
+                batch_start_idx:batch_end_idx
+            ]
+
+            # Ensure (seq_len, batch_size, 1) shape
+            if isinstance(missing_mask_slice, np.ndarray):
+                missing_mask_short = torch.from_numpy(missing_mask_slice).float()
+            else:
+                missing_mask_short = missing_mask_slice.float()
+
+            if missing_mask_short.ndim == 1:
+                missing_mask_short = missing_mask_short.unsqueeze(1).expand(
+                    -1, batch_size_short, -1
+                )  # (seq_len, batch_size, 1)
+            elif missing_mask_short.ndim == 2:
+                missing_mask_short = missing_mask_short.unsqueeze(
+                    -1
+                )  # (seq_len, batch_size, 1)
+
+        # === Create base mode selector (half-half TF/auto) ===
+        base_mode_selector = create_autonomous_mode_selector(
+            seq_len_short,
+            mode="half_half",
+            batch_size=batch_size_short,
+            x_dim=x_dim_short,
+            device=device,
+        )
+
+        # === Overlay NaN positions with autonomous mode (just like learning_algo.py) ===
+        model_mode_selector = torch.where(
+            batch_data.isnan().detach(),
+            torch.tensor(1.0, device=device),
+            base_mode_selector,
+        )
+
+        # === Force pure TF on mask dimension if observation_process == "only_x_indicate" ===
+        if observation_process == "only_x_indicate":
+            model_mode_selector = model_mode_selector.clone()
+            model_mode_selector[:, :, 1] = 0.0  # Mask channel: pure TF
+
+        # Generate reconstruction
+        batch_data_tensor = batch_data.clone().detach().to(device)
+        recon_short = (
+            dvae(
+                batch_data_tensor,
+                mode_selector=model_mode_selector,
+                inference_mode=True,
+            )
+            .detach()
+            .cpu()
+            .numpy()
+        )
+
+        # Visualize with training missingness (just first sample for clarity)
+        visualize_teacherforcing_2_autonomous(
+            batch_data[:, :1, :],
+            dvae,
+            auto_mode_selector=model_mode_selector[:, :1, :],
+            save_path=save_fig_dir,
+            explain="training_mode_short_with_missingness",
+            inference_mode=True,
+            missing_mask=(
+                missing_mask_short[:, :1, :] if missing_mask_short is not None else None
+            ),
+            hide_mask_output=observation_process == "only_x_indicate",
+        )
+
+        print("[Eval] Training mode short visualization completed")
+
+    except Exception as e:
+        print(f"[Eval] [Warning] Could not visualize training mode short sequence: {e}")
+
+
+def compute_missing_stats(dataset_name, dataset_config):
+    """
+    Compute missing-value statistics for the x signal for train and test datasets
+    and return them so they can be stored in evaluation_summary.yaml.
+    """
+    try:
+        stats = {}
+
+        def summarize_missing_x(dataset):
+            missing_mask = getattr(dataset, "missing_mask", None)
+            if missing_mask is None:
+                return 0, 0
+
+            mask_arr = np.asarray(missing_mask)
+            if mask_arr.ndim == 0:
+                return int(mask_arr), 1
+
+            if mask_arr.ndim == 1:
+                missing_count = int(np.sum(mask_arr))
+                total_x = int(mask_arr.shape[0])
+                return missing_count, total_x
+
+            x_mask = mask_arr[:, 0]
+            missing_count = int(np.sum(x_mask))
+            total_x = int(x_mask.shape[0])
+            return missing_count, total_x
+
+        # TRAIN
+        train_res = build_dataloader(
+            dataset_name, dataset_config, split="train", eval_mode=False
+        )
+        if isinstance(train_res, tuple):
+            train_dataloader = train_res[0]
+        else:
+            train_dataloader = train_res
+        train_dataset = train_dataloader.dataset
+
+        missing_x_train, total_x_train = summarize_missing_x(train_dataset)
+
+        stats["train"] = {
+            "missing_count": int(missing_x_train),
+            "total_x": int(total_x_train),
+            "missing_percentage": float(missing_x_train) / max(1, total_x_train),
+        }
+
+        # TEST
+        test_res = build_dataloader(
+            dataset_name, dataset_config, split="test", eval_mode=True
+        )
+        if isinstance(test_res, tuple):
+            test_dataloader = test_res[0]
+        else:
+            test_dataloader = test_res
+        test_dataset = test_dataloader.dataset
+
+        missing_x_test, total_x_test = summarize_missing_x(test_dataset)
+
+        stats["test"] = {
+            "missing_count": int(missing_x_test),
+            "total_x": int(total_x_test),
+            "missing_percentage": float(missing_x_test) / max(1, total_x_test),
+        }
+
+        print("[Eval] Computed missing-value stats")
+        return stats
+
+    except Exception as e:
+        print(f"[Eval] Warning: could not compute missing stats: {e}")
+        return None
 
 
 if __name__ == "__main__":
@@ -178,6 +391,12 @@ if __name__ == "__main__":
         )
         if not os.path.exists(save_fig_dir):
             os.makedirs(save_fig_dir)
+
+        # Enforce paper-ready plotting style for all evaluation visualizations
+        try:
+            get_plot_config(paper_ready=True)
+        except Exception:
+            pass
 
         ############################################################################
         # For shorter sequence
@@ -299,6 +518,38 @@ if __name__ == "__main__":
                     getattr(dataset_config, "observation_process", None)
                     == "only_x_indicate"
                 ),
+            )
+
+        # Visualize training mode short sequence with missingness
+        print("[Eval] Visualizing training mode short sequence with missingness...")
+        visualize_training_mode_short_sequence(
+            dataset_name=learning_algo.dataset_name,
+            dataset_config=dataset_config,
+            device=device,
+            dvae=dvae,
+            save_fig_dir=save_fig_dir,
+            seq_len=new_seq_len,
+        )
+
+        # Compute missing-value statistics (train & test)
+        missingness_stats = compute_missing_stats(
+            dataset_name=learning_algo.dataset_name,
+            dataset_config=dataset_config,
+        )
+        if missingness_stats is not None:
+            metrics["missingness_statistics"] = missingness_stats
+            # Flattened summary keys for easy ingestion
+            train_s = missingness_stats.get("train", {})
+            test_s = missingness_stats.get("test", {})
+            metrics["missingness_train_count"] = int(train_s.get("missing_count", 0))
+            metrics["missingness_train_total_x"] = int(train_s.get("total_x", 0))
+            metrics["missingness_train_pct"] = float(
+                train_s.get("missing_percentage", 0.0)
+            )
+            metrics["missingness_test_count"] = int(test_s.get("missing_count", 0))
+            metrics["missingness_test_total_x"] = int(test_s.get("total_x", 0))
+            metrics["missingness_test_pct"] = float(
+                test_s.get("missing_percentage", 0.0)
             )
 
         # visualize the hidden states
@@ -436,6 +687,32 @@ if __name__ == "__main__":
                     == "only_x_indicate"
                 ),
             )
+            # Also visualize a half-half TF/Auto schedule on the same long sequence
+            autonomous_mode_selector_half = create_autonomous_mode_selector(
+                seq_len_long,
+                mode="half_half",
+                batch_size=batch_size_long,
+                x_dim=dataset_config.x_dim,
+            )
+            if (
+                getattr(dataset_config, "observation_process", None)
+                == "only_x_indicate"
+            ):
+                autonomous_mode_selector_half = autonomous_mode_selector_half.clone()
+                autonomous_mode_selector_half[:, :, 1] = 0.0
+            visualize_teacherforcing_2_autonomous(
+                batch_data_long,
+                dvae,
+                auto_mode_selector=autonomous_mode_selector_half,
+                save_path=save_fig_dir,
+                explain="final_long_inference_mode_half_half",
+                inference_mode=True,
+                missing_mask=missing_mask_long,
+                hide_mask_output=(
+                    getattr(dataset_config, "observation_process", None)
+                    == "only_x_indicate"
+                ),
+            )
             visualize_teacherforcing_2_autonomous(
                 batch_data_long,
                 dvae,
@@ -557,42 +834,7 @@ if __name__ == "__main__":
             embedding_states_conditions = ["teacher-forced", "autonomous"]
             embedding_states_colors = ["Greens", "Reds"]
 
-            # visualize the hidden states 3d
-            hidden_3d_gif_dir = os.path.join(save_fig_dir, "3d_hidden_gifs")
-            if not os.path.exists(hidden_3d_gif_dir):
-                os.makedirs(hidden_3d_gif_dir)
-            vis_embedding_space_params = [
-                # {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'nmf'},
-                {
-                    "states_list": embedding_states_list,
-                    "save_dir": hidden_3d_gif_dir,
-                    "variable_name": f"hidden",
-                    "condition_names": embedding_states_conditions,
-                    "base_colors": embedding_states_colors,
-                    "technique": "kernel_pca",
-                },
-                # {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'isomap'},
-                # {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'lle'},
-                # {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'umap'},
-                {
-                    "states_list": embedding_states_list,
-                    "save_dir": hidden_3d_gif_dir,
-                    "variable_name": f"hidden",
-                    "condition_names": embedding_states_conditions,
-                    "base_colors": embedding_states_colors,
-                    "technique": "ica",
-                },
-                # {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors, 'technique': 'mds'},
-                # {'states_list': embedding_states_list, 'save_dir': save_dir, 'variable_name': f'hidden', 'condition_names': embedding_states_conditions, 'base_colors': embedding_states_colors},
-                {
-                    "states_list": embedding_states_list,
-                    "save_dir": hidden_3d_gif_dir,
-                    "variable_name": f"hidden",
-                    "condition_names": embedding_states_conditions,
-                    "base_colors": embedding_states_colors,
-                    "technique": "tsne",
-                },
-            ]
+            # visualize the hidden states 3d (created later if enabled)
 
             # Save the metrics as YAML before starting parallel visualizations
             metrics_file = os.path.join(save_dir, "evaluation_summary.yaml")
@@ -600,14 +842,47 @@ if __name__ == "__main__":
                 yaml.dump(metrics, f, default_flow_style=False)
             print(f"[Eval] Metrics saved to: {metrics_file}")
             sys.stdout.flush()
+            if params.get("save_3d", True):
+                hidden_3d_gif_dir = os.path.join(save_fig_dir, "3d_hidden_gifs")
+                if not os.path.exists(hidden_3d_gif_dir):
+                    os.makedirs(hidden_3d_gif_dir)
+                vis_embedding_space_params = [
+                    {
+                        "states_list": embedding_states_list,
+                        "save_dir": hidden_3d_gif_dir,
+                        "variable_name": f"hidden",
+                        "condition_names": embedding_states_conditions,
+                        "base_colors": embedding_states_colors,
+                        "technique": "kernel_pca",
+                    },
+                    {
+                        "states_list": embedding_states_list,
+                        "save_dir": hidden_3d_gif_dir,
+                        "variable_name": f"hidden",
+                        "condition_names": embedding_states_conditions,
+                        "base_colors": embedding_states_colors,
+                        "technique": "ica",
+                    },
+                    {
+                        "states_list": embedding_states_list,
+                        "save_dir": hidden_3d_gif_dir,
+                        "variable_name": f"hidden",
+                        "condition_names": embedding_states_conditions,
+                        "base_colors": embedding_states_colors,
+                        "technique": "tsne",
+                    },
+                ]
 
-            print("[Eval] [CHECKPOINT] Starting parallel visualizations...")
-            sys.stdout.flush()
-            run_parallel_visualizations(
-                visualize_embedding_space, vis_embedding_space_params
-            )
-            print("[Eval] [CHECKPOINT] Parallel visualizations completed")
-            sys.stdout.flush()
+                print("[Eval] [CHECKPOINT] Starting parallel visualizations...")
+                sys.stdout.flush()
+                run_parallel_visualizations(
+                    visualize_embedding_space, vis_embedding_space_params
+                )
+                print("[Eval] [CHECKPOINT] Parallel visualizations completed")
+                sys.stdout.flush()
+            else:
+                print("[Eval] Skipping 3D visualizations (save_3d=False)")
+                sys.stdout.flush()
 
             # break after the first batch
             break

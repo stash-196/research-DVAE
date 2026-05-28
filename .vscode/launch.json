@@ -53,7 +53,9 @@
                 // 0.0
                 // "--saved_dict",  "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2025-11-12/deigo_cluster/20251112_Lorenz_markovMissingNone_ptf_MTRNN_varySampRatios_3alphas/Lorenz63_sigma10_rho28_beta8d3_N108k_dt0.01_None_MT_RNN_ptf_0.7_α0.100,0.100,0.100_20251112-23.12.30_14357246/MT_RNN_checkpoint.pt"
 
-                "--saved_dict",  "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh/Lorenz63_sigma10_rho28_beta8d3_N108k_dt0.01_Markov_AvgLen15_0.1_RNN_ptf_0.1_20260212-21.07.43_23668536/RNN_final_epoch4461.pt"
+                "--saved_dict",  "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-28/deigo_cluster/20260528-Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LossNone_LSTM_hdim40_obsInterp/Lorenz63_sigma10_rho28_beta8d3_N108k_dt0.01_Markov_AvgLen15_0.7_RNN_LSTM_ptf_0.8_20260528-04.26.46_32554350/RNN_final_epoch4420.pt", 
+                "--saved_dict",  "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-28/deigo_cluster/20260528-Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LossNone_LSTM_hdim40_obsIndicateMiss/Lorenz63_sigma10_rho28_beta8d3_N108k_dt0.01_Markov_AvgLen15_0.7_RNN_LSTM_ptf_0.8_20260528-10.37.46_32554445/RNN_final_epoch5614.pt",
+                "--save-3d", "false"
 
 
                 // "--saved_dict", "/Users/stashtomonaga/Downloads/2024-11-02/ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios/Lorenz63_nanBer0.8_MT_RNN_ptf_0.1_α0.100,0.100,0.100,0.100,0.100,0.100,0.100,0.100_44073834_2024-11-02-03:14:39/MT_RNN_final_epoch9612.pt"
@@ -145,10 +147,14 @@
             "args": [
                 // "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh",
                 // "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MTRNN_hdi20-40_ptientHigh",
-                "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-01-28/deigo_cluster/20260128_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_hdims_ptientHigh/",
+                // "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-01-28/deigo_cluster/20260128_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_hdims_ptientHigh/",
+                "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-28/deigo_cluster/20260528-Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LossNone_LSTM_hdim40",
                 "--parameters",
-                "dim_rnn", "sampling_ratio",
-                // "--filter", 
+                // "dim_rnn", 
+                "sampling_ratio",
+                "mask_label",
+                // "--filter",
+                // "alphas='0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1'",
                 // "type_rnn=RNN", 
                 // "loss_mask_mode=none",
                 // "tag=RNN",

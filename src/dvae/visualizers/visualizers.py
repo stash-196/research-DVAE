@@ -208,6 +208,8 @@ def visualize_sequences(
         noise_data = noise_data + offset
 
     PAPER_READY = True
+    # Apply paper-ready style BEFORE creating axes so ticks/labels inherit it.
+    get_plot_config(paper_ready=PAPER_READY)
     plt.rcParams["lines.linewidth"] = linewidth
 
     # Determine number of dimensions
@@ -244,7 +246,6 @@ def visualize_sequences(
     if x_dim == 1:
         axes = [axes]
 
-    get_plot_config(paper_ready=PAPER_READY)
     # Plot each dimension in its own subplot
     for dim in range(x_dim):
         ax = axes[dim]
@@ -342,8 +343,6 @@ def visualize_sequences(
 
     # Adjust the top margin to ensure the super title is not cut off
     # plt.subplots_adjust(top=0.9)
-
-    get_plot_config(paper_ready=PAPER_READY)
 
     # Save figure
     if not os.path.exists(save_dir):

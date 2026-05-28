@@ -16,6 +16,7 @@ import numpy as np
 from collections import defaultdict
 import glob
 import csv
+import shutil
 from PIL import Image
 from dvae.visualizers.visualizers import get_plot_config
 from matplotlib.colors import SymLogNorm
@@ -124,6 +125,406 @@ def load_yaml_data(yaml_files):
             content["yaml_file"] = yaml_file
             data.append(content)
     return data
+
+
+def flatten_scalar_fields(prefix, value, out):
+    """Flatten nested scalar data into a single dictionary for CSV export."""
+    if isinstance(value, dict):
+        for key, nested_value in value.items():
+            nested_prefix = f"{prefix}_{key}" if prefix else str(key)
+            flatten_scalar_fields(nested_prefix, nested_value, out)
+    elif isinstance(value, (list, tuple)):
+        out[prefix] = yaml.safe_dump(value, default_flow_style=True).strip()
+    elif value is None:
+        out[prefix] = ""
+    else:
+        out[prefix] = value
+
+
+def build_aggregated_values_table(data, parameters):
+    """Build a flat table of run-level parameters and scalar metrics."""
+    rows = []
+    for d in data:
+        row = {"yaml_file": d.get("yaml_file", "")}
+
+        for param in parameters:
+            row[param] = get_param_value(d, param)
+
+        # Preserve scalar top-level metrics and flatten any nested summary blocks.
+        for key, value in d.items():
+            if key in {"params", "config", "yaml_file"}:
+                continue
+            flatten_scalar_fields(key, value, row)
+
+        rows.append(row)
+
+    return rows
+
+
+def save_aggregated_values_csv(data, output_file):
+    """Save aggregated run-level values to CSV for later analysis."""
+    if not data:
+        return
+
+    fieldnames = []
+    for row in data:
+        for key in row.keys():
+            if key not in fieldnames:
+                fieldnames.append(key)
+
+    with open(output_file, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in data:
+            writer.writerow(row)
+
+
+def get_best_run(data, metric_name):
+    """Return the run with the lowest numeric value for the requested metric."""
+    best_row = None
+    best_value = None
+
+    for row in data:
+        value = row.get(metric_name)
+        if value is None:
+            continue
+
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            continue
+
+        if best_value is None or numeric_value < best_value:
+            best_value = numeric_value
+            best_row = row
+
+    return best_row, best_value
+
+
+def get_combined_best_run(data, metric_names):
+    """Return the run with the lowest sum of ranks across the requested metrics."""
+    scored_rows = []
+    metric_values = {metric_name: [] for metric_name in metric_names}
+
+    for row in data:
+        row_values = {}
+        valid = True
+        for metric_name in metric_names:
+            value = row.get(metric_name)
+            if value is None:
+                valid = False
+                break
+            try:
+                row_values[metric_name] = float(value)
+            except (TypeError, ValueError):
+                valid = False
+                break
+        if valid:
+            scored_rows.append((row, row_values))
+            for metric_name in metric_names:
+                metric_values[metric_name].append(row_values[metric_name])
+
+    if not scored_rows:
+        return None, None, None
+
+    metric_ranks = {}
+    for metric_name, values in metric_values.items():
+        sorted_unique = sorted(set(values))
+        metric_ranks[metric_name] = {
+            value: rank for rank, value in enumerate(sorted_unique, start=1)
+        }
+
+    best_row = None
+    best_score = None
+    best_values = None
+
+    for row, row_values in scored_rows:
+        score = sum(
+            metric_ranks[metric_name][row_values[metric_name]]
+            for metric_name in metric_names
+        )
+        if best_score is None or score < best_score:
+            best_score = score
+            best_row = row
+            best_values = row_values
+
+    return best_row, best_score, best_values
+
+
+def copy_post_training_figs(source_dir, destination_dir):
+    """Copy only figure files from post_training_figs into a destination directory."""
+    if not os.path.isdir(source_dir):
+        print(f"Warning: post_training_figs not found at {source_dir}")
+        return False
+
+    os.makedirs(destination_dir, exist_ok=True)
+
+    figure_extensions = {".png", ".pdf", ".svg", ".gif", ".jpg", ".jpeg", ".webp"}
+    copied_files = 0
+
+    for root, _, files in os.walk(source_dir):
+        rel_root = os.path.relpath(root, source_dir)
+        target_root = (
+            destination_dir
+            if rel_root == "."
+            else os.path.join(destination_dir, rel_root)
+        )
+        os.makedirs(target_root, exist_ok=True)
+
+        for file_name in files:
+            _, ext = os.path.splitext(file_name)
+            if ext.lower() not in figure_extensions:
+                continue
+            shutil.copy2(
+                os.path.join(root, file_name), os.path.join(target_root, file_name)
+            )
+            copied_files += 1
+
+    if copied_files == 0:
+        print(f"Warning: no figure files found under {source_dir}")
+        return False
+
+    return True
+
+
+def is_mtrnn_run(data_row):
+    """Heuristically detect MT_RNN / MT_VRNN runs."""
+    model_name = get_param_value(data_row, "model_name")
+    type_rnn = get_param_value(data_row, "type_rnn")
+    yaml_file = data_row.get("yaml_file", "")
+    haystack = " ".join(str(value) for value in [model_name, type_rnn, yaml_file])
+    return any(token in haystack for token in ["MT_RNN", "MT_VRNN", "MTRNN"])
+
+
+def find_matching_figure_path(yaml_dir, source_relative_dir, filename_patterns):
+    """Find a figure under a run directory using a list of glob patterns."""
+    source_dir = os.path.join(yaml_dir, source_relative_dir)
+    for pattern in filename_patterns:
+        matches = glob.glob(os.path.join(source_dir, pattern))
+        if matches:
+            return matches[0]
+    return None
+
+
+def aggregate_image_tiles(
+    data,
+    args,
+    output_dir,
+    source_relative_dir,
+    filename_patterns,
+    output_basename,
+    title_prefix,
+    model_filter=None,
+):
+    """Aggregate per-run image files into a tiled grid using the selected parameters."""
+    param1 = args.parameters[0]
+    param2 = args.parameters[1] if len(args.parameters) > 1 else None
+
+    filtered_rows = [d for d in data if model_filter is None or model_filter(d)]
+    if not filtered_rows:
+        print(f"No matching runs for {output_basename}. Skipping.")
+        return
+
+    unique_param1 = sorted(
+        set(
+            get_param_value(d, param1)
+            for d in filtered_rows
+            if get_param_value(d, param1) is not None
+        ),
+        key=sort_key,
+    )
+    if param2:
+        unique_param2 = sorted(
+            set(
+                get_param_value(d, param2)
+                for d in filtered_rows
+                if get_param_value(d, param2) is not None
+            ),
+            key=sort_key,
+        )
+    else:
+        unique_param2 = ["-"]
+
+    rows = len(unique_param1)
+    cols = len(unique_param2)
+
+    if rows == 0 or cols == 0:
+        print(f"Not enough varying data for {output_basename}. Skipping.")
+        return
+
+    get_plot_config(paper_ready=True)
+
+    fig, axs = plt.subplots(rows, cols, figsize=(3 * cols, 3 * rows))
+    axs = np.atleast_2d(axs).reshape(rows, cols)
+
+    filled = {}
+
+    for d in filtered_rows:
+        val1 = get_param_value(d, param1)
+        if val1 is None:
+            continue
+
+        if param2:
+            val2 = get_param_value(d, param2)
+            if val2 is None:
+                continue
+        else:
+            val2 = "-"
+
+        try:
+            i = unique_param1.index(val1)
+            j = unique_param2.index(val2)
+        except ValueError:
+            continue
+
+        if (i, j) in filled:
+            continue
+
+        yaml_dir = os.path.dirname(d["yaml_file"])
+        figure_path = find_matching_figure_path(
+            yaml_dir, source_relative_dir, filename_patterns
+        )
+        if not figure_path:
+            axs[i, j].text(
+                0.5,
+                0.5,
+                "No Figure",
+                ha="center",
+                va="center",
+                transform=axs[i, j].transAxes,
+            )
+            filled[(i, j)] = True
+            continue
+
+        try:
+            with Image.open(figure_path) as im:
+                img = np.array(im.convert("RGBA"))
+
+            non_white = np.where((img[:, :, :3] < 245).any(axis=2))
+            if len(non_white[0]) > 0:
+                y1, y2 = np.min(non_white[0]), np.max(non_white[0])
+                x1, x2 = np.min(non_white[1]), np.max(non_white[1])
+                pad = 10
+                y1 = max(0, y1 - pad)
+                y2 = min(img.shape[0], y2 + pad)
+                x1 = max(0, x1 - pad)
+                x2 = min(img.shape[1], x2 + pad)
+                img = img[y1:y2, x1:x2]
+
+            axs[i, j].imshow(img)
+            axs[i, j].set_xticks([])
+            axs[i, j].set_yticks([])
+            for spine in axs[i, j].spines.values():
+                spine.set_visible(False)
+            filled[(i, j)] = True
+        except Exception as e:
+            print(f"Error loading figure {figure_path}: {e}")
+            axs[i, j].text(
+                0.5,
+                0.5,
+                "Error",
+                ha="center",
+                va="center",
+                transform=axs[i, j].transAxes,
+            )
+            filled[(i, j)] = True
+
+    for i in range(rows):
+        for j in range(cols):
+            if (i, j) not in filled:
+                axs[i, j].set_xticks([])
+                axs[i, j].set_yticks([])
+                for spine in axs[i, j].spines.values():
+                    spine.set_visible(False)
+
+            if i == 0:
+                axs[i, j].set_title(
+                    str(get_value_display_name(unique_param2[j])),
+                    fontsize=45,
+                    pad=15,
+                )
+            if j == 0:
+                axs[i, j].set_ylabel(
+                    str(get_value_display_name(unique_param1[i])),
+                    fontsize=45,
+                    labelpad=15,
+                )
+
+    if param2:
+        fig.suptitle(get_display_name(param2), fontsize=55, y=1.02)
+    fig.supylabel(get_display_name(param1), fontsize=55)
+
+    plt.tight_layout(pad=2.0)
+    plt.subplots_adjust(wspace=0.0, hspace=0.0)
+
+    output_path = os.path.join(output_dir, f"{output_basename}.png")
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+    print(f"{title_prefix} saved to {output_path}")
+
+
+def write_best_model_log(
+    destination_dir, metric_name, metric_value, best_row, parameter_names
+):
+    """Write a short text log describing which model was selected."""
+    log_file = os.path.join(destination_dir, "best_model.txt")
+    with open(log_file, "w") as f:
+        f.write(f"metric={metric_name}\n")
+        f.write(f"metric_value={metric_value}\n")
+        for param_name in parameter_names:
+            f.write(f"{param_name}={get_param_value(best_row, param_name)}\n")
+        f.write(f"yaml_file={best_row.get('yaml_file', '')}\n")
+        f.write(f"model_dir={os.path.dirname(best_row.get('yaml_file', ''))}\n")
+    return log_file
+
+
+def export_best_model_plots(
+    data, output_dir, metric_name, subdir_name, parameter_names
+):
+    """Copy the best run's post_training_figs into a dedicated subdirectory."""
+    best_row, best_value = get_best_run(data, metric_name)
+    if best_row is None:
+        print(f"No valid values found for {metric_name}; skipping {subdir_name}.")
+        return
+
+    yaml_dir = os.path.dirname(best_row["yaml_file"])
+    source_fig_dir = os.path.join(yaml_dir, "post_training_figs")
+    destination_dir = os.path.join(output_dir, subdir_name)
+
+    if copy_post_training_figs(source_fig_dir, destination_dir):
+        log_file = write_best_model_log(
+            destination_dir, metric_name, best_value, best_row, parameter_names
+        )
+        print(
+            f"Copied best {metric_name} plots to {destination_dir} and wrote {log_file}"
+        )
+
+
+def export_best_combined_model_plots(
+    data, output_dir, metric_names, subdir_name, parameter_names
+):
+    """Copy the combined best run's post_training_figs into a dedicated subdirectory."""
+    best_row, best_score, best_values = get_combined_best_run(data, metric_names)
+    if best_row is None:
+        print(f"No valid values found for combined score; skipping {subdir_name}.")
+        return
+
+    yaml_dir = os.path.dirname(best_row["yaml_file"])
+    source_fig_dir = os.path.join(yaml_dir, "post_training_figs")
+    destination_dir = os.path.join(output_dir, subdir_name)
+
+    if copy_post_training_figs(source_fig_dir, destination_dir):
+        log_file = os.path.join(destination_dir, "best_model.txt")
+        with open(log_file, "w") as f:
+            f.write(f"metric=combined_rank_sum\n")
+            f.write(f"combined_score={best_score}\n")
+            for param_name in parameter_names:
+                f.write(f"{param_name}={get_param_value(best_row, param_name)}\n")
+            for metric_name in metric_names:
+                f.write(f"{metric_name}={best_values.get(metric_name, '')}\n")
+            f.write(f"yaml_file={best_row.get('yaml_file', '')}\n")
+            f.write(f"model_dir={os.path.dirname(best_row.get('yaml_file', ''))}\n")
+        print(f"Copied best combined plots to {destination_dir} and wrote {log_file}")
 
 
 def save_yaml_list(yaml_files, output_file):
@@ -450,10 +851,16 @@ def aggregate_delay_embeddings(data, args, output_dir):
 
                 # Top row prints param2, left column prints param1
                 if i == 0:
-                    axs[i, j].set_title(str(get_value_display_name(unique_param2[j])), fontsize=45, pad=15)
+                    axs[i, j].set_title(
+                        str(get_value_display_name(unique_param2[j])),
+                        fontsize=45,
+                        pad=15,
+                    )
                 if j == 0:
                     axs[i, j].set_ylabel(
-                        str(get_value_display_name(unique_param1[i])), fontsize=45, labelpad=15
+                        str(get_value_display_name(unique_param1[i])),
+                        fontsize=45,
+                        labelpad=15,
                     )
 
         # Global axis labels
@@ -663,6 +1070,69 @@ def main():
             "\nNote: Plotting grids/heatmaps will arbitrarily overwrite or pick the first hit."
         )
         print("=" * 60 + "\n")
+
+    # Save the raw run-level values for later analysis.
+    aggregated_values = build_aggregated_values_table(data, args.parameters)
+    aggregated_values_file = os.path.join(args.output_dir, "aggregated_values.csv")
+    save_aggregated_values_csv(aggregated_values, aggregated_values_file)
+    if args.verbose:
+        print(f"Saved aggregated values to {aggregated_values_file}")
+
+    # Copy the best run's post-training figures for the key metrics.
+    export_best_model_plots(
+        data,
+        args.output_dir,
+        metric_name="kld_auto",
+        subdir_name="best_kl_plots",
+        parameter_names=args.parameters,
+    )
+    export_best_model_plots(
+        data,
+        args.output_dir,
+        metric_name="spectrum_error_auto",
+        subdir_name="best_spectrum_plots",
+        parameter_names=args.parameters,
+    )
+    export_best_combined_model_plots(
+        data,
+        args.output_dir,
+        metric_names=["kld_auto", "spectrum_error_auto"],
+        subdir_name="best_combined_plots",
+        parameter_names=args.parameters,
+    )
+
+    # Aggregate selected figures into montage-style summary plots.
+    aggregate_image_tiles(
+        data,
+        args,
+        args.output_dir,
+        source_relative_dir="post_training_figs",
+        filename_patterns=[
+            "vis_pred_true_series_final_short_inference_mode_half_half_short.png"
+        ],
+        output_basename="aggregated_vis_pred_true_series_final_short_inference_mode_half_half_short",
+        title_prefix="Aggregated short reconstruction montage",
+    )
+    aggregate_image_tiles(
+        data,
+        args,
+        args.output_dir,
+        source_relative_dir="vis_during_training",
+        filename_patterns=["vis_training_history_of_alpha_MT_RNN.png"],
+        output_basename="aggregated_vis_training_history_of_alpha_MT_RNN",
+        title_prefix="Aggregated alpha-history montage",
+        model_filter=is_mtrnn_run,
+    )
+    aggregate_image_tiles(
+        data,
+        args,
+        args.output_dir,
+        source_relative_dir="vis_during_training",
+        filename_patterns=["vis_training_history_of_sigma_MT_RNN.png"],
+        output_basename="aggregated_vis_training_history_of_sigma_MT_RNN",
+        title_prefix="Aggregated sigma-history montage",
+        model_filter=is_mtrnn_run,
+    )
 
     # Aggregate delay embeddings
     aggregate_delay_embeddings(data, args, args.output_dir)

@@ -11,7 +11,6 @@
 
     // === Python Environment ===
     "python-envs.defaultEnvManager": "ms-python.python:pyenv",
-    "python-envs.pythonProjects": [],
 
     // === GitHub Copilot - Sandbox & Terminal Approvals ===
     // Disable sandboxing (required on cluster since we can't install socat/bubblewrap)
