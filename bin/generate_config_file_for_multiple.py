@@ -53,9 +53,9 @@ if __name__ == "__main__":
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
     experiment_name = (
-        "20260527-"
+        "20260528-"
         # + "XHRO_ep20000_ptf0,0.4-7_MtRNN_Subj70_ch1-4_hdim200_alpha3-9d"
-        + "Lorenz_auto0-0.8_miss0-0.7_clip1_ep20000_LossNone_MTRNN3d_hdim40_fixed_patience"
+        + "Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LossNone_LSTM_hdim40_obsIndicateMiss"
     )
     print("Experiment name:", experiment_name)
     #  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< data name >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -67,16 +67,16 @@ if __name__ == "__main__":
     ]
 
     models = [
-        # "RNN",
+        "RNN",
         # "VRNN",
-        "MT_RNN",
+        # "MT_RNN",
         # "MT_VRNN"
     ]
     rnn_types = [
         # "PLRNN",
-        "RNN",
+        # "RNN",
         # "shPLRNN",
-        # "LSTM",
+        "LSTM",
     ]
 
     # Change to dictionary of lists
@@ -108,7 +108,7 @@ if __name__ == "__main__":
     epochs = [20000]
     early_stop_patience = [200]
     save_frequency = [200]
-    gradient_clip = [1.0]
+    gradient_clip = [10.0]
     optimize_alphas = [True]
     sampling_method = [
         # "ss",
@@ -260,7 +260,9 @@ if __name__ == "__main__":
         ]
     elif dataset_name[0] == "Lorenz63":
         observation_process = [
-            "only_x",
+            # "only_x",
+            # "only_x_interpolate",
+            "only_x_indicate",
             # "only_x_w_noise",
             # "raw_noisy",
             # "relative_powers",
@@ -275,6 +277,9 @@ if __name__ == "__main__":
             # "3_vars",
             # "alpha",
         ]
+
+    if observation_process[0] == "only_x_indicate":
+        x_dim = [2]
 
     model_params = {
         "RNN": {

@@ -23,6 +23,10 @@ experiment_dates=(
     "2026-05-20"
     "2026-05-21"
     "2026-05-23"
+    "2026-05-25"
+    "2026-05-26"
+    "2026-05-27"
+    "2026-05-28"
 )
 
 # Paths based on your existing structure
