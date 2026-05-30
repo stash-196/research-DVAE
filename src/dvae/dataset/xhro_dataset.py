@@ -150,7 +150,10 @@ class Xhro(Dataset):
         Returns:
             np.ndarray: Boolean mask where True indicates a missing value (NaN).
         """
-        if self.observation_process in select_columns_for_obs_conditions["original"].keys():
+        if (
+            self.observation_process
+            in select_columns_for_obs_conditions["original"].keys()
+        ):
             first_valid_index = sequence.first_valid_index()
             if first_valid_index is None:
                 values = sequence[
@@ -170,7 +173,10 @@ class Xhro(Dataset):
                 )
             return np.isnan(values)
 
-        if self.observation_process in select_columns_for_obs_conditions["coarsed"].keys():
+        if (
+            self.observation_process
+            in select_columns_for_obs_conditions["coarsed"].keys()
+        ):
             values = sequence[
                 select_columns_for_obs_conditions["coarsed"][self.observation_process]
             ].to_numpy(dtype=np.float64)
