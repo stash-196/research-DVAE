@@ -4,7 +4,7 @@
 BASE_DIR=~/workspace/research-DVAE/config/general_signal/generated
 
 # Define a list of experiment names, each corresponding to a subdirectory under BASE_DIR
-declare -a experiments=("20260528-Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LossNone_LSTM_hdim40_obsIndicateMiss")
+declare -a experiments=("20260529-XHRO_ep20000_ptf0,0.4-7_MTRNN9d_clip10_Subj70_ch1-4_hdim200_eStop300")
 
 # Get the current date in YYYY-MM-DD format
 today=$(date +%Y-%m-%d)

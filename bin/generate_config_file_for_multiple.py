@@ -53,15 +53,15 @@ if __name__ == "__main__":
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
     experiment_name = (
-        "20260528-"
-        # + "XHRO_ep20000_ptf0,0.4-7_MtRNN_Subj70_ch1-4_hdim200_alpha3-9d"
-        + "Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LossNone_LSTM_hdim40_obsIndicateMiss"
+        "20260529-"
+        + "XHRO_ep20000_ptf0,0.4-7_LSTM_clip10_Subj70_ch1-4_hdim100_eStop300"
+        # + "Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_MTRNN3-9d_hdim80"
     )
     print("Experiment name:", experiment_name)
     #  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< data name >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     dataset_name = [
-        # "Xhro",
-        "Lorenz63",
+        "Xhro",
+        # "Lorenz63",
         # "SHO",
         # "DampedSHO"
     ]
@@ -82,19 +82,20 @@ if __name__ == "__main__":
     # Change to dictionary of lists
     # Network
     x_dim = [1]
-    dense_x = [1]
+    # dense_x = [1]
+    dense_x = x_dim
     z_dim = [9]
     dense_z = [[16, 32]]
 
-    dim_rnn = [40]
+    dim_rnn = [100]
     alphas = [
-        [0.1, 0.1, 0.1],
+        # [0.1, 0.1, 0.1],
         # [0.1],
         # [0.1, 0.1],
         # [0.1, 0.1, 0.1],
         # [ 0.09183, 0.64830, 0.73307, ],
         # [0.00490695, 0.02916397, 0.01453569], [0.1, 0.01, 0.00267],[0.1, 0.1, 0.1], [0.1], [0.01, 0.01], [0.9, 0.9]]
-        # [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, ]
+        [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, ]
     ]
     activation = ["relu"]
     dropout_p = [
@@ -106,7 +107,10 @@ if __name__ == "__main__":
     lr = [0.001]
     alpha_lr = [0.01]
     epochs = [20000]
-    early_stop_patience = [200]
+    if dataset_name[0] == "Xhro":
+        early_stop_patience = [300]
+    else:
+        early_stop_patience = [200]
     save_frequency = [200]
     gradient_clip = [10.0]
     optimize_alphas = [True]
@@ -120,6 +124,7 @@ if __name__ == "__main__":
     if dataset_name[0] == "Xhro":
         sampling_ratio = [
             0.0,
+            0.4,
             0.5,
             0.6,
             0.7,
@@ -260,9 +265,9 @@ if __name__ == "__main__":
         ]
     elif dataset_name[0] == "Lorenz63":
         observation_process = [
-            # "only_x",
+            "only_x",
             # "only_x_interpolate",
-            "only_x_indicate",
+            # "only_x_indicate",
             # "only_x_w_noise",
             # "raw_noisy",
             # "relative_powers",
