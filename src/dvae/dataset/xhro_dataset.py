@@ -150,6 +150,36 @@ class Xhro(Dataset):
         Returns:
             np.ndarray: Boolean mask where True indicates a missing value (NaN).
         """
+        if self.observation_process in select_columns_for_obs_conditions["original"].keys():
+            first_valid_index = sequence.first_valid_index()
+            if first_valid_index is None:
+                values = sequence[
+                    select_columns_for_obs_conditions["original"][
+                        self.observation_process
+                    ]
+                ].to_numpy(dtype=np.float64)
+            else:
+                values = (
+                    sequence[
+                        select_columns_for_obs_conditions["original"][
+                            self.observation_process
+                        ]
+                    ]
+                    .loc[first_valid_index:]
+                    .to_numpy(dtype=np.float64)
+                )
+            return np.isnan(values)
+
+        if self.observation_process in select_columns_for_obs_conditions["coarsed"].keys():
+            values = sequence[
+                select_columns_for_obs_conditions["coarsed"][self.observation_process]
+            ].to_numpy(dtype=np.float64)
+            return np.isnan(values)
+
+        if self.observation_process in {"only_x_interpolate", "only_x_indicate"}:
+            values = sequence.iloc[:, 0].to_numpy(dtype=np.float64)
+            return np.isnan(values)
+
         return np.isnan(sequence)
 
     def apply_observation_process(self, sequence) -> torch.Tensor:
