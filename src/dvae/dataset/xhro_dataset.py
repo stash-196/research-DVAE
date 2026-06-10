@@ -11,6 +11,21 @@ from .utils import data_utils
 from .utils.visualize_nans import plot_nan_heatmap, plot_segment_length_hist
 
 
+def _resolve_original_observation_process(observation_process):
+    """Return the base original observation key for exact or suffixed variants."""
+    if observation_process in select_columns_for_obs_conditions["original"]:
+        return observation_process
+
+    if isinstance(observation_process, str):
+        for suffix in ("_interpolate", "_indicate"):
+            if observation_process.endswith(suffix):
+                base = observation_process[: -len(suffix)]
+                if base in select_columns_for_obs_conditions["original"]:
+                    return base
+
+    return None
+
+
 class Xhro(Dataset):
     def __init__(
         self,
@@ -59,11 +74,10 @@ class Xhro(Dataset):
         self.device = device
         self.sampling_freq = None
 
+        original_base = _resolve_original_observation_process(self.observation_process)
+
         # Read data from file
-        if (
-            self.observation_process
-            in select_columns_for_obs_conditions["original"].keys()
-        ):
+        if original_base is not None:
             filename = f"{self.path_to_data}/xhro/processed/{self.dataset_label}/filtered_data.parquet"
             the_sequence = pd.read_parquet(filename)
             self.sampling_freq = 250
@@ -173,6 +187,16 @@ class Xhro(Dataset):
                 )
             return np.isnan(values)
 
+        original_base = _resolve_original_observation_process(self.observation_process)
+        if original_base is not None:
+            first_valid_index = sequence.first_valid_index()
+            values = sequence[
+                select_columns_for_obs_conditions["original"][original_base]
+            ]
+            if first_valid_index is not None:
+                values = values.loc[first_valid_index:]
+            return np.isnan(values.to_numpy(dtype=np.float64))
+
         if (
             self.observation_process
             in select_columns_for_obs_conditions["coarsed"].keys()
@@ -218,6 +242,63 @@ class Xhro(Dataset):
             )
             normalized_data = self.normalize(data)
             return torch.tensor(normalized_data, dtype=torch.float32)
+        # Support for pattern: <base>_interpolate where <base> is an "original" key
+        elif isinstance(
+            self.observation_process, str
+        ) and self.observation_process.endswith("_interpolate"):
+            base = self.observation_process.rsplit("_", 1)[0]
+            if base in select_columns_for_obs_conditions["original"].keys():
+                # Reuse the same trimming logic as the `original` branch
+                first_valid_index = sequence.first_valid_index()
+                data = sequence[select_columns_for_obs_conditions["original"][base]]
+                if first_valid_index is not None:
+                    data = data.loc[first_valid_index:]
+                # operate on first column and linearly interpolate NaNs
+                x = data.iloc[:, 0].to_numpy(dtype=np.float64)
+                nan_mask = np.isnan(x)
+                n_nan_before = int(np.sum(nan_mask))
+                if n_nan_before > 0:
+                    idx = np.arange(x.shape[0])
+                    valid = ~nan_mask
+                    if valid.any():
+                        x[nan_mask] = np.interp(idx[nan_mask], idx[valid], x[valid])
+                    else:
+                        x[:] = 0.0
+                n_nan_after = int(np.isnan(x).sum())
+                # normalize after interpolation (matches existing only_x_interpolate behavior)
+                normalized_x = self.normalize(x.reshape(-1, 1))[:, 0]
+                print(
+                    f"[Xhro][{self.observation_process}] NaNs before: {n_nan_before}, after: {n_nan_after}"
+                )
+                return torch.tensor(normalized_x, dtype=torch.float32)
+            raise ValueError(f"Invalid observation process: {self.observation_process}")
+
+        # Support for pattern: <base>_indicate where <base> is an "original" key
+        elif isinstance(
+            self.observation_process, str
+        ) and self.observation_process.endswith("_indicate"):
+            base = self.observation_process.rsplit("_", 1)[0]
+            if base in select_columns_for_obs_conditions["original"].keys():
+                # Reuse trimming logic from the `original` branch
+                first_valid_index = sequence.first_valid_index()
+                data = sequence[select_columns_for_obs_conditions["original"][base]]
+                if first_valid_index is not None:
+                    data = data.loc[first_valid_index:]
+                # operate on first column and produce (imputed_normalized, is_observed)
+                x = data.iloc[:, 0].to_numpy(dtype=np.float32)
+                missing_mask = np.isnan(x)
+                missing_count = int(np.sum(missing_mask))
+                # Normalize while NaNs are present so stats ignore missing values
+                x_normalized = self.normalize(x.reshape(-1, 1))[:, 0]
+                # Zero-impute after normalization (preserves the meaning of the 0 flag)
+                x_imputed = np.nan_to_num(x_normalized, nan=0.0).astype(np.float32)
+                is_observed = (~missing_mask).astype(np.float32)
+                result = np.stack([x_imputed, is_observed], axis=1)
+                print(
+                    f"[Xhro][{self.observation_process}] missing_count: {missing_count}, result_shape: {result.shape}"
+                )
+                return torch.tensor(result, dtype=torch.float32)
+            raise ValueError(f"Invalid observation process: {self.observation_process}")
         elif self.observation_process == "only_x_interpolate":
             # take only x (first dimension) and linearly interpolate NaNs
             x = sequence.iloc[:, 0].to_numpy(dtype=np.float64)

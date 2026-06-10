@@ -14,6 +14,7 @@ import socket
 import datetime
 import pickle
 import numpy as np
+from typing import Optional
 import torch
 import matplotlib.pyplot as plt
 from dvae.utils import (
@@ -213,8 +214,8 @@ class LearningAlgorithm:
         Returns:
             loss_recon: scalar reconstruction loss (only on observed signal values)
         """
-        is_masking_baseline = (
-            getattr(dataset_config, "observation_process", None) == "only_x_indicate"
+        is_masking_baseline = self._is_indicate_observation(
+            getattr(dataset_config, "observation_process", None)
         )
 
         if is_masking_baseline:
@@ -237,6 +238,22 @@ class LearningAlgorithm:
         recon_masked = pred_signal * loss_mask_signal
 
         return loss_MSE(target_masked, recon_masked)
+
+    def _is_indicate_observation(self, observation_process: Optional[str]) -> bool:
+        """Return True if observation_process is an 'indicate' variant.
+
+        Accepts exact 'only_x_indicate' or suffix forms like 'raw_ch1_indicate'.
+        """
+        if observation_process is None:
+            return False
+        if observation_process == "only_x_indicate":
+            return True
+        if isinstance(observation_process, str) and observation_process.endswith(
+            "_indicate"
+        ):
+            # allow forms like raw_ch1_indicate where base may be in select_columns
+            return True
+        return False
 
     def train(self, profiler=None):
         # Build model
@@ -596,9 +613,8 @@ class LearningAlgorithm:
                     model_mode_selector = base_mode_selector
 
                 # [Masking Baseline] For observation_process == "only_x_indicate", force 100% TF on mask dimension
-                if (
+                if self._is_indicate_observation(
                     getattr(dataset_config, "observation_process", None)
-                    == "only_x_indicate"
                 ):
                     model_mode_selector = model_mode_selector.clone()
                     model_mode_selector[:, :, 1] = 0.0  # Force pure TF on mask channel
@@ -682,9 +698,8 @@ class LearningAlgorithm:
                         )
 
                     # Compute loss (using masking baseline if applicable)
-                    if (
+                    if self._is_indicate_observation(
                         getattr(dataset_config, "observation_process", None)
-                        == "only_x_indicate"
                     ):
                         # [Masking Baseline] Loss computed only on signal dimension (ch 0), only on observed timesteps
                         loss_recon = self._prepare_masked_loss(
@@ -853,9 +868,8 @@ class LearningAlgorithm:
                     model_mode_selector = base_mode_selector
 
                 # [Masking Baseline] For observation_process == "only_x_indicate", force 100% TF on mask dimension
-                if (
+                if self._is_indicate_observation(
                     getattr(dataset_config, "observation_process", None)
-                    == "only_x_indicate"
                 ):
                     model_mode_selector = model_mode_selector.clone()
                     model_mode_selector[:, :, 1] = 0.0  # Force pure TF on mask channel
@@ -941,9 +955,8 @@ class LearningAlgorithm:
                         )
 
                     # Compute loss (using masking baseline if applicable)
-                    if (
+                    if self._is_indicate_observation(
                         getattr(dataset_config, "observation_process", None)
-                        == "only_x_indicate"
                     ):
                         # [Masking Baseline] Loss computed only on signal dimension (ch 0), only on observed timesteps
                         loss_recon = self._prepare_masked_loss(
@@ -1448,10 +1461,10 @@ class LearningAlgorithm:
                 )
 
                 if (
-                    observation_process == "only_x_indicate"
+                    self._is_indicate_observation(observation_process)
                     and temp_batch_data.size(2) >= 2
                 ):
-                    # For only_x_indicate, dimension 1 is the is_observed indicator (1.0=observed, 0.0=missing)
+                    # For indicate modes, dimension 1 is the is_observed indicator (1.0=observed, 0.0=missing)
                     # Derive missing_mask directly from this indicator to ensure perfect alignment
                     is_observed = temp_batch_data[:, :, 1]  # (seq_len, batch_size)
                     # missing_mask = True where is_observed == 0.0
@@ -1539,8 +1552,9 @@ class LearningAlgorithm:
                     inference_mode=True,
                     missing_mask=temp_missing_mask,
                     hide_mask_output=(
-                        getattr(dataset_config, "observation_process", None)
-                        == "only_x_indicate"
+                        self._is_indicate_observation(
+                            getattr(dataset_config, "observation_process", None)
+                        )
                     ),
                 )
 
@@ -1589,8 +1603,9 @@ class LearningAlgorithm:
                     inference_mode=True,
                     missing_mask=temp_missing_mask,
                     hide_mask_output=(
-                        getattr(dataset_config, "observation_process", None)
-                        == "only_x_indicate"
+                        self._is_indicate_observation(
+                            getattr(dataset_config, "observation_process", None)
+                        )
                     ),
                 )
 
@@ -1638,8 +1653,9 @@ class LearningAlgorithm:
                     inference_mode=True,
                     missing_mask=temp_missing_mask,
                     hide_mask_output=(
-                        getattr(dataset_config, "observation_process", None)
-                        == "only_x_indicate"
+                        self._is_indicate_observation(
+                            getattr(dataset_config, "observation_process", None)
+                        )
                     ),
                 )
 

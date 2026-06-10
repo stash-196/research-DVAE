@@ -55,7 +55,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import pickle
 import configparser
-from typing import Any
+from typing import Any, Optional
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
 
 
@@ -86,6 +86,19 @@ class Options:
                 os.path.dirname(params["saved_dict"]), "config.ini"
             )
         return params
+
+
+def _is_indicate_observation(observation_process: Optional[str]) -> bool:
+    """Return True for 'only_x_indicate' or any '<base>_indicate' form."""
+    if observation_process is None:
+        return False
+    if observation_process == "only_x_indicate":
+        return True
+    if isinstance(observation_process, str) and observation_process.endswith(
+        "_indicate"
+    ):
+        return True
+    return False
 
 
 def visualize_training_mode_short_sequence(
@@ -131,7 +144,7 @@ def visualize_training_mode_short_sequence(
         missing_mask_short = None
         observation_process = getattr(dataset_config, "observation_process", None)
 
-        if observation_process == "only_x_indicate" and batch_data.size(2) >= 2:
+        if _is_indicate_observation(observation_process) and batch_data.size(2) >= 2:
             # For only_x_indicate, dimension 1 is the is_observed indicator
             is_observed = batch_data[:, :, 1]  # (seq_len, batch_size)
             missing_mask_short = (
@@ -184,8 +197,8 @@ def visualize_training_mode_short_sequence(
             base_mode_selector,
         )
 
-        # === Force pure TF on mask dimension if observation_process == "only_x_indicate" ===
-        if observation_process == "only_x_indicate":
+        # === Force pure TF on mask dimension if observation_process is an indicate variant ===
+        if _is_indicate_observation(observation_process):
             model_mode_selector = model_mode_selector.clone()
             model_mode_selector[:, :, 1] = 0.0  # Mask channel: pure TF
 
@@ -213,7 +226,7 @@ def visualize_training_mode_short_sequence(
             missing_mask=(
                 missing_mask_short[:, :1, :] if missing_mask_short is not None else None
             ),
-            hide_mask_output=observation_process == "only_x_indicate",
+            hide_mask_output=_is_indicate_observation(observation_process),
         )
 
         print("[Eval] Training mode short visualization completed")
@@ -423,7 +436,7 @@ if __name__ == "__main__":
             observation_process = getattr(dataset_config, "observation_process", None)
 
             if (
-                observation_process == "only_x_indicate"
+                _is_indicate_observation(observation_process)
                 and batch_data_long.size(2) >= 2
             ):
                 # For only_x_indicate, dimension 1 is the is_observed indicator (1.0=observed, 0.0=missing)
@@ -472,9 +485,8 @@ if __name__ == "__main__":
             # === MASKING BASELINE: Force pure teacher-forcing on mask dimension during evaluation ===
             # For observation_process == "only_x_indicate", the mask channel must always be 100% TF
             # to keep evaluation consistent with training behavior.
-            if (
+            if _is_indicate_observation(
                 getattr(dataset_config, "observation_process", None)
-                == "only_x_indicate"
             ):
                 autonomous_mode_selector_long = autonomous_mode_selector_long.clone()
                 autonomous_mode_selector_long[:, :, 1] = (
@@ -514,9 +526,8 @@ if __name__ == "__main__":
                     if missing_mask_long is not None
                     else None
                 ),
-                hide_mask_output=(
+                hide_mask_output=_is_indicate_observation(
                     getattr(dataset_config, "observation_process", None)
-                    == "only_x_indicate"
                 ),
             )
 
@@ -594,7 +605,7 @@ if __name__ == "__main__":
             observation_process = getattr(dataset_config, "observation_process", None)
 
             if (
-                observation_process == "only_x_indicate"
+                _is_indicate_observation(observation_process)
                 and batch_data_long.size(2) >= 2
             ):
                 # For only_x_indicate, dimension 1 is the is_observed indicator (1.0=observed, 0.0=missing)
@@ -645,9 +656,8 @@ if __name__ == "__main__":
             # === MASKING BASELINE: Force pure teacher-forcing on mask dimension during evaluation ===
             # For observation_process == "only_x_indicate", the mask channel must always be 100% TF
             # to keep evaluation consistent with training behavior.
-            if (
+            if _is_indicate_observation(
                 getattr(dataset_config, "observation_process", None)
-                == "only_x_indicate"
             ):
                 autonomous_mode_selector_long = autonomous_mode_selector_long.clone()
                 autonomous_mode_selector_long[:, :, 1] = (
@@ -682,9 +692,8 @@ if __name__ == "__main__":
                 explain="final_long_inference_mode_even_burst",
                 inference_mode=True,
                 missing_mask=missing_mask_long,
-                hide_mask_output=(
+                hide_mask_output=_is_indicate_observation(
                     getattr(dataset_config, "observation_process", None)
-                    == "only_x_indicate"
                 ),
             )
             # Also visualize a half-half TF/Auto schedule on the same long sequence
@@ -694,9 +703,8 @@ if __name__ == "__main__":
                 batch_size=batch_size_long,
                 x_dim=dataset_config.x_dim,
             )
-            if (
+            if _is_indicate_observation(
                 getattr(dataset_config, "observation_process", None)
-                == "only_x_indicate"
             ):
                 autonomous_mode_selector_half = autonomous_mode_selector_half.clone()
                 autonomous_mode_selector_half[:, :, 1] = 0.0
@@ -708,9 +716,8 @@ if __name__ == "__main__":
                 explain="final_long_inference_mode_half_half",
                 inference_mode=True,
                 missing_mask=missing_mask_long,
-                hide_mask_output=(
+                hide_mask_output=_is_indicate_observation(
                     getattr(dataset_config, "observation_process", None)
-                    == "only_x_indicate"
                 ),
             )
             visualize_teacherforcing_2_autonomous(
@@ -721,9 +728,8 @@ if __name__ == "__main__":
                 explain="final_long_generative_mode",
                 inference_mode=False,
                 missing_mask=missing_mask_long,
-                hide_mask_output=(
+                hide_mask_output=_is_indicate_observation(
                     getattr(dataset_config, "observation_process", None)
-                    == "only_x_indicate"
                 ),
             )
 
