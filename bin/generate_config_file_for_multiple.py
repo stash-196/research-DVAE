@@ -53,15 +53,15 @@ if __name__ == "__main__":
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
     experiment_name = (
-        "20260529-"
-        + "XHRO_ep20000_ptf0,0.4-7_LSTM_clip10_Subj70_ch1-4_hdim100_eStop300"
-        # + "Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_MTRNN3-9d_hdim80"
+        "20260604-"
+        # + "XHRO_ep20000_ptf0,0.4-7_LSTM_clip10_Subj70_ch1-4_hdim100_eStop300"
+        + "Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LSTM_hdim40_obsIndicate"
     )
     print("Experiment name:", experiment_name)
     #  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< data name >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     dataset_name = [
-        "Xhro",
-        # "Lorenz63",
+        # "Xhro",
+        "Lorenz63",
         # "SHO",
         # "DampedSHO"
     ]
@@ -265,9 +265,9 @@ if __name__ == "__main__":
         ]
     elif dataset_name[0] == "Lorenz63":
         observation_process = [
-            "only_x",
+            # "only_x",
             # "only_x_interpolate",
-            # "only_x_indicate",
+            "only_x_indicate",
             # "only_x_w_noise",
             # "raw_noisy",
             # "relative_powers",
@@ -285,6 +285,7 @@ if __name__ == "__main__":
 
     if observation_process[0] == "only_x_indicate":
         x_dim = [2]
+        dense_x = x_dim
 
     model_params = {
         "RNN": {
