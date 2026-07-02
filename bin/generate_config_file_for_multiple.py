@@ -53,41 +53,41 @@ if __name__ == "__main__":
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
     experiment_name = (
-        "20260604-"
-        # + "XHRO_ep20000_ptf0,0.4-7_LSTM_clip10_Subj70_ch1-4_hdim100_eStop300"
-        + "Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LSTM_hdim40_obsIndicate"
+        "20260701-"
+        + "XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500"
+        # + "Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LSTM_hdim40_obsIndicate"
     )
     print("Experiment name:", experiment_name)
     #  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< data name >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     dataset_name = [
-        # "Xhro",
-        "Lorenz63",
+        "Xhro",
+        # "Lorenz63",
         # "SHO",
         # "DampedSHO"
     ]
 
     models = [
-        "RNN",
+        # "RNN",
         # "VRNN",
-        # "MT_RNN",
+        "MT_RNN",
         # "MT_VRNN"
     ]
     rnn_types = [
         # "PLRNN",
-        # "RNN",
+        "RNN",
         # "shPLRNN",
-        "LSTM",
+        # "LSTM",
     ]
 
     # Change to dictionary of lists
     # Network
-    x_dim = [1]
+    x_dim = [4]
     # dense_x = [1]
     dense_x = x_dim
     z_dim = [9]
     dense_z = [[16, 32]]
 
-    dim_rnn = [100]
+    dim_rnn = [200]
     alphas = [
         # [0.1, 0.1, 0.1],
         # [0.1],
@@ -108,7 +108,7 @@ if __name__ == "__main__":
     alpha_lr = [0.01]
     epochs = [20000]
     if dataset_name[0] == "Xhro":
-        early_stop_patience = [300]
+        early_stop_patience = [500]
     else:
         early_stop_patience = [200]
     save_frequency = [200]
@@ -124,6 +124,9 @@ if __name__ == "__main__":
     if dataset_name[0] == "Xhro":
         sampling_ratio = [
             0.0,
+            0.1,
+            0.2,
+            0.3,
             0.4,
             0.5,
             0.6,
@@ -131,7 +134,7 @@ if __name__ == "__main__":
             # 0.8,
             # 0.9,
         ]
-    else:
+    else: # Lorenz
         sampling_ratio = [
             0.0,
             # 0.01,
@@ -253,10 +256,19 @@ if __name__ == "__main__":
     if dataset_name[0] == "Xhro":
         observation_process = [
             # "raw_all",
-            "raw_ch1",
-            "raw_ch2",
-            "raw_ch3",
-            "raw_ch4",
+            # "raw_ch1",
+            # "raw_ch2",
+            # "raw_ch3",
+            # "raw_ch4",
+            # "raw_ch1_interpolate",
+            # "raw_ch2_interpolate",
+            # "raw_ch3_interpolate",
+            # "raw_ch4_interpolate",
+            # "raw_ch1_indicate",
+            # "raw_ch2_indicate",
+            # "raw_ch3_indicate",
+            # "raw_ch4_indicate",
+            "raw_all"
             # "ch4_relative_powers",
             # "ch4_3_vars",
             # "ch4_alpha",
@@ -285,6 +297,10 @@ if __name__ == "__main__":
 
     if observation_process[0] == "only_x_indicate":
         x_dim = [2]
+        dense_x = x_dim
+    # if observation_proccess has "indicate", then add 1 to x_dim and dense_x for all models
+    elif observation_process[0].endswith("indicate"):
+        x_dim = [dim + 1 for dim in x_dim]
         dense_x = x_dim
 
     model_params = {

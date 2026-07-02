@@ -36,6 +36,13 @@ declare -a experiments=(
 # 2026-05-28/
     # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-28/deigo_cluster/20260528-Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LossNone_LSTM_hdim40_obsIndicateMiss"
 
+# 2026-06-04/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-06-04/deigo_cluster/20260604-Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LSTM_hdim40_obsIndicate"
+
+
+# 2026-06-11/
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-06-11/deigo_cluster/20260611-XHRO_ep20000_ptf0,0.4-7_MTRNN9d_clip10_Subj70_ch1-4_hdim200_eStop500"
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-06-11/deigo_cluster/20260611-XHRO_ep20000_ptf0,0.4-7_MTRNN3d_clip10_Subj70_ch1-4_hdim200_eStop500"
 )
 
 # Get the current date in YYYY-MM-DD format
@@ -44,7 +51,7 @@ today=$(date +%Y-%m-%d)
 # Define paths (aligned with run_training_multiple.sh)
 CONTAINER_PATH=/bucket/DoyaU/stash/containers/generic_ml_container.sif
 PROJECT_PATH=~/workspace/research-DVAE
-VENV_PATH=~/containers/venvs/research-DVAE/
+VENV_PATH=/bucket/DoyaU/stash/containers/venvs/research-DVAE/
 DATA_HOST_PATH=/bucket/DoyaU/stash/research-DVAE/data
 SAVED_HOST_PATH=/flash/DoyaU/stash/research-DVAE/saved_model
 
