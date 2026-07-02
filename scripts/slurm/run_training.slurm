@@ -22,7 +22,7 @@ cd ~/workspace/research-DVAE
 # Define paths
 CONTAINER_PATH=/bucket/DoyaU/stash/containers/generic_ml_container.sif
 PROJECT_PATH=~/workspace/research-DVAE
-VENV_PATH=~/containers/venvs/research-DVAE/
+VENV_PATH=/bucket/DoyaU/stash/containers/venvs/research-DVAE/
 
 # Validate paths
 for PATH_VAR in "$CONTAINER_PATH" "$PROJECT_PATH" "$VENV_PATH"; do

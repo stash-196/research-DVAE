@@ -34,7 +34,7 @@ experiment_dates=(
 # Paths based on your existing structure
 CONTAINER_PATH=/bucket/DoyaU/stash/containers/generic_ml_container.sif
 PROJECT_PATH=~/workspace/research-DVAE
-VENV_PATH=~/containers/venvs/research-DVAE/
+VENV_PATH=/bucket/DoyaU/stash/containers/venvs/research-DVAE/
 DATA_HOST_PATH=/bucket/DoyaU/stash/research-DVAE/data
 INPUT_MODELS_PATH=/flash/DoyaU/stash/research-DVAE/saved_model
 OUTPUT_PATH=/flash/DoyaU/stash/research-DVAE/saved_model/collected_experiment_runs_summary

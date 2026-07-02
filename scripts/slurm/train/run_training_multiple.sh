@@ -4,7 +4,7 @@
 BASE_DIR=~/workspace/research-DVAE/config/general_signal/generated
 
 # Define a list of experiment names, each corresponding to a subdirectory under BASE_DIR
-declare -a experiments=("20260604-Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LSTM_hdim40_obsIndicate")
+declare -a experiments=("20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500")
 
 # Get the current date in YYYY-MM-DD format
 today=$(date +%Y-%m-%d)
@@ -15,9 +15,9 @@ now=$(date +%H:%M:%S)
 # Define paths (aligned with run_training.slurm)
 CONTAINER_PATH=/bucket/DoyaU/stash/containers/generic_ml_container.sif
 PROJECT_PATH=~/workspace/research-DVAE
-VENV_PATH=~/containers/venvs/research-DVAE/
+VENV_PATH=/bucket/DoyaU/stash/containers/venvs/research-DVAE/
 DATA_HOST_PATH=/bucket/DoyaU/stash/research-DVAE/data
-SAVED_HOST_PATH=/flash/DoyaU/stash/research-DVAE/saved_model
+SAVED_HOST_PATH=/flash/DoyaU/stash/research-DVAE/saved_modelba
 
 # Create output directory for today using SAVED_HOST_PATH
 OUTPUT_TODAY_DIR="$SAVED_HOST_PATH/$today"
