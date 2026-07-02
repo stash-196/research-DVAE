@@ -45,31 +45,33 @@ LOCAL_BASE_DIR="$HOME/workspace/latex_projects/phd-thesis/Images/plots/aggregate
 
 # Add the aggregated plot directories you want to copy.
 aggregated_results=(
-    # 2026-05-20 
-    ## Lorenz
-    "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_LSTM_hdim20/aggregate_eval_plots_sampling_ratio_mask_label"
-    "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_MTRNN_hdim40/aggregate_eval_plots_sampling_ratio_mask_label"
-    "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_RNN_hdim40/aggregate_eval_plots_sampling_ratio_mask_label"
-    ## XHRO
-    ### MTRNN 
-    "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-XHRO_ptf0.5-7_MTRNN_Subj70_ch3-4_hdim20-40_alphas3-9d/aggregate_eval_plots_sampling_ratio_observation_process_alphas=0_1, 0_1, 0_1_dim_rnn=40"
-    "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-XHRO_ptf0.5-7_MTRNN_Subj70_ch3-4_hdim20-40_alphas3-9d/aggregate_eval_plots_sampling_ratio_observation_process_alphas=0_1, 0_1, 0_1, 0_1, 0_1, 0_1, 0_1, 0_1, 0_1_dim_rnn=40"
-    ### RNN
-    "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-XHRO_ptf0.5-7_RNN_Subj70_ch3-4_hdim20-40/aggregate_eval_plots_sampling_ratio_observation_process_dim_rnn=40"
+    # # 2026-05-20 
+    # ## Lorenz
+    # "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_LSTM_hdim20/aggregate_eval_plots_sampling_ratio_mask_label"
+    # "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_MTRNN_hdim40/aggregate_eval_plots_sampling_ratio_mask_label"
+    # "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-Lorenz_auto0-0.8_miss0-0.7_clip1_LossNone_RNN_hdim40/aggregate_eval_plots_sampling_ratio_mask_label"
+    # ## XHRO
+    # ### MTRNN 
+    # "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-XHRO_ptf0.5-7_MTRNN_Subj70_ch3-4_hdim20-40_alphas3-9d/aggregate_eval_plots_sampling_ratio_observation_process_alphas=0_1, 0_1, 0_1_dim_rnn=40"
+    # "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-XHRO_ptf0.5-7_MTRNN_Subj70_ch3-4_hdim20-40_alphas3-9d/aggregate_eval_plots_sampling_ratio_observation_process_alphas=0_1, 0_1, 0_1, 0_1, 0_1, 0_1, 0_1, 0_1, 0_1_dim_rnn=40"
+    # ### RNN
+    # "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-20/deigo_cluster/20260520-XHRO_ptf0.5-7_RNN_Subj70_ch3-4_hdim20-40/aggregate_eval_plots_sampling_ratio_observation_process_dim_rnn=40"
 
-    # 2026-05-21
-    ## MTRNN
-    "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-21/deigo_cluster/20260521-XHRO_ptf0.5-7_MTRNN_Subj70_ch1-2_hdim20-40/aggregate_eval_plots_sampling_ratio_observation_process_alphas=0_1, 0_1, 0_1_dim_rnn=40"
-    "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-21/deigo_cluster/20260521-XHRO_ptf0.5-7_MTRNN_Subj70_ch1-2_hdim20-40/aggregate_eval_plots_sampling_ratio_observation_process_alphas=0_1, 0_1, 0_1, 0_1, 0_1, 0_1, 0_1, 0_1, 0_1_dim_rnn=40"
-    ## RNN
-    "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-21/deigo_cluster/20260521-XHRO_ptf0.5-7_RNN_Subj70_ch1-2_hdim20-40/aggregate_eval_plots_sampling_ratio_observation_process_dim_rnn=40"
+    # # 2026-05-21
+    # ## MTRNN
+    # "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-21/deigo_cluster/20260521-XHRO_ptf0.5-7_MTRNN_Subj70_ch1-2_hdim20-40/aggregate_eval_plots_sampling_ratio_observation_process_alphas=0_1, 0_1, 0_1_dim_rnn=40"
+    # "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-21/deigo_cluster/20260521-XHRO_ptf0.5-7_MTRNN_Subj70_ch1-2_hdim20-40/aggregate_eval_plots_sampling_ratio_observation_process_alphas=0_1, 0_1, 0_1, 0_1, 0_1, 0_1, 0_1, 0_1, 0_1_dim_rnn=40"
+    # ## RNN
+    # "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-21/deigo_cluster/20260521-XHRO_ptf0.5-7_RNN_Subj70_ch1-2_hdim20-40/aggregate_eval_plots_sampling_ratio_observation_process_dim_rnn=40"
 
-    # 2026-05-23
-    ## MTRNN 
-    "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-23/deigo_cluster/20260523-XHRO_ptf0.5-7_MTRNN_Subj70_ch1-4_hdim200_alphas/aggregate_eval_plots_sampling_ratio_observation_process_alphas=0_1, 0_1, 0_1"
-    "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-23/deigo_cluster/20260523-XHRO_ptf0.5-7_MTRNN_Subj70_ch1-4_hdim200_alphas/aggregate_eval_plots_sampling_ratio_observation_process_alphas=0_1, 0_1, 0_1, 0_1, 0_1, 0_1, 0_1, 0_1, 0_1"
-    ## RNN
-    "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-23/deigo_cluster/20260523-XHRO_ptf0.5-7_RNN_Subj70_ch1-4_hdim200/aggregate_eval_plots_sampling_ratio_observation_process"
+    # # 2026-05-23
+    # ## MTRNN 
+    # "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-23/deigo_cluster/20260523-XHRO_ptf0.5-7_MTRNN_Subj70_ch1-4_hdim200_alphas/aggregate_eval_plots_sampling_ratio_observation_process_alphas=0_1, 0_1, 0_1"
+    # "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-23/deigo_cluster/20260523-XHRO_ptf0.5-7_MTRNN_Subj70_ch1-4_hdim200_alphas/aggregate_eval_plots_sampling_ratio_observation_process_alphas=0_1, 0_1, 0_1, 0_1, 0_1, 0_1, 0_1, 0_1, 0_1"
+    # ## RNN
+    # "/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-23/deigo_cluster/20260523-XHRO_ptf0.5-7_RNN_Subj70_ch1-4_hdim200/aggregate_eval_plots_sampling_ratio_observation_process"
+
+    
 
 )
 
