@@ -656,6 +656,7 @@ class LearningAlgorithm:
                     self.dataset_name == "Lorenz63"
                     or self.dataset_name == "Sinusoid"
                     or self.dataset_name == "Xhro"
+                    or self.dataset_name == "XhroPacketLoss"
                     or self.dataset_name == "SHO"
                     or self.dataset_name == "DampedSHO"
                 ):
@@ -911,6 +912,7 @@ class LearningAlgorithm:
                     self.dataset_name == "Lorenz63"
                     or self.dataset_name == "Sinusoid"
                     or self.dataset_name == "Xhro"
+                    or self.dataset_name == "XhroPacketLoss"
                     or self.dataset_name == "SHO"
                     or self.dataset_name == "DampedSHO"
                 ):

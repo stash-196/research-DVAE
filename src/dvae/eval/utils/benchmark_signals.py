@@ -45,7 +45,7 @@ def get_benchmark_signals(
         time_delay = 5
         delay_dims = 3
 
-    elif dataset_name == "Xhro":
+    elif dataset_name in ("Xhro", "XhroPacketLoss"):
         full_xyz_data = test_dataloader.dataset.get_full_xyz(i)[
             ["ch1", "ch2", "ch3", "ch4"]
         ].to_numpy()

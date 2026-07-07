@@ -107,7 +107,7 @@ if __name__ == "__main__":
     lr = [0.001]
     alpha_lr = [0.01]
     epochs = [20000]
-    if dataset_name[0] == "Xhro":
+    if dataset_name[0] in ("Xhro", "XhroPacketLoss"):
         early_stop_patience = [500]
     else:
         early_stop_patience = [200]
@@ -121,7 +121,7 @@ if __name__ == "__main__":
         # "sm"
     ]
 
-    if dataset_name[0] == "Xhro":
+    if dataset_name[0] in ("Xhro", "XhroPacketLoss"):
         sampling_ratio = [
             0.0,
             0.1,
@@ -206,6 +206,10 @@ if __name__ == "__main__":
             # "XHRO_04_XH057",
             "XHRO_02_XH070",
         ]
+    elif dataset_name[0] == "XhroPacketLoss":
+        dataset_label = [
+            "XHRO3506_20260622T142410000+0900",
+        ]
     elif dataset_name[0] == "SHO":
         dataset_label = [
             # "None",
@@ -226,6 +230,11 @@ if __name__ == "__main__":
     if dataset_name[0] == "Xhro":
         mask_label = [
             "None",
+        ]
+    elif dataset_name[0] == "XhroPacketLoss":
+        mask_label = [
+            "realtime",
+            # "recovered",
         ]
     elif dataset_name[0] == "Lorenz63":
         mask_label = [
@@ -253,7 +262,7 @@ if __name__ == "__main__":
     sequence_len = [1000]
     val_indices = [0.2]
 
-    if dataset_name[0] == "Xhro":
+    if dataset_name[0] in ("Xhro", "XhroPacketLoss"):
         observation_process = [
             # "raw_all",
             # "raw_ch1",

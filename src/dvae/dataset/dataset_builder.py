@@ -7,11 +7,13 @@ from dvae.dataset.lorenz63_dataset import Lorenz63
 from dvae.dataset.sho_dataset import SimpleHarmonicOscillator
 from dvae.dataset.damped_sho_dataset import DampedSimpleHarmonicOscillator
 from dvae.dataset.xhro_dataset import Xhro
+from dvae.dataset.xhro_packet_loss_dataset import XhroPacketLoss
 from dataclasses import dataclass
 
 DATASET_REGISTRY = {
     "Lorenz63": Lorenz63,
     "Xhro": Xhro,
+    "XhroPacketLoss": XhroPacketLoss,
     "SHO": SimpleHarmonicOscillator,
     "DampedSHO": DampedSimpleHarmonicOscillator,
 }
