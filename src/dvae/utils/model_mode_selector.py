@@ -9,13 +9,16 @@ import numpy as np
 import torch
 
 
-def create_autonomous_mode_selector_1d(seq_len, mode="all_1", autonomous_ratio=0.0):
+def create_autonomous_mode_selector_1d(
+    seq_len, mode="all_1", autonomous_ratio=0.0, flip_point=None
+):
     """
     Creates a 1D mode selector array for RNN training.
 
     :param seq_len: Length of the sequence.
     :param mode: The mode of operation.
     :param autonomous_ratio: Ratio of autonomous steps for applicable modes.
+    :param flip_point: For ``flip_at_index``, timestep where TF (0) switches to auto (1).
     :return: A NumPy array of shape (seq_len,) where 0 represents teacher-forcing
              mode and 1 represents autonomous mode.
     """
@@ -26,6 +29,16 @@ def create_autonomous_mode_selector_1d(seq_len, mode="all_1", autonomous_ratio=0
     elif mode == "half_half":
         half_len = seq_len // 2
         half_array = [0] * half_len + [1] * (seq_len - half_len)
+        mode_selector = np.array(half_array, dtype=np.float32)
+    elif mode == "flip_at_index":
+        if flip_point is None:
+            raise ValueError("flip_at_index mode requires flip_point.")
+        flip_point = int(flip_point)
+        if flip_point < 0 or flip_point > seq_len:
+            raise ValueError(
+                f"flip_point {flip_point} out of range for seq_len {seq_len}."
+            )
+        half_array = [0] * flip_point + [1] * (seq_len - flip_point)
         mode_selector = np.array(half_array, dtype=np.float32)
     elif mode == "flip_at_middle":
         autonomous_len = int(seq_len * autonomous_ratio)
@@ -67,23 +80,26 @@ def create_autonomous_mode_selector(
     batch_size=None,
     x_dim=None,
     device="cpu",
+    flip_point=None,
 ):
     """
     Creates a mode selector array for RNN training,
     handling batch_size and x_dim dimensions efficiently.
 
     :param seq_len: Length of the sequence.
-    :param mode: The mode of operation - 'all_1', 'all_0', 'half_half', 'flip_at_middle',
-                'even_sampling', 'even_bursts', 'mix_sampling', or 'bernoulli_sampling'.
+    :param mode: The mode of operation - 'all_1', 'all_0', 'half_half', 'flip_at_index',
+                'flip_at_middle', 'even_sampling', 'even_bursts', 'mix_sampling',
+                or 'bernoulli_sampling'.
     :param autonomous_ratio: Ratio of autonomous steps for applicable modes.
     :param batch_size: Number of sequences in a batch. If None, batch dimension is not added.
     :param x_dim: Dimensionality of the input features. If None, x_dim dimension is not added.
+    :param flip_point: Timestep index for ``flip_at_index`` (TF before, auto after).
     :return: A NumPy array of shape (seq_len, [batch_size], [x_dim]) where 0 represents teacher-forcing
              mode and 1 represents autonomous mode. Dimensions are added only if batch_size/x_dim are provided.
     """
     # 1. Create the base 1D mode selector using the helper function
     mode_selector_1d = create_autonomous_mode_selector_1d(
-        seq_len, mode, autonomous_ratio
+        seq_len, mode, autonomous_ratio, flip_point=flip_point
     )
 
     # Convert to PyTorch tensor immediately for expand/broadcast operations

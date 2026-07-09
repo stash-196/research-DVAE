@@ -48,6 +48,11 @@ from dvae.eval.utils import (
     compute_delay_embedding,
     state_space_kl,
     compute_local_drift_statistics,
+    run_forward_with_mode,
+    get_flip_point_for_mode,
+    get_channel_benchmarks,
+    merge_batch_metric_dicts,
+    flatten_analysis_to_batch_metrics,
 )
 
 from torch.nn.functional import mse_loss
@@ -75,6 +80,34 @@ class Options:
             type=lambda s: str(s).lower() in ("true", "1", "yes", "y"),
             default=True,
             help="Whether to save 3D visualizations (True/False). Default: True",
+        )
+        self.parser.add_argument(
+            "--max-eval-batches",
+            type=int,
+            default=20,
+            help="Max test batches for quantitative metrics (default: 20).",
+        )
+        self.parser.add_argument(
+            "--auto-eval-mode",
+            type=str,
+            default="half_half",
+            help="Mode selector schedule for warmed autonomous metrics (default: half_half).",
+        )
+        self.parser.add_argument(
+            "--auto-eval-flip-point",
+            type=int,
+            default=None,
+            help="Flip point for flip_at_index auto eval mode (optional).",
+        )
+        self.parser.add_argument(
+            "--skip-metrics-viz-after-batch-0",
+            dest="skip_metrics_viz_after_batch_0",
+            type=lambda s: str(s).lower() in ("true", "1", "yes", "y"),
+            default=True,
+            help=(
+                "Only save metric figures (MSE/KLD/spectrum/GIFs) for window 0; "
+                "later windows compute scalars only (default: True)."
+            ),
         )
 
     def get_params(self):
@@ -526,6 +559,7 @@ if __name__ == "__main__":
                     if missing_mask_long is not None
                     else None
                 ),
+                is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
                 hide_mask_output=_is_indicate_observation(
                     getattr(dataset_config, "observation_process", None)
                 ),
@@ -589,8 +623,14 @@ if __name__ == "__main__":
         ############################################################################
 
         new_seq_len = min(20000, len(test_dataloader.dataset.seq))
-        print(f"[Eval] New sequence length: {new_seq_len}")
+        print(f"[Eval] Long-sequence eval: seq_len={new_seq_len}")
         test_dataloader.dataset.update_sequence_length(new_seq_len)
+        n_long_windows = len(test_dataloader.dataset.data_idx)
+        print(
+            f"[Eval] Test set has {n_long_windows} window(s) at seq_len={new_seq_len} "
+            f"(qualitative figures use window 0 only)"
+        )
+        sys.stdout.flush()
         # Prepare the long sequence data
         for i, batch_data_long in enumerate(test_dataloader):
             # batch_data_long = next(iter(test_dataloader))  # Single batch for demonstration
@@ -599,6 +639,16 @@ if __name__ == "__main__":
             batch_data_long = batch_data_long.permute(1, 0, 2)
             seq_len_long, batch_size_long, _ = batch_data_long.shape
             half_point_long = seq_len_long // 2
+            start_frame = (
+                test_dataloader.dataset.data_idx[i]
+                if i < len(test_dataloader.dataset.data_idx)
+                else 0
+            )
+            print(
+                f"[Eval] Qualitative visualizations: window 0 "
+                f"(start_frame={start_frame}, seq_len={seq_len_long})"
+            )
+            sys.stdout.flush()
 
             # Extract missing mask for this batch
             missing_mask_long = None
@@ -618,11 +668,7 @@ if __name__ == "__main__":
 
             elif hasattr(test_dataloader.dataset, "missing_mask"):
                 # Fallback for other observation processes
-                batch_start_idx = (
-                    test_dataloader.dataset.data_idx[i]
-                    if i < len(test_dataloader.dataset.data_idx)
-                    else 0
-                )
+                batch_start_idx = start_frame
                 batch_end_idx = min(
                     batch_start_idx + seq_len_long,
                     len(test_dataloader.dataset.missing_mask),
@@ -692,6 +738,7 @@ if __name__ == "__main__":
                 explain="final_long_inference_mode_even_burst",
                 inference_mode=True,
                 missing_mask=missing_mask_long,
+                is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
                 hide_mask_output=_is_indicate_observation(
                     getattr(dataset_config, "observation_process", None)
                 ),
@@ -716,6 +763,7 @@ if __name__ == "__main__":
                 explain="final_long_inference_mode_half_half",
                 inference_mode=True,
                 missing_mask=missing_mask_long,
+                is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
                 hide_mask_output=_is_indicate_observation(
                     getattr(dataset_config, "observation_process", None)
                 ),
@@ -728,126 +776,27 @@ if __name__ == "__main__":
                 explain="final_long_generative_mode",
                 inference_mode=False,
                 missing_mask=missing_mask_long,
+                is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
                 hide_mask_output=_is_indicate_observation(
                     getattr(dataset_config, "observation_process", None)
                 ),
             )
 
-            # Run spectrum analysis and visualization
-            print("[Eval] [CHECKPOINT] Starting spectrum analysis...")
-            sys.stdout.flush()
-            spectrum_results = run_spectrum_analysis(
-                test_dataloader=test_dataloader,
-                recon_data_long=recon_data_long,
-                save_fig_dir=save_fig_dir,
-                i=i,
-                autonomous_mode_selector_long=autonomous_mode_selector_long,
-                dataset_name=learning_algo.dataset_name,
-                model_name=learning_algo.model_name,
-                cfg=cfg,
-                dvae_model=dvae,
+            # Hidden-state 3D embedding uses warmed half-half pass (batch 0 only)
+            _, half_mode_selector = run_forward_with_mode(
+                dvae,
+                batch_data_long,
+                mode="half_half",
+                observation_process=observation_process,
             )
-            print("[Eval] [CHECKPOINT] Spectrum analysis completed")
-            sys.stdout.flush()
-
-            # Add spectrum errors to metrics
-            for key, error in zip(
-                spectrum_results["signal_keys"],
-                spectrum_results["power_spectrum_errors"],
-            ):
-                metrics[f"spectrum_error_{key}"] = float(error)
-
-            print("[Eval] [CHECKPOINT] Starting MSE analysis...")
-            sys.stdout.flush()
-            mse_results = run_mse_analysis(
-                test_dataloader=test_dataloader,
-                recon_data_long=recon_data_long,
-                save_fig_dir=save_fig_dir,
-                i=i,
-                autonomous_mode_selector_long=autonomous_mode_selector_long,
-                dataset_name=learning_algo.dataset_name,
-                batch_data_long=batch_data_long,
-            )
-            print("[Eval] [CHECKPOINT] MSE analysis completed")
-            sys.stdout.flush()
-
-            for key, error in zip(
-                mse_results["signal_keys"], mse_results["mse_errors"]
-            ):
-                metrics[f"mse_{key}"] = float(error)
-
-            print("[Eval] [CHECKPOINT] Starting geometry analysis...")
-            sys.stdout.flush()
-            geom_results = run_geometry_analysis(
-                test_dataloader=test_dataloader,
-                recon_data_long=recon_data_long,
-                save_fig_dir=save_fig_dir,
-                i=i,
-                autonomous_mode_selector_long=autonomous_mode_selector_long,
-                dataset_name=learning_algo.dataset_name,
-                batch_data_long=batch_data_long,
-            )
-            print("[Eval] [CHECKPOINT] Geometry analysis completed")
-            sys.stdout.flush()
-
-            for key, error in zip(
-                geom_results["signal_keys"], geom_results["kld_scores"]
-            ):
-                metrics[f"kld_{key}"] = float(error)
-
-            # Extract TF and Auto metrics from the analysis results
-            tf_index = geom_results["signal_keys"].index("tf")
-            auto_index = geom_results["signal_keys"].index("auto")
-            mse_tf = mse_results["mse_errors"][tf_index]
-            mse_auto = mse_results["mse_errors"][auto_index]
-            kld_tf = geom_results["kld_scores"][tf_index]
-            kld_auto = geom_results["kld_scores"][auto_index]
-
-            print(f"[Eval] MSE Teacher-forced: {mse_tf:.6f}")
-            print(f"[Eval] MSE Autonomous: {mse_auto:.6f}")
-            print(f"[Eval] KL Teacher-forced: {kld_tf:.4f}")
-            print(f"[Eval] KL Autonomous: {kld_auto:.4f}")
-
-            # Add to metrics
-            metrics["mse_tf"] = float(mse_tf)
-            metrics["mse_auto"] = float(mse_auto)
-            metrics["kld_tf"] = float(kld_tf)
-            metrics["kld_auto"] = float(kld_auto)
-
-            # Add spectrum distance metrics
-            if spectrum_results:
-                spectrum_errors = spectrum_results["power_spectrum_errors"]
-                signal_names = spectrum_results["signal_keys"]
-                metrics["spectrum_distance"] = {
-                    name.replace("\n", " "): float(error)
-                    for name, error in zip(signal_names, spectrum_errors)
-                }
-
-            # Logging
-            # Log the metrics to a file in the same directory as the .pt file
-            log_file = os.path.join(save_dir, "evaluation_log.txt")
-            with open(log_file, "w") as f:
-                f.write(f"KL Teacher-forced: {kld_tf:.4f}\n")
-                f.write(f"KL Autonomous: {kld_auto:.4f}\n")
-                f.write(f"MSE Teacher-forced: {mse_tf:.6f}\n")
-                f.write(f"MSE Autonomous: {mse_auto:.6f}\n")
-
-            teacher_forced_mask = ~autonomous_mode_selector_long[:, 0, 0].bool()
-            autonomous_mask = autonomous_mode_selector_long[:, 0, 0].bool()
+            teacher_forced_mask = ~half_mode_selector[:, 0, 0].bool()
+            autonomous_mask = half_mode_selector[:, 0, 0].bool()
             teacherforced_states = dvae.h[teacher_forced_mask, 0, :]
             autonomous_states = dvae.h[autonomous_mask, 0, :]
             embedding_states_list = [teacherforced_states, autonomous_states]
             embedding_states_conditions = ["teacher-forced", "autonomous"]
             embedding_states_colors = ["Greens", "Reds"]
 
-            # visualize the hidden states 3d (created later if enabled)
-
-            # Save the metrics as YAML before starting parallel visualizations
-            metrics_file = os.path.join(save_dir, "evaluation_summary.yaml")
-            with open(metrics_file, "w") as f:
-                yaml.dump(metrics, f, default_flow_style=False)
-            print(f"[Eval] Metrics saved to: {metrics_file}")
-            sys.stdout.flush()
             if params.get("save_3d", True):
                 hidden_3d_gif_dir = os.path.join(save_fig_dir, "3d_hidden_gifs")
                 if not os.path.exists(hidden_3d_gif_dir):
@@ -878,7 +827,6 @@ if __name__ == "__main__":
                         "technique": "tsne",
                     },
                 ]
-
                 print("[Eval] [CHECKPOINT] Starting parallel visualizations...")
                 sys.stdout.flush()
                 run_parallel_visualizations(
@@ -890,8 +838,186 @@ if __name__ == "__main__":
                 print("[Eval] Skipping 3D visualizations (save_3d=False)")
                 sys.stdout.flush()
 
-            # break after the first batch
-            break
+            break  # Visualizations only on first long-sequence batch
+
+        ############################################################################
+        # Quantitative metrics (multi-batch, modular mode selectors)
+        ############################################################################
+        auto_eval_mode = params.get("auto_eval_mode", "half_half")
+        auto_eval_flip_point = params.get("auto_eval_flip_point")
+        max_eval_batches = params.get("max_eval_batches", 20)
+        skip_metrics_viz_after_batch_0 = params.get(
+            "skip_metrics_viz_after_batch_0", True
+        )
+        observation_process = getattr(dataset_config, "observation_process", None)
+
+        n_test_windows = len(test_dataloader.dataset.data_idx)
+        n_eval_windows = min(n_test_windows, max_eval_batches)
+        batch_metric_dicts = []
+        metrics_save_fig_dir = os.path.join(save_fig_dir, "metrics_batches")
+
+        print(
+            f"[Eval] Quantitative metrics: up to {n_eval_windows} window(s) "
+            f"(test_set={n_test_windows}, max_eval_batches={max_eval_batches}, "
+            f"seq_len={new_seq_len})"
+        )
+        print(
+            f"[Eval] Forward passes per window: TF=all_0, Auto={auto_eval_mode}"
+            + (
+                f" (custom flip_point={auto_eval_flip_point})"
+                if auto_eval_flip_point is not None
+                else ""
+            )
+        )
+        if skip_metrics_viz_after_batch_0:
+            print(
+                "[Eval] Metric figures: window 0 only "
+                "(set --skip-metrics-viz-after-batch-0 false to save all windows)"
+            )
+        else:
+            print("[Eval] Metric figures: enabled for every evaluated window")
+        sys.stdout.flush()
+
+        for i, batch_data_long in enumerate(test_dataloader):
+            if i >= max_eval_batches:
+                break
+
+            batch_data_long = batch_data_long.to(device).permute(1, 0, 2)
+            seq_len_long = batch_data_long.shape[0]
+            start_frame = (
+                test_dataloader.dataset.data_idx[i]
+                if i < len(test_dataloader.dataset.data_idx)
+                else 0
+            )
+            flip_point = get_flip_point_for_mode(
+                seq_len_long,
+                auto_eval_mode,
+                flip_point=auto_eval_flip_point,
+            )
+            save_metric_figures = (i == 0) or (not skip_metrics_viz_after_batch_0)
+
+            print(
+                f"[Eval] Evaluating window {i + 1}/{n_eval_windows} "
+                f"(start_frame={start_frame}, seq_len={seq_len_long}, "
+                f"flip_point={flip_point}, metric_figures="
+                f"{'yes' if save_metric_figures else 'no'})"
+            )
+            sys.stdout.flush()
+
+            recon_tf, _ = run_forward_with_mode(
+                dvae,
+                batch_data_long,
+                mode="all_0",
+                observation_process=observation_process,
+            )
+            recon_auto_warmed, _ = run_forward_with_mode(
+                dvae,
+                batch_data_long,
+                mode=auto_eval_mode,
+                observation_process=observation_process,
+                flip_point=auto_eval_flip_point,
+            )
+
+            channel_benchmarks = get_channel_benchmarks(
+                batch_data_long=batch_data_long,
+                recon_tf=recon_tf.detach().cpu().numpy(),
+                recon_auto_warmed=recon_auto_warmed.detach().cpu().numpy(),
+                flip_point=flip_point,
+                dataset=test_dataloader.dataset,
+                batch_idx=i,
+                observation_process=observation_process or "",
+                dataset_name=learning_algo.dataset_name,
+                auto_mode=auto_eval_mode,
+            )
+
+            batch_fig_dir = os.path.join(metrics_save_fig_dir, f"batch_{i}")
+            if save_metric_figures:
+                os.makedirs(batch_fig_dir, exist_ok=True)
+
+            spectrum_results = run_spectrum_analysis(
+                test_dataloader=test_dataloader,
+                recon_data_long=None,
+                save_fig_dir=batch_fig_dir if save_metric_figures else None,
+                i=i,
+                autonomous_mode_selector_long=None,
+                dataset_name=learning_algo.dataset_name,
+                model_name=learning_algo.model_name,
+                cfg=cfg,
+                dvae_model=dvae,
+                batch_data_long=batch_data_long,
+                channel_benchmarks=channel_benchmarks,
+                save_figures=save_metric_figures,
+            )
+            mse_results = run_mse_analysis(
+                test_dataloader=test_dataloader,
+                recon_data_long=None,
+                save_fig_dir=batch_fig_dir if save_metric_figures else None,
+                i=i,
+                autonomous_mode_selector_long=None,
+                dataset_name=learning_algo.dataset_name,
+                batch_data_long=batch_data_long,
+                channel_benchmarks=channel_benchmarks,
+                save_figures=save_metric_figures,
+            )
+            geom_results = run_geometry_analysis(
+                test_dataloader=test_dataloader,
+                recon_data_long=None,
+                save_fig_dir=batch_fig_dir if save_metric_figures else None,
+                i=i,
+                autonomous_mode_selector_long=None,
+                dataset_name=learning_algo.dataset_name,
+                batch_data_long=batch_data_long,
+                channel_benchmarks=channel_benchmarks,
+                save_figures=save_metric_figures,
+            )
+
+            batch_metric_dicts.append(
+                flatten_analysis_to_batch_metrics(
+                    mse_results, geom_results, spectrum_results
+                )
+            )
+
+        if batch_metric_dicts:
+            merged = merge_batch_metric_dicts(batch_metric_dicts)
+            metrics["eval_schema_version"] = 2
+            metrics["auto_eval_mode"] = auto_eval_mode
+            metrics.update(merged)
+
+            metrics["mse_tf"] = merged.get("mse_tf", merged.get("mse_tf_mean"))
+            metrics["mse_auto"] = merged.get("mse_auto", merged.get("mse_auto_mean"))
+            metrics["kld_tf"] = merged.get("kld_tf", merged.get("kld_tf_mean"))
+            metrics["kld_auto"] = merged.get("kld_auto", merged.get("kld_auto_mean"))
+            metrics["spectrum_error_tf"] = merged.get(
+                "spectrum_error_tf", merged.get("spectrum_error_tf_mean")
+            )
+            metrics["spectrum_error_auto"] = merged.get(
+                "spectrum_error_auto", merged.get("spectrum_error_auto_mean")
+            )
+            metrics["spectrum_error_gt"] = 0.0
+            metrics["spectrum_distance"] = {
+                "tf": metrics["spectrum_error_tf"],
+                "auto": metrics["spectrum_error_auto"],
+                "gt": 0.0,
+            }
+
+            n_scored = merged.get("n_eval_batches", len(batch_metric_dicts))
+            print(
+                f"[Eval] Aggregated metrics over {n_scored} window(s) "
+                f"(mean ± std across windows in YAML)"
+            )
+            print(f"[Eval] MSE Teacher-forced (mean): {metrics['mse_tf']:.6f}")
+            print(f"[Eval] MSE Autonomous (mean): {metrics['mse_auto']:.6f}")
+            print(f"[Eval] KL Teacher-forced (mean): {metrics['kld_tf']:.4f}")
+            print(f"[Eval] KL Autonomous (mean): {metrics['kld_auto']:.4f}")
+
+            log_file = os.path.join(save_dir, "evaluation_log.txt")
+            with open(log_file, "w") as f:
+                f.write(f"KL Teacher-forced: {metrics['kld_tf']:.4f}\n")
+                f.write(f"KL Autonomous: {metrics['kld_auto']:.4f}\n")
+                f.write(f"MSE Teacher-forced: {metrics['mse_tf']:.6f}\n")
+                f.write(f"MSE Autonomous: {metrics['mse_auto']:.6f}\n")
+                f.write(f"Auto eval mode: {auto_eval_mode}\n")
+                f.write(f"Eval batches: {len(batch_metric_dicts)}\n")
 
         ##############################################################################
         # ============================================================
@@ -907,10 +1033,16 @@ if __name__ == "__main__":
         #   - We compute ΔMSE = ||d||^2 + 2*(d^T e), which directly measures
         #     the change in MSE when switching from TF to Auto.
         #
-        print("[Eval] [CHECKPOINT] Starting local drift statistics computation...")
+        print("[Eval] Starting local drift statistics computation...")
         sys.stdout.flush()
         new_seq_len_short = 60  # Short sequences to stay in linear regime
         test_dataloader.dataset.update_sequence_length(new_seq_len_short)
+        n_drift_windows = len(test_dataloader.dataset.data_idx)
+        print(
+            f"[Eval] Local drift: seq_len={new_seq_len_short}, "
+            f"flip_point=30, {n_drift_windows} window(s)"
+        )
+        sys.stdout.flush()
 
         drift_stats_list = []
         drift_per_step_d_norm_list = []
@@ -918,7 +1050,15 @@ if __name__ == "__main__":
         drift_per_step_delta_mse_list = []
 
         for batch_idx, batch_data in enumerate(test_dataloader):
-            print(f"[Eval] [CHECKPOINT] Processing drift batch {batch_idx}...")
+            drift_start = (
+                test_dataloader.dataset.data_idx[batch_idx]
+                if batch_idx < len(test_dataloader.dataset.data_idx)
+                else 0
+            )
+            print(
+                f"[Eval] Local drift window {batch_idx + 1}/{n_drift_windows} "
+                f"(start_frame={drift_start}, seq_len={new_seq_len_short})"
+            )
             sys.stdout.flush()
             batch_data = batch_data.to(device).permute(
                 1, 0, 2
@@ -936,6 +1076,9 @@ if __name__ == "__main__":
                 flip_point=flip_point,
                 auto_len=auto_len,
                 device=device,
+                observation_process=getattr(
+                    dataset_config, "observation_process", None
+                ),
             )
             print(f"[Eval] [CHECKPOINT] Drift batch {batch_idx} computed")
             sys.stdout.flush()

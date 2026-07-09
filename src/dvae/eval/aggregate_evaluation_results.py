@@ -32,9 +32,15 @@ DISPLAY_NAMES = {
 METRIC_DISPLAY_NAMES = {
     "kld_tf": "KLD of Teacher Forced",
     "kld_auto": "KLD of Autonomous",
+    "kld_tf_mean": "KLD TF (channel mean)",
+    "kld_auto_mean": "KLD Auto (channel mean)",
+    "mse_tf_mean": "MSE TF (channel mean)",
+    "mse_auto_mean": "MSE Auto (channel mean)",
     "spectrum_error_gt": "Spectrum Error Ground Truth",
     "spectrum_error_tf": "Spectrum Error Teacher Forced",
     "spectrum_error_auto": "Spectrum Error Autonomous",
+    "spectrum_error_tf_mean": "Spectrum Error TF (channel mean)",
+    "spectrum_error_auto_mean": "Spectrum Error Auto (channel mean)",
 }
 
 # Dictionary for value display names (map raw labels to nicer labels)
@@ -97,6 +103,41 @@ def sort_key(x):
         return str(x)
 
 
+TILE_SIZE_INCHES = 3.5
+SINGLE_PARAM_ROW_HEIGHT_INCHES = 5.5
+
+
+def montage_figsize(rows, cols, layout_mode):
+    """Figure size in inches; single-param rows get extra height for readability."""
+    width = TILE_SIZE_INCHES * cols
+    if layout_mode == "single_param_row":
+        height = SINGLE_PARAM_ROW_HEIGHT_INCHES
+    else:
+        height = TILE_SIZE_INCHES * rows
+    return width, height
+
+
+def resolve_montage_layout(num_param1_values, has_param2):
+    """
+    Choose subplot grid shape.
+
+    Two parameters: rows = param1 values, cols = param2 values (heatmap style).
+    One parameter: a single horizontal row (1 x N) with full tile height.
+    """
+    if num_param1_values <= 0:
+        return 0, 0, "empty"
+    if has_param2:
+        return num_param1_values, None, "two_param"
+    return 1, num_param1_values, "single_param_row"
+
+
+def montage_cell_for_param1(param1_index, layout_mode):
+    """Map a param1 index to subplot (row, col)."""
+    if layout_mode == "single_param_row":
+        return 0, param1_index
+    return param1_index, None
+
+
 def get_display_name(param):
     """Get display name for parameter, default to param if not found."""
     return DISPLAY_NAMES.get(param, param)
@@ -105,6 +146,26 @@ def get_display_name(param):
 def get_metric_display_name(metric):
     """Get display name for metric, default to metric if not found."""
     return METRIC_DISPLAY_NAMES.get(metric, metric)
+
+
+def resolve_metric(row, metric_name):
+    """
+    Resolve a metric from a YAML row with backward-compatible fallbacks.
+
+    Lookup order:
+      1. exact key (e.g. mse_auto_ch3)
+      2. *_mean variant (e.g. mse_auto_mean for mse_auto)
+      3. legacy key without suffix (e.g. mse_auto)
+    """
+    if metric_name in row and row[metric_name] not in (None, ""):
+        return row[metric_name]
+
+    if not metric_name.endswith("_mean"):
+        mean_key = f"{metric_name}_mean"
+        if mean_key in row and row[mean_key] not in (None, ""):
+            return row[mean_key]
+
+    return None
 
 
 def find_yaml_files(experiment_dir):
@@ -185,7 +246,7 @@ def get_best_run(data, metric_name):
     best_value = None
 
     for row in data:
-        value = row.get(metric_name)
+        value = resolve_metric(row, metric_name)
         if value is None:
             continue
 
@@ -210,7 +271,7 @@ def get_combined_best_run(data, metric_names):
         row_values = {}
         valid = True
         for metric_name in metric_names:
-            value = row.get(metric_name)
+            value = resolve_metric(row, metric_name)
             if value is None:
                 valid = False
                 break
@@ -345,8 +406,9 @@ def aggregate_image_tiles(
     else:
         unique_param2 = ["-"]
 
-    rows = len(unique_param1)
-    cols = len(unique_param2)
+    rows, cols, layout_mode = resolve_montage_layout(len(unique_param1), param2 is not None)
+    if layout_mode == "two_param":
+        cols = len(unique_param2)
 
     if rows == 0 or cols == 0:
         print(f"Not enough varying data for {output_basename}. Skipping.")
@@ -354,7 +416,7 @@ def aggregate_image_tiles(
 
     get_plot_config(paper_ready=True)
 
-    fig, axs = plt.subplots(rows, cols, figsize=(3 * cols, 3 * rows))
+    fig, axs = plt.subplots(rows, cols, figsize=montage_figsize(rows, cols, layout_mode))
     axs = np.atleast_2d(axs).reshape(rows, cols)
 
     filled = {}
@@ -372,8 +434,12 @@ def aggregate_image_tiles(
             val2 = "-"
 
         try:
-            i = unique_param1.index(val1)
-            j = unique_param2.index(val2)
+            param1_index = unique_param1.index(val1)
+            if param2:
+                i = param1_index
+                j = unique_param2.index(val2)
+            else:
+                i, j = montage_cell_for_param1(param1_index, layout_mode)
         except ValueError:
             continue
 
@@ -437,22 +503,31 @@ def aggregate_image_tiles(
                 for spine in axs[i, j].spines.values():
                     spine.set_visible(False)
 
-            if i == 0:
+            if layout_mode == "two_param":
+                if i == 0:
+                    axs[i, j].set_title(
+                        str(get_value_display_name(unique_param2[j])),
+                        fontsize=45,
+                        pad=15,
+                    )
+                if j == 0:
+                    axs[i, j].set_ylabel(
+                        str(get_value_display_name(unique_param1[i])),
+                        fontsize=45,
+                        labelpad=15,
+                    )
+            elif layout_mode == "single_param_row":
                 axs[i, j].set_title(
-                    str(get_value_display_name(unique_param2[j])),
+                    str(get_value_display_name(unique_param1[j])),
                     fontsize=45,
                     pad=15,
                 )
-            if j == 0:
-                axs[i, j].set_ylabel(
-                    str(get_value_display_name(unique_param1[i])),
-                    fontsize=45,
-                    labelpad=15,
-                )
 
-    if param2:
+    if layout_mode == "two_param":
         fig.suptitle(get_display_name(param2), fontsize=55, y=1.02)
-    fig.supylabel(get_display_name(param1), fontsize=55)
+        fig.supylabel(get_display_name(param1), fontsize=55)
+    elif layout_mode == "single_param_row":
+        fig.suptitle(get_display_name(param1), fontsize=55, y=1.05)
 
     plt.tight_layout(pad=2.0)
     plt.subplots_adjust(wspace=0.0, hspace=0.0)
@@ -587,9 +662,10 @@ def plot_1d(data, param, metric, output_dir):
         if p_val is None:
             continue
         # Get metric value
-        if metric in d:
+        metric_value = resolve_metric(d, metric)
+        if metric_value is not None:
             param_values.append(p_val)
-            metric_values.append(d[metric])
+            metric_values.append(metric_value)
 
     if len(param_values) == 0:
         print(
@@ -651,7 +727,8 @@ def plot_2d(data, param1, metric, output_dir, param2=None):
     for d in data:
         # Get param values
         p1_val = get_param_value(d, param1)
-        if p1_val is None or metric not in d:
+        metric_value = resolve_metric(d, metric)
+        if p1_val is None or metric_value is None:
             continue
 
         if param2:
@@ -664,7 +741,7 @@ def plot_2d(data, param1, metric, output_dir, param2=None):
 
         i = param1_values.index(p1_val) if p1_val in param1_values else None
         if i is not None and j is not None:
-            grid[i, j] = d[metric]
+            grid[i, j] = metric_value
 
     if np.all(np.isnan(grid)):
         print(f"No valid data points for 2D plot of {metric}. Skipping.")
@@ -752,17 +829,20 @@ def aggregate_delay_embeddings(data, args, output_dir):
     else:
         unique_param2 = ["-"]
 
-    rows = len(unique_param1)
-    cols = len(unique_param2)
+    rows, cols, layout_mode = resolve_montage_layout(len(unique_param1), param2 is not None)
+    if layout_mode == "two_param":
+        cols = len(unique_param2)
 
     if rows == 0 or cols == 0:
         print("Not enough varying data for delay embeddings. Skipping.")
         return
 
-    config = get_plot_config(paper_ready=True)
+    get_plot_config(paper_ready=True)
 
     for mode in ["tf", "autonomous"]:
-        fig, axs = plt.subplots(rows, cols, figsize=(3 * cols, 3 * rows))
+        fig, axs = plt.subplots(
+            rows, cols, figsize=montage_figsize(rows, cols, layout_mode)
+        )
         axs = np.atleast_2d(axs).reshape(rows, cols)
 
         # Dictionary to store which cells have been filled
@@ -781,8 +861,12 @@ def aggregate_delay_embeddings(data, args, output_dir):
                 val2 = "-"
 
             try:
-                i = unique_param1.index(val1)
-                j = unique_param2.index(val2)
+                param1_index = unique_param1.index(val1)
+                if param2:
+                    i = param1_index
+                    j = unique_param2.index(val2)
+                else:
+                    i, j = montage_cell_for_param1(param1_index, layout_mode)
             except ValueError:
                 continue
 
@@ -849,27 +933,34 @@ def aggregate_delay_embeddings(data, args, output_dir):
                     for spine in axs[i, j].spines.values():
                         spine.set_visible(False)
 
-                # Top row prints param2, left column prints param1
-                if i == 0:
+                if layout_mode == "two_param":
+                    if i == 0:
+                        axs[i, j].set_title(
+                            str(get_value_display_name(unique_param2[j])),
+                            fontsize=45,
+                            pad=15,
+                        )
+                    if j == 0:
+                        axs[i, j].set_ylabel(
+                            str(get_value_display_name(unique_param1[i])),
+                            fontsize=45,
+                            labelpad=15,
+                        )
+                elif layout_mode == "single_param_row":
                     axs[i, j].set_title(
-                        str(get_value_display_name(unique_param2[j])),
+                        str(get_value_display_name(unique_param1[j])),
                         fontsize=45,
                         pad=15,
                     )
-                if j == 0:
-                    axs[i, j].set_ylabel(
-                        str(get_value_display_name(unique_param1[i])),
-                        fontsize=45,
-                        labelpad=15,
-                    )
 
-        # Global axis labels
-        if param2:
+        if layout_mode == "two_param":
             fig.suptitle(get_display_name(param2), fontsize=55, y=1.02)
-        fig.supylabel(get_display_name(param1), fontsize=55)
+            fig.supylabel(get_display_name(param1), fontsize=55)
+        elif layout_mode == "single_param_row":
+            fig.suptitle(get_display_name(param1), fontsize=55, y=1.05)
 
         plt.tight_layout(pad=2.0)
-        plt.subplots_adjust(wspace=0.0, hspace=0.0)
+        plt.subplots_adjust(wspace=0.05, hspace=0.0)
         plt.savefig(
             os.path.join(output_dir, f"aggregated_delay_embeddings_{mode}.png"),
             bbox_inches="tight",

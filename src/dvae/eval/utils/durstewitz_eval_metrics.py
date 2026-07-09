@@ -5,10 +5,7 @@ from scipy.stats import entropy
 import torch
 from torch.nn.functional import mse_loss
 
-from dvae.eval.utils import (
-    run_spectrum_analysis,
-    compute_delay_embedding,
-)
+from dvae.eval.utils.delay_embedding import compute_delay_embedding
 
 
 def power_spectrum_error(PS_hat, PS, filter_std=3, return_unreduced=False):

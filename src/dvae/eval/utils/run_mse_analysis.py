@@ -1,12 +1,94 @@
 import numpy as np
-from dvae.eval.utils.benchmark_signals import get_benchmark_signals
 from dvae.visualizers.visualizers import visualize_errors_from_lst
 
 
-def calc_mse(signal1, signal2):
-    # Ensure they have the same shape up to the length of the shorter one
-    min_len = min(signal1.shape[0], signal2.shape[0])
-    return np.nanmean((signal1[:min_len] - signal2[:min_len]) ** 2)
+def calc_masked_mse(gt, pred, mask=None):
+    """MSE ignoring NaNs and optional boolean missing mask (True = missing)."""
+    gt = np.asarray(gt, dtype=np.float64)
+    pred = np.asarray(pred, dtype=np.float64)
+    min_len = min(gt.shape[0], pred.shape[0])
+    gt = gt[:min_len]
+    pred = pred[:min_len]
+
+    valid = np.isfinite(gt) & np.isfinite(pred)
+    if mask is not None:
+        mask = np.asarray(mask, dtype=bool)[:min_len]
+        valid &= ~mask
+
+    if not np.any(valid):
+        return float("nan")
+
+    return float(np.mean((gt[valid] - pred[valid]) ** 2))
+
+
+def run_mse_analysis_from_benchmarks(
+    channel_benchmarks, save_fig_dir, batch_idx=0, save_figures=True
+):
+    channels = channel_benchmarks["channels"]
+
+    per_channel = {}
+    tf_errors = []
+    auto_errors = []
+    tf_keys = []
+    auto_keys = []
+    tf_names = []
+    auto_names = []
+    tf_colors = []
+    auto_colors = []
+
+    print("[Eval] Mean Squared Error vs GT (per channel):")
+    for ch in channels:
+        key = ch["key"]
+        mse_tf = calc_masked_mse(ch["gt_full"], ch["tf_full"], ch.get("mask_full"))
+        mse_auto = calc_masked_mse(ch["gt_auto"], ch["auto_seg"], ch.get("mask_auto"))
+        per_channel[key] = {"mse_tf": mse_tf, "mse_auto": mse_auto}
+        print(f"  {key} TF: {mse_tf:.6f}  Auto: {mse_auto:.6f}")
+
+        tf_errors.append(mse_tf)
+        auto_errors.append(mse_auto)
+        tf_keys.append(f"{key}_tf")
+        auto_keys.append(f"{key}_auto")
+        tf_names.append(f"{key}\nTF")
+        auto_names.append(f"{key}\nAuto")
+        tf_colors.append("green")
+        auto_colors.append("red")
+
+    tf_values = [v["mse_tf"] for v in per_channel.values() if np.isfinite(v["mse_tf"])]
+    auto_values = [
+        v["mse_auto"] for v in per_channel.values() if np.isfinite(v["mse_auto"])
+    ]
+    mse_tf_mean = float(np.mean(tf_values)) if tf_values else float("nan")
+    mse_auto_mean = float(np.mean(auto_values)) if auto_values else float("nan")
+
+    if save_figures:
+        visualize_errors_from_lst(
+            tf_errors,
+            name_lst=tf_names,
+            save_dir=save_fig_dir,
+            explain=f"mse_tf_per_channel_batch{batch_idx}",
+            error_unit="MSE",
+            colors=tf_colors,
+        )
+        visualize_errors_from_lst(
+            auto_errors,
+            name_lst=auto_names,
+            save_dir=save_fig_dir,
+            explain=f"mse_auto_per_channel_batch{batch_idx}",
+            error_unit="MSE",
+            colors=auto_colors,
+        )
+
+    return {
+        "per_channel": per_channel,
+        "mse_tf_mean": mse_tf_mean,
+        "mse_auto_mean": mse_auto_mean,
+        "mse_tf": mse_tf_mean,
+        "mse_auto": mse_auto_mean,
+        "mse_errors": tf_errors + auto_errors,
+        "signal_keys": tf_keys + auto_keys,
+        "tf_keys": tf_keys,
+        "auto_keys": auto_keys,
+    }
 
 
 def run_mse_analysis(
@@ -17,7 +99,16 @@ def run_mse_analysis(
     autonomous_mode_selector_long,
     dataset_name,
     batch_data_long=None,
+    channel_benchmarks=None,
+    save_figures=True,
 ):
+    if channel_benchmarks is not None:
+        return run_mse_analysis_from_benchmarks(
+            channel_benchmarks, save_fig_dir, i, save_figures=save_figures
+        )
+
+    from dvae.eval.utils.benchmark_signals import get_benchmark_signals
+
     sig_info = get_benchmark_signals(
         dataset_name,
         test_dataloader,
@@ -26,37 +117,6 @@ def run_mse_analysis(
         autonomous_mode_selector_long,
         batch_data_long,
     )
-    long_data_lst = sig_info["long_data_lst"]
-    name_lst = sig_info["name_lst"]
-    key_lst = sig_info["key_lst"]
-    true_signal_index = sig_info["true_signal_index"]
-    colors_lst = sig_info["colors_lst"]
-
-    print("[Eval] Mean Squared Error vs GT:")
-    mse_errors = []
-
-    gt_signal = long_data_lst[true_signal_index]
-
-    for j, (name, sig) in enumerate(zip(name_lst, long_data_lst)):
-        if j == true_signal_index:
-            mse_errors.append(0.0)
-            continue
-
-        err = calc_mse(gt_signal, sig)
-        mse_errors.append(float(err))
-        print(f"  MSE {name.replace(chr(10), ' ')}: {err:.4f}")
-
-    # Visualize MSE error bars
-    visualize_errors_from_lst(
-        mse_errors,
-        name_lst=name_lst,
-        save_dir=save_fig_dir,
-        explain="mse_error_per_signal",
-        error_unit="MSE",
-        colors=colors_lst,
+    return run_mse_analysis_from_benchmarks(
+        sig_info["channel_benchmarks"], save_fig_dir, i, save_figures=save_figures
     )
-
-    return {
-        "mse_errors": mse_errors,
-        "signal_keys": key_lst,
-    }
