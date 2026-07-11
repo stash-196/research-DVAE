@@ -175,6 +175,12 @@ experiments=(
     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-06-17/deigo_cluster/20260611-XHRO_ep20000_ptf0,0.4-7_LSTM_clip10_Subj70_ch1-4_hdim100_eStop500 --parameters sampling_ratio observation_process"
     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-06-17/deigo_cluster/20260617-XHRO_ep20000_ptf0,0.4-7_LSTM_clip10_Subj70_ch1-4_hdim100_eStop500_indicate --parameters sampling_ratio observation_process"
     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-06-17/deigo_cluster/20260617-XHRO_ep20000_ptf0,0.4-7_LSTM_clip10_Subj70_ch1-4_hdim100_eStop500_interpolate --parameters sampling_ratio observation_process"
+
+# 2026-06-22/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-06-22/deigo_cluster/20260622-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_ch2_hdim200_eStop500 --parameters sampling_ratio"
+
+# 2026-07-01/
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-07-01/deigo_cluster/20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500 --parameters sampling_ratio"
 )
 
 # Get the current date in YYYY-MM-DD format

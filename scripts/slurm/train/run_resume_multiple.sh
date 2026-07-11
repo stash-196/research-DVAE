@@ -35,9 +35,11 @@ declare -a experiments=(
 
 # 2026-05-28/
     # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-28/deigo_cluster/20260528-Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LossNone_LSTM_hdim40_obsIndicateMiss"
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-28/deigo_cluster/20260528-Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LossNone_LSTM_hdim40_obsIndicateMiss"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-28/deigo_cluster/20260528-Lorenz_auto0-0.8_miss0-0.7_clip1_ep20000_LossNone_MTRNN3-9d_hdim80"
 
 # 2026-06-04/
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-06-04/deigo_cluster/20260604-Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LSTM_hdim40_obsIndicate"
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-06-04/deigo_cluster/20260604-Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LSTM_hdim40_obsIndicate"
 
 
 # 2026-06-11/
