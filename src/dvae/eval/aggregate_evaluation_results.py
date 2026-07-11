@@ -30,6 +30,14 @@ from matplotlib.ticker import (
 
 SYMLOG_LINTHRESH = 0.01
 
+# Fixed heatmap color limits so colorbars are comparable across images.
+# Spectrum: Hellinger distance is in [0, 1]. KLD: shared symlog scale for tf + auto.
+HEATMAP_COLOR_LIMITS = {
+    "spectrum": {"vmin": 0.0, "vmax": 1.0, "scale": "linear"},
+    "kld": {"vmin": -10.0, "vmax": 1e3, "scale": "symlog"},
+}
+SPECTRUM_HEATMAP_TICKS = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+
 # Dictionary for display names
 DISPLAY_NAMES = {
     "mask_label": "Missing Ratio",
@@ -110,6 +118,17 @@ def sort_key(x):
         return float(x)
     except (ValueError, TypeError):
         return str(x)
+
+
+def resolve_heatmap_limits(metric):
+    """Return fixed (vmin, vmax, scale) for known metrics, else None."""
+    if metric.startswith("spectrum_error_"):
+        cfg = HEATMAP_COLOR_LIMITS["spectrum"]
+        return cfg["vmin"], cfg["vmax"], cfg["scale"]
+    if metric.startswith("kld_"):
+        cfg = HEATMAP_COLOR_LIMITS["kld"]
+        return cfg["vmin"], cfg["vmax"], cfg["scale"]
+    return None
 
 
 def _symlog_vmin_vmax(values, linthresh=SYMLOG_LINTHRESH):
@@ -243,19 +262,21 @@ def _add_symlog_colorbar(mappable, label, vmin, vmax, linthresh=SYMLOG_LINTHRESH
     return cbar
 
 
-def _add_colorbar(mappable, label, vmin, vmax, data_vmin, data_vmax):
-    """Linear colorbar for narrow ranges; symlog when values span decades."""
-    if _needs_symlog_scale(data_vmin, data_vmax):
-        return _add_symlog_colorbar(mappable, label, vmin, vmax)
-
-    cbar = plt.colorbar(mappable)
-    if data_vmin >= 0 and data_vmax > 0:
-        ticks = _nice_positive_ticks(vmin, vmax)
+def _add_colorbar(mappable, label, vmin, vmax, scale):
+    """Attach a colorbar with ticks appropriate for the resolved scale."""
+    if scale == "symlog":
+        cbar = plt.colorbar(mappable, format=LogFormatterSciNotation())
+        cbar.locator = SymmetricalLogLocator(base=10, linthresh=SYMLOG_LINTHRESH)
+        cbar.update_ticks()
     else:
-        ticks = _linear_ticks_in_range(vmin, vmax)
-    if ticks:
-        cbar.set_ticks(ticks)
-    cbar.ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
+        cbar = plt.colorbar(mappable)
+        if vmin == 0.0 and vmax == 1.0:
+            ticks = SPECTRUM_HEATMAP_TICKS
+        else:
+            ticks = _linear_ticks_in_range(vmin, vmax)
+        if ticks:
+            cbar.set_ticks(ticks)
+        cbar.ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
     cbar.set_label(label)
     return cbar
 
@@ -933,8 +954,22 @@ def plot_2d(data, param1, metric, output_dir, param2=None):
     fig, ax = plt.subplots(figsize=(8, 6))
     finite = grid.ravel()[np.isfinite(grid.ravel())]
     data_vmin, data_vmax = float(np.min(finite)), float(np.max(finite))
-    vmin, vmax = _symlog_vmin_vmax(finite)
-    if _needs_symlog_scale(data_vmin, data_vmax):
+    fixed_limits = resolve_heatmap_limits(metric)
+    if fixed_limits is not None:
+        vmin, vmax, scale = fixed_limits
+        if data_vmin < vmin - 1e-9 or data_vmax > vmax + 1e-9:
+            print(
+                f"Warning: {metric} heatmap values [{data_vmin:.4g}, {data_vmax:.4g}] "
+                f"clip outside fixed range [{vmin:g}, {vmax:g}]"
+            )
+    else:
+        vmin, vmax = _symlog_vmin_vmax(finite)
+        scale = (
+            "symlog"
+            if _needs_symlog_scale(data_vmin, data_vmax)
+            else "linear"
+        )
+    if scale == "symlog":
         norm = SymLogNorm(linthresh=SYMLOG_LINTHRESH, vmin=vmin, vmax=vmax)
     else:
         norm = Normalize(vmin=vmin, vmax=vmax)
@@ -944,8 +979,7 @@ def plot_2d(data, param1, metric, output_dir, param2=None):
         get_metric_display_name(metric),
         vmin,
         vmax,
-        data_vmin,
-        data_vmax,
+        scale,
     )
     ax.invert_yaxis()
     ax.xaxis.tick_top()
