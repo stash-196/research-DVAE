@@ -132,20 +132,6 @@
             ]
         },
         {
-            "name": "Python: aggregate_and_visualize.py (Local)",
-            "type": "python",
-            "request": "launch",
-            "program": "${file}",
-            "console": "integratedTerminal",
-            "justMyCode": true,
-            "pythonArgs": [
-                "-Xfrozen_modules=off"
-            ],
-            "args": [
-                // "--exp_dir", "/Users/stashtomonaga/workspace/research-DVAE/saved_model/2024-05-15/h180_ep500_SampMeths_αs_0",
-                "--exp_dir", "/Users/stashtomonaga/workspace/research-DVAE/saved_model/2024-06-27/h27_ep500_SampMeths_RNNs_0"
-            ]        },
-        {
             "name": "Aggregate Evaluation Results",
             "type": "python",
             "request": "launch",
@@ -156,11 +142,14 @@
                 // "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_epoch10000_len1000_ptfAll_MissAll_clip1_LossNone_LSTM_hdi20_ptientHigh",
                 // "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MTRNN_hdi20-40_ptientHigh",
                 // "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-01-28/deigo_cluster/20260128_XHRO_len1000_drop0_ptf0.6-7-_clip1_AllLoss_LSTM_Subj70_ch3-4_hdims_ptientHigh/",
-                "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-28/deigo_cluster/20260528-Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LossNone_LSTM_hdim40",
+
+                // "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-05-28/deigo_cluster/20260528-Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LossNone_LSTM_hdim40",
+                "/Users/stashtomonaga/mounts/bucket/DoyaU/stash/research-DVAE/saved_model/2026-07-01/deigo_cluster/20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500",
+
                 "--parameters",
                 // "dim_rnn", 
                 "sampling_ratio",
-                "mask_label",
+                // "mask_label",
                 // "--filter",
                 // "alphas='0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1'",
                 // "type_rnn=RNN", 

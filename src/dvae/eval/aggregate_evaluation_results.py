@@ -19,7 +19,16 @@ import csv
 import shutil
 from PIL import Image
 from dvae.visualizers.visualizers import get_plot_config
-from matplotlib.colors import SymLogNorm
+from matplotlib.colors import Normalize, SymLogNorm
+from matplotlib.ticker import (
+    LogFormatterSciNotation,
+    MaxNLocator,
+    NullFormatter,
+    ScalarFormatter,
+    SymmetricalLogLocator,
+)
+
+SYMLOG_LINTHRESH = 0.01
 
 # Dictionary for display names
 DISPLAY_NAMES = {
@@ -101,6 +110,171 @@ def sort_key(x):
         return float(x)
     except (ValueError, TypeError):
         return str(x)
+
+
+def _symlog_vmin_vmax(values, linthresh=SYMLOG_LINTHRESH):
+    """Pad finite values so symlog axes/colorbars always have a usable range."""
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return -linthresh, linthresh
+    vmin, vmax = float(np.min(arr)), float(np.max(arr))
+    if vmin == vmax:
+        magnitude = max(abs(vmin), linthresh, 1e-6)
+        return -magnitude, magnitude
+    span = vmax - vmin
+    pad = max(span * 0.15, linthresh)
+    return vmin - pad, vmax + pad
+
+
+def _configure_symlog_axis(axis, linthresh=SYMLOG_LINTHRESH):
+    """Apply consistent power-of-ten tick labels to a symlog axis."""
+    axis.set_major_locator(SymmetricalLogLocator(base=10, linthresh=linthresh))
+    axis.set_major_formatter(LogFormatterSciNotation())
+    axis.set_minor_formatter(NullFormatter())
+
+
+def _needs_symlog_scale(vmin, vmax):
+    """Use symlog only when values span large or multi-decade ranges."""
+    span = vmax - vmin
+    peak = max(abs(vmin), abs(vmax))
+    if peak > 50 or span > 50:
+        return True
+    if vmin > 0 and vmax > 0:
+        return vmax / max(vmin, 1e-12) > 100
+    if vmax <= 0 and vmin < 0:
+        return False
+    if vmin < 0 < vmax:
+        return peak > 20 and span > 10
+    return False
+
+
+def _round_tick(value, decimals=4):
+    """Round tick positions so labels stay readable."""
+    return float(np.round(value, decimals))
+
+
+def _nice_linear_ticks(vmin, vmax, n=6):
+    """Evenly spaced ticks for narrow linear axes (positive or negative)."""
+    span = max(vmax - vmin, 1e-12)
+    raw_step = span / max(n - 1, 1)
+    magnitude = 10 ** np.floor(np.log10(raw_step))
+    step = magnitude
+    for mult in (1, 2, 5, 10):
+        candidate = mult * magnitude
+        if candidate >= raw_step:
+            step = candidate
+            break
+    tick = np.floor(vmin / step) * step
+    ticks = []
+    while tick <= vmax + step * 0.51:
+        ticks.append(_round_tick(tick))
+        tick += step
+    return ticks
+
+
+def _linear_ticks_in_range(vmin, vmax):
+    """Pick linear ticks that stay inside padded axis limits."""
+    ticks = _nice_linear_ticks(vmin, vmax)
+    ticks = [t for t in ticks if vmin - 1e-9 <= t <= vmax + 1e-9]
+    if len(ticks) >= 2:
+        return ticks
+    locator = MaxNLocator(nbins=6, min_n_ticks=4)
+    return [float(t) for t in locator.tick_values(vmin, vmax) if vmin <= t <= vmax]
+
+
+def _setup_plot_y_axis(ax, values):
+    """Pick linear vs symlog y-scale so tick labels always render."""
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return
+    vmin, vmax = float(np.min(arr)), float(np.max(arr))
+    y_min, y_max = _symlog_vmin_vmax(values)
+
+    if _needs_symlog_scale(vmin, vmax):
+        ax.set_yscale("symlog", linthresh=SYMLOG_LINTHRESH)
+        ax.set_ylim(y_min, y_max)
+        _configure_symlog_axis(ax.yaxis)
+        ax.set_autoscaley_on(False)
+        return
+
+    ax.set_yscale("linear")
+    ticks = _linear_ticks_in_range(y_min, y_max)
+    if ticks:
+        ax.set_yticks(ticks)
+    ax.set_ylim(y_min, y_max)
+    ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
+    ax.set_autoscaley_on(False)
+
+
+def _nice_positive_ticks(vmin, vmax, n=6):
+    """Linear tick spacing for narrow all-positive ranges."""
+    span = max(vmax - vmin, 1e-12)
+    raw_step = span / max(n - 1, 1)
+    magnitude = 10 ** np.floor(np.log10(raw_step))
+    step = magnitude
+    for mult in (1, 2, 5, 10):
+        candidate = mult * magnitude
+        if candidate >= raw_step:
+            step = candidate
+            break
+    start = np.floor(vmin / step) * step
+    ticks = []
+    tick = start
+    while tick <= vmax + step * 0.51:
+        if tick > 0:
+            ticks.append(float(tick))
+        tick += step
+    return ticks
+
+
+def _add_symlog_colorbar(mappable, label, vmin, vmax, linthresh=SYMLOG_LINTHRESH):
+    """Colorbar with explicit ticks; decade labels when span is wide."""
+    cbar = plt.colorbar(mappable, format=LogFormatterSciNotation())
+    if vmin > 0 and vmax > 0 and vmax / vmin < 100:
+        ticks = _nice_positive_ticks(vmin, vmax)
+        if ticks:
+            cbar.set_ticks(ticks)
+    else:
+        cbar.locator = SymmetricalLogLocator(base=10, linthresh=linthresh)
+        cbar.update_ticks()
+    cbar.set_label(label)
+    return cbar
+
+
+def _add_colorbar(mappable, label, vmin, vmax, data_vmin, data_vmax):
+    """Linear colorbar for narrow ranges; symlog when values span decades."""
+    if _needs_symlog_scale(data_vmin, data_vmax):
+        return _add_symlog_colorbar(mappable, label, vmin, vmax)
+
+    cbar = plt.colorbar(mappable)
+    if data_vmin >= 0 and data_vmax > 0:
+        ticks = _nice_positive_ticks(vmin, vmax)
+    else:
+        ticks = _linear_ticks_in_range(vmin, vmax)
+    if ticks:
+        cbar.set_ticks(ticks)
+    cbar.ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
+    cbar.set_label(label)
+    return cbar
+
+
+def _should_annotate_heatmap(n_rows, n_cols):
+    """Annotate cell values when the grid is large enough to read."""
+    return n_rows * n_cols <= 35 and max(n_rows, n_cols) <= 12
+
+
+def _save_figure(fig, path, left_margin=None):
+    """Save with enough padding that axis labels are not clipped."""
+    if left_margin is not None:
+        fig.subplots_adjust(left=left_margin)
+    else:
+        try:
+            fig.tight_layout()
+        except Exception:
+            pass
+    fig.savefig(path, bbox_inches="tight", pad_inches=0.3)
 
 
 TILE_SIZE_INCHES = 3.5
@@ -681,31 +855,39 @@ def plot_1d(data, param, metric, output_dir):
     has_dups = len(set(sorted_p)) < len(sorted_p)
 
     config = get_plot_config(paper_ready=True)
-    plt.figure(figsize=(8, 6))
-    plt.yscale("symlog")
+    fig, ax = plt.subplots(figsize=(8.5, 6))
 
     # If x-values are categorical (non-numeric), plot against indices and set tick labels
     if not all(is_numeric(v) for v in sorted_p):
         x_vals = list(range(len(sorted_p)))
         if has_dups:
-            plt.plot(x_vals, list(sorted_m), "o", alpha=0.7, markersize=8)
+            ax.plot(x_vals, list(sorted_m), "o", alpha=0.7, markersize=8)
         else:
-            plt.plot(x_vals, list(sorted_m), "o-")
-        plt.xticks(x_vals, [get_value_display_name(p) for p in sorted_p], rotation=45)
+            ax.plot(x_vals, list(sorted_m), "o-")
+        ax.set_xticks(x_vals)
+        ax.set_xticklabels(
+            [get_value_display_name(p) for p in sorted_p], rotation=45
+        )
     else:
         # numeric x-axis
         num_x = [float(v) for v in sorted_p]
         if has_dups:
-            plt.plot(num_x, sorted_m, "o", alpha=0.7, markersize=8)
+            ax.plot(num_x, sorted_m, "o", alpha=0.7, markersize=8)
         else:
-            plt.plot(num_x, sorted_m, "o-")
+            ax.plot(num_x, sorted_m, "o-")
 
-    plt.xlabel(get_display_name(param))
-    plt.ylabel(get_metric_display_name(metric))
+    _setup_plot_y_axis(ax, metric_values)
+
+    ax.set_xlabel(get_display_name(param))
+    ax.set_ylabel(get_metric_display_name(metric))
     if config["show_title"]:
-        plt.title(f"{get_metric_display_name(metric)} vs {get_display_name(param)}")
-    plt.savefig(os.path.join(output_dir, f"{metric}_vs_{param}.png"))
-    plt.close()
+        ax.set_title(f"{get_metric_display_name(metric)} vs {get_display_name(param)}")
+    _save_figure(
+        fig,
+        os.path.join(output_dir, f"{metric}_vs_{param}.png"),
+        left_margin=0.20,
+    )
+    plt.close(fig)
 
 
 def plot_2d(data, param1, metric, output_dir, param2=None):
@@ -748,16 +930,23 @@ def plot_2d(data, param1, metric, output_dir, param2=None):
         return
 
     config = get_plot_config(paper_ready=True)
-    plt.figure(figsize=(8, 6))
-    plt.imshow(
-        grid,
-        origin="lower",
-        aspect="auto",
-        norm=SymLogNorm(linthresh=0.01),
+    fig, ax = plt.subplots(figsize=(8, 6))
+    finite = grid.ravel()[np.isfinite(grid.ravel())]
+    data_vmin, data_vmax = float(np.min(finite)), float(np.max(finite))
+    vmin, vmax = _symlog_vmin_vmax(finite)
+    if _needs_symlog_scale(data_vmin, data_vmax):
+        norm = SymLogNorm(linthresh=SYMLOG_LINTHRESH, vmin=vmin, vmax=vmax)
+    else:
+        norm = Normalize(vmin=vmin, vmax=vmax)
+    im = ax.imshow(grid, origin="lower", aspect="auto", norm=norm)
+    _add_colorbar(
+        im,
+        get_metric_display_name(metric),
+        vmin,
+        vmax,
+        data_vmin,
+        data_vmax,
     )
-    plt.colorbar(label=get_metric_display_name(metric))
-
-    ax = plt.gca()
     ax.invert_yaxis()
     ax.xaxis.tick_top()
     ax.xaxis.set_label_position("top")
@@ -768,11 +957,11 @@ def plot_2d(data, param1, metric, output_dir, param2=None):
     ax.set_yticklabels([get_value_display_name(v) for v in param1_values])
 
     if param2:
-        plt.xlabel(get_display_name(param2))
+        ax.set_xlabel(get_display_name(param2))
     else:
-        plt.xlabel("")
+        ax.set_xlabel("")
 
-    plt.ylabel(get_display_name(param1))
+    ax.set_ylabel(get_display_name(param1))
 
     if config["show_title"]:
         title_str = (
@@ -780,14 +969,13 @@ def plot_2d(data, param1, metric, output_dir, param2=None):
         )
         if param2:
             title_str += f" vs {get_display_name(param2)}"
-        plt.title(title_str, pad=20)
+        ax.set_title(title_str, pad=20)
 
-    # Add annotations if grid is small enough
-    if len(param1_values) <= 5 and len(param2_values) <= 5:
+    if _should_annotate_heatmap(len(param1_values), len(param2_values)):
         for i in range(len(param1_values)):
             for j in range(len(param2_values)):
                 if not np.isnan(grid[i, j]):
-                    plt.text(
+                    ax.text(
                         j,
                         i,
                         f"{grid[i, j]:.2f}",
@@ -800,8 +988,8 @@ def plot_2d(data, param1, metric, output_dir, param2=None):
     out_name = f"{metric}_heatmap_{param1}"
     if param2:
         out_name += f"_vs_{param2}"
-    plt.savefig(os.path.join(output_dir, f"{out_name}.png"))
-    plt.close()
+    _save_figure(fig, os.path.join(output_dir, f"{out_name}.png"))
+    plt.close(fig)
 
 
 def aggregate_delay_embeddings(data, args, output_dir):
