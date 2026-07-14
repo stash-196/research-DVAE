@@ -107,21 +107,22 @@ def run_spectrum_analysis_from_benchmarks(
             except Exception as exc:
                 print(f"[Eval] Warning: spectral visualization skipped: {exc}")
 
+        comb_errs, comb_names, comb_colors = [0.0], ["Ground\nTruth"], ["blue"]
+        for ch_key, vals in per_channel.items():
+            comb_names.append(f"{ch_key}\nTF")
+            comb_errs.append(vals["spectrum_error_tf"])
+            comb_colors.append("green")
+            comb_names.append(f"{ch_key}\nAuto")
+            comb_errs.append(vals["spectrum_error_auto"])
+            comb_colors.append("red")
+        comb_errs = [0.0 if not np.isfinite(e) else float(e) for e in comb_errs]
         visualize_errors_from_lst(
-            tf_errors,
-            name_lst=tf_names,
+            comb_errs,
+            name_lst=comb_names,
             save_dir=save_fig_dir,
-            explain=f"spectrum_tf_per_channel_batch{batch_idx}",
+            explain=f"power_spectrum_error_batch{batch_idx}",
             error_unit="dB",
-            colors=["green"] * len(tf_errors),
-        )
-        visualize_errors_from_lst(
-            auto_errors,
-            name_lst=auto_names,
-            save_dir=save_fig_dir,
-            explain=f"spectrum_auto_per_channel_batch{batch_idx}",
-            error_unit="dB",
-            colors=["red"] * len(auto_errors),
+            colors=comb_colors,
         )
 
     tf_values = [

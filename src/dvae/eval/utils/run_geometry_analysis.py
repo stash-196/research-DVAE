@@ -103,21 +103,22 @@ def run_geometry_analysis_from_benchmarks(
     kld_auto_mean = float(np.mean(auto_values)) if auto_values else float("nan")
 
     if save_figures:
+        comb_errs, comb_names, comb_colors = [0.0], ["Ground\nTruth"], ["blue"]
+        for ch_key, vals in per_channel.items():
+            comb_names.append(f"{ch_key}\nTF")
+            comb_errs.append(vals["kld_tf"])
+            comb_colors.append("green")
+            comb_names.append(f"{ch_key}\nAuto")
+            comb_errs.append(vals["kld_auto"])
+            comb_colors.append("red")
+        comb_errs = [0.0 if not np.isfinite(e) else e for e in comb_errs]
         visualize_errors_from_lst(
-            tf_scores,
-            name_lst=tf_names,
+            comb_errs,
+            name_lst=comb_names,
             save_dir=save_fig_dir,
-            explain=f"kld_tf_per_channel_batch{batch_idx}",
+            explain=f"kld_error_per_signal_batch{batch_idx}",
             error_unit="KLD",
-            colors=tf_colors,
-        )
-        visualize_errors_from_lst(
-            auto_scores,
-            name_lst=auto_names,
-            save_dir=save_fig_dir,
-            explain=f"kld_auto_per_channel_batch{batch_idx}",
-            error_unit="KLD",
-            colors=auto_colors,
+            colors=comb_colors,
         )
 
     return {

@@ -54,6 +54,14 @@ from dvae.eval.utils import (
     merge_batch_metric_dicts,
     flatten_analysis_to_batch_metrics,
 )
+from dvae.eval.utils.batch_all_visuals import (
+    collect_batch_visual_record,
+    compute_reference_channel_errors,
+    compute_stitched_kld_metrics,
+    render_batch_all_visuals,
+    render_summary_error_bars,
+)
+from dvae.eval.utils.forward_modes import mode_selector_to_1d
 
 from torch.nn.functional import mse_loss
 import plotly.graph_objects as go
@@ -61,6 +69,7 @@ import plotly.express as px
 import pickle
 import configparser
 from typing import Any, Optional
+from dataclasses import replace
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
 
 
@@ -91,13 +100,45 @@ class Options:
             "--auto-eval-mode",
             type=str,
             default="half_half",
-            help="Mode selector schedule for warmed autonomous metrics (default: half_half).",
+            help=(
+                "Mode selector for autonomous metrics: half_half (default; TF then Auto, "
+                "window length 2*block_len), alternating_blocks, even_bursts, "
+                "flip_at_index, all_1."
+            ),
         )
         self.parser.add_argument(
             "--auto-eval-flip-point",
             type=int,
             default=None,
             help="Flip point for flip_at_index auto eval mode (optional).",
+        )
+        self.parser.add_argument(
+            "--auto-eval-block-len",
+            type=int,
+            default=1000,
+            help=(
+                "Block length for alternating_blocks (default: 1000, paper protocol). "
+                "Also used as even_bursts flip interval when --auto-eval-mode even_bursts "
+                "and ratio is not set via legacy path."
+            ),
+        )
+        self.parser.add_argument(
+            "--auto-eval-ratio",
+            type=float,
+            default=0.1,
+            help="Autonomous ratio for even_bursts / flip_at_middle metrics (default: 0.1).",
+        )
+        self.parser.add_argument(
+            "--metrics-seq-len",
+            type=int,
+            default=None,
+            help=(
+                "Override sequence length for quantitative metrics windows. "
+                "If omitted, length is chosen from --auto-eval-mode: "
+                "half_half/flip_at_index -> 2*block_len; "
+                "alternating_blocks -> min(10*block_len, data); "
+                "else min(20000, data)."
+            ),
         )
         self.parser.add_argument(
             "--skip-metrics-viz-after-batch-0",
@@ -845,15 +886,63 @@ if __name__ == "__main__":
         ############################################################################
         auto_eval_mode = params.get("auto_eval_mode", "half_half")
         auto_eval_flip_point = params.get("auto_eval_flip_point")
+        auto_eval_block_len = int(params.get("auto_eval_block_len", 1000) or 1000)
+        auto_eval_ratio = params.get("auto_eval_ratio", 0.1)
         max_eval_batches = params.get("max_eval_batches", 20)
         skip_metrics_viz_after_batch_0 = params.get(
             "skip_metrics_viz_after_batch_0", True
         )
         observation_process = getattr(dataset_config, "observation_process", None)
 
-        n_test_windows = len(test_dataloader.dataset.data_idx)
+        # Metrics window length depends on how free-run is driven (not the
+        # qualitative long-seq length above). half_half: one TF block + one Auto
+        # block of length block_len each -> T=2*block_len, many batches.
+        data_len = len(test_dataloader.dataset.seq)
+        metrics_seq_len_override = params.get("metrics_seq_len")
+        if metrics_seq_len_override is not None:
+            metrics_seq_len = int(metrics_seq_len_override)
+        elif auto_eval_mode in ("half_half", "flip_at_index"):
+            # TF warm-up of block_len, then free-run of block_len (Composer path).
+            metrics_seq_len = 2 * auto_eval_block_len
+            if auto_eval_mode == "flip_at_index" and auto_eval_flip_point is not None:
+                # Keep enough room for flip + at least one block of free-run.
+                metrics_seq_len = max(
+                    metrics_seq_len, int(auto_eval_flip_point) + auto_eval_block_len
+                )
+        elif auto_eval_mode == "alternating_blocks":
+            # Several fixed TF/Auto cycles on one stream (paper-style multi-block).
+            metrics_seq_len = min(max(10 * auto_eval_block_len, 2 * auto_eval_block_len), data_len)
+        else:
+            # even_bursts / all_1 / stress tests: keep a long window.
+            metrics_seq_len = min(20000, data_len)
+
+        metrics_seq_len = max(2, min(int(metrics_seq_len), data_len))
+        # batch_size=1 so each dataloader step is one independent window
+        # (training batch_size would pack many windows into one "batch" and
+        # max_eval_batches would not match multi-start half_half trials).
+        metrics_dataset_config = replace(
+            dataset_config, batch_size=1, shuffle=False, num_workers=0
+        )
+        metrics_dataloader = build_dataloader(
+            learning_algo.dataset_name,
+            metrics_dataset_config,
+            split="test",
+            eval_mode=True,
+        )
+        metrics_dataloader.dataset.update_sequence_length(metrics_seq_len)
+        new_seq_len = metrics_seq_len
+        print(
+            f"[Eval] Metrics seq_len={metrics_seq_len} "
+            f"(mode={auto_eval_mode}, block_len={auto_eval_block_len}, batch_size=1)"
+        )
+
+        n_test_windows = len(metrics_dataloader.dataset.data_idx)
         n_eval_windows = min(n_test_windows, max_eval_batches)
         batch_metric_dicts = []
+        batch_visual_records = []
+        mse_results_list = []
+        geom_results_list = []
+        spectrum_results_list = []
         metrics_save_fig_dir = os.path.join(save_fig_dir, "metrics_batches")
 
         print(
@@ -861,13 +950,16 @@ if __name__ == "__main__":
             f"(test_set={n_test_windows}, max_eval_batches={max_eval_batches}, "
             f"seq_len={new_seq_len})"
         )
+        extra_mode_info = ""
+        if auto_eval_mode == "alternating_blocks":
+            extra_mode_info = f" (block_len={auto_eval_block_len})"
+        elif auto_eval_mode == "even_bursts":
+            extra_mode_info = f" (ratio={auto_eval_ratio})"
+        elif auto_eval_flip_point is not None:
+            extra_mode_info = f" (flip_point={auto_eval_flip_point})"
         print(
             f"[Eval] Forward passes per window: TF=all_0, Auto={auto_eval_mode}"
-            + (
-                f" (custom flip_point={auto_eval_flip_point})"
-                if auto_eval_flip_point is not None
-                else ""
-            )
+            f"{extra_mode_info}"
         )
         if skip_metrics_viz_after_batch_0:
             print(
@@ -878,21 +970,22 @@ if __name__ == "__main__":
             print("[Eval] Metric figures: enabled for every evaluated window")
         sys.stdout.flush()
 
-        for i, batch_data_long in enumerate(test_dataloader):
+        for i, batch_data_long in enumerate(metrics_dataloader):
             if i >= max_eval_batches:
                 break
 
             batch_data_long = batch_data_long.to(device).permute(1, 0, 2)
             seq_len_long = batch_data_long.shape[0]
             start_frame = (
-                test_dataloader.dataset.data_idx[i]
-                if i < len(test_dataloader.dataset.data_idx)
+                metrics_dataloader.dataset.data_idx[i]
+                if i < len(metrics_dataloader.dataset.data_idx)
                 else 0
             )
             flip_point = get_flip_point_for_mode(
                 seq_len_long,
                 auto_eval_mode,
                 flip_point=auto_eval_flip_point,
+                block_len=auto_eval_block_len,
             )
             save_metric_figures = (i == 0) or (not skip_metrics_viz_after_batch_0)
 
@@ -910,12 +1003,14 @@ if __name__ == "__main__":
                 mode="all_0",
                 observation_process=observation_process,
             )
-            recon_auto_warmed, _ = run_forward_with_mode(
+            recon_auto_warmed, mode_selector_auto = run_forward_with_mode(
                 dvae,
                 batch_data_long,
                 mode=auto_eval_mode,
                 observation_process=observation_process,
                 flip_point=auto_eval_flip_point,
+                block_len=auto_eval_block_len,
+                autonomous_ratio=auto_eval_ratio,
             )
 
             channel_benchmarks = get_channel_benchmarks(
@@ -923,16 +1018,102 @@ if __name__ == "__main__":
                 recon_tf=recon_tf.detach().cpu().numpy(),
                 recon_auto_warmed=recon_auto_warmed.detach().cpu().numpy(),
                 flip_point=flip_point,
-                dataset=test_dataloader.dataset,
+                dataset=metrics_dataloader.dataset,
                 batch_idx=i,
                 observation_process=observation_process or "",
                 dataset_name=learning_algo.dataset_name,
                 auto_mode=auto_eval_mode,
+                mode_selector=mode_selector_auto,
+                block_len=auto_eval_block_len,
+                autonomous_ratio=auto_eval_ratio,
+            )
+            print(
+                f"[Eval] Auto free-run steps={channel_benchmarks.get('n_auto_steps')} "
+                f"blocks={channel_benchmarks.get('n_auto_blocks')} "
+                f"ranges={channel_benchmarks.get('auto_block_ranges')}"
             )
 
             batch_fig_dir = os.path.join(metrics_save_fig_dir, f"batch_{i}")
             if save_metric_figures:
                 os.makedirs(batch_fig_dir, exist_ok=True)
+
+                # Series plot of the *same* schedule/window that feeds geometry delay
+                # embeds (TF=green, Auto=red). Filename encodes mode + length.
+                drive_explain = (
+                    f"metrics_drive_batch{i}"
+                    f"_mode_{auto_eval_mode}"
+                    f"_T{seq_len_long}"
+                )
+                if auto_eval_mode == "alternating_blocks":
+                    drive_explain += f"_block{auto_eval_block_len}"
+                elif auto_eval_mode == "even_bursts":
+                    drive_explain += f"_ratio{auto_eval_ratio}"
+                elif auto_eval_flip_point is not None:
+                    drive_explain += f"_flip{auto_eval_flip_point}"
+
+                # Sidecar so the schedule is readable without parsing the filename
+                schedule_meta = {
+                    "batch_idx": i,
+                    "start_frame": start_frame,
+                    "seq_len": seq_len_long,
+                    "auto_eval_mode": auto_eval_mode,
+                    "auto_eval_block_len": auto_eval_block_len,
+                    "auto_eval_ratio": auto_eval_ratio,
+                    "auto_eval_flip_point": auto_eval_flip_point,
+                    "flip_point_summary": flip_point,
+                    "n_auto_steps": channel_benchmarks.get("n_auto_steps"),
+                    "n_auto_blocks": channel_benchmarks.get("n_auto_blocks"),
+                    "auto_block_ranges": channel_benchmarks.get("auto_block_ranges"),
+                    "note": (
+                        "vis_pred_true_series_metrics_drive_*.png shows the forward "
+                        "pass whose Auto segments are mask-gathered for delay-embed / "
+                        "spectrum / MSE auto metrics in this batch folder."
+                    ),
+                }
+                schedule_path = os.path.join(
+                    batch_fig_dir, f"metrics_drive_schedule_batch{i}.yaml"
+                )
+                with open(schedule_path, "w") as sf:
+                    yaml.dump(schedule_meta, sf, default_flow_style=False)
+                print(f"[Eval] Wrote metrics drive schedule: {schedule_path}")
+
+                # missing mask for shading (optional)
+                missing_mask_metrics = None
+                if hasattr(metrics_dataloader.dataset, "missing_mask"):
+                    try:
+                        mm = metrics_dataloader.dataset.get_missing_mask(i)
+                        mm = np.asarray(mm)
+                        if mm.ndim == 1:
+                            missing_mask_metrics = (
+                                torch.from_numpy(mm[:seq_len_long].astype(np.float32))
+                                .view(seq_len_long, 1, 1)
+                                .expand(-1, 1, batch_data_long.shape[2])
+                            )
+                        elif mm.ndim == 2:
+                            missing_mask_metrics = (
+                                torch.from_numpy(mm[:seq_len_long].astype(np.float32))
+                                .unsqueeze(1)
+                            )
+                    except Exception as exc:
+                        print(f"[Eval] metrics missing_mask skip: {exc}")
+
+                visualize_teacherforcing_2_autonomous(
+                    batch_data_long,
+                    dvae,
+                    auto_mode_selector=mode_selector_auto,
+                    save_path=batch_fig_dir,
+                    explain=drive_explain,
+                    inference_mode=True,
+                    missing_mask=missing_mask_metrics,
+                    is_segmented_1d=getattr(
+                        metrics_dataloader.dataset, "is_segmented_1d", False
+                    ),
+                    hide_mask_output=_is_indicate_observation(observation_process),
+                )
+                print(
+                    f"[Eval] Metrics-drive series plot saved under {batch_fig_dir} "
+                    f"(explain={drive_explain})"
+                )
 
             spectrum_results = run_spectrum_analysis(
                 test_dataloader=test_dataloader,
@@ -976,17 +1157,45 @@ if __name__ == "__main__":
                     mse_results, geom_results, spectrum_results
                 )
             )
+            mse_results_list.append(mse_results)
+            geom_results_list.append(geom_results)
+            spectrum_results_list.append(spectrum_results)
+
+            # Store for batch_all visuals (all windows, not only batch_0 figures)
+            recon_mixed_np = recon_auto_warmed.detach().cpu().numpy()
+            if recon_mixed_np.ndim == 3:
+                recon_mixed_1d = recon_mixed_np[:, 0, 0]
+            else:
+                recon_mixed_1d = recon_mixed_np.reshape(-1)
+            mode_1d = mode_selector_to_1d(mode_selector_auto)
+            rec = collect_batch_visual_record(
+                channel_benchmarks=channel_benchmarks,
+                recon_mixed_full=recon_mixed_1d,
+                mode_selector_1d=mode_1d,
+                batch_idx=i,
+                start_frame=int(start_frame) if start_frame is not None else i,
+            )
+            if rec is not None:
+                batch_visual_records.append(rec)
 
         if batch_metric_dicts:
             merged = merge_batch_metric_dicts(batch_metric_dicts)
             metrics["eval_schema_version"] = 2
             metrics["auto_eval_mode"] = auto_eval_mode
+            metrics["auto_eval_block_len"] = auto_eval_block_len
+            metrics["auto_eval_ratio"] = auto_eval_ratio
+            metrics["metrics_seq_len"] = new_seq_len
             metrics.update(merged)
 
             metrics["mse_tf"] = merged.get("mse_tf", merged.get("mse_tf_mean"))
             metrics["mse_auto"] = merged.get("mse_auto", merged.get("mse_auto_mean"))
-            metrics["kld_tf"] = merged.get("kld_tf", merged.get("kld_tf_mean"))
-            metrics["kld_auto"] = merged.get("kld_auto", merged.get("kld_auto_mean"))
+            # Per-window mean KLD kept for debugging; primary kld_* overwritten by stitched below
+            metrics["kld_tf_mean_across_windows"] = merged.get(
+                "kld_tf", merged.get("kld_tf_mean")
+            )
+            metrics["kld_auto_mean_across_windows"] = merged.get(
+                "kld_auto", merged.get("kld_auto_mean")
+            )
             metrics["spectrum_error_tf"] = merged.get(
                 "spectrum_error_tf", merged.get("spectrum_error_tf_mean")
             )
@@ -1007,16 +1216,136 @@ if __name__ == "__main__":
             )
             print(f"[Eval] MSE Teacher-forced (mean): {metrics['mse_tf']:.6f}")
             print(f"[Eval] MSE Autonomous (mean): {metrics['mse_auto']:.6f}")
-            print(f"[Eval] KL Teacher-forced (mean): {metrics['kld_tf']:.4f}")
-            print(f"[Eval] KL Autonomous (mean): {metrics['kld_auto']:.4f}")
+
+            # --- batch_all: stitched visuals across all scored windows ---
+            batch_all_dir = os.path.join(metrics_save_fig_dir, "batch_all")
+            print(
+                f"[Eval] Rendering batch_all visuals ({len(batch_visual_records)} windows) "
+                f"-> {batch_all_dir}"
+            )
+            sys.stdout.flush()
+            render_batch_all_visuals(
+                batch_visual_records,
+                save_dir=batch_all_dir,
+                gap=1,
+                explain_suffix=f"mode_{auto_eval_mode}_n{len(batch_visual_records)}",
+            )
+
+            # Stitched-cloud KLD (bar height) + per-window median/IQR (spread)
+            kld_metrics = compute_stitched_kld_metrics(
+                batch_visual_records, geom_results_list=geom_results_list
+            )
+            # Primary keys for aggregation: stitched geometry KLD
+            metrics["kld_tf"] = kld_metrics.get("kld_tf_stitched")
+            metrics["kld_auto"] = kld_metrics.get("kld_auto_stitched")
+            metrics["kld_tf_stitched"] = kld_metrics.get("kld_tf_stitched")
+            metrics["kld_auto_stitched"] = kld_metrics.get("kld_auto_stitched")
+            metrics["kld_tf_median"] = kld_metrics.get("kld_tf_median")
+            metrics["kld_auto_median"] = kld_metrics.get("kld_auto_median")
+            metrics["kld_tf_iqr"] = kld_metrics.get("kld_tf_iqr")
+            metrics["kld_auto_iqr"] = kld_metrics.get("kld_auto_iqr")
+            metrics["kld_tf_q25"] = kld_metrics.get("kld_tf_q25")
+            metrics["kld_tf_q75"] = kld_metrics.get("kld_tf_q75")
+            metrics["kld_auto_q25"] = kld_metrics.get("kld_auto_q25")
+            metrics["kld_auto_q75"] = kld_metrics.get("kld_auto_q75")
+            metrics["kld_tf_std_across_windows"] = kld_metrics.get(
+                "kld_tf_std_across_windows"
+            )
+            metrics["kld_auto_std_across_windows"] = kld_metrics.get(
+                "kld_auto_std_across_windows"
+            )
+            # Nested block for aggregators / future analysis
+            metrics["kld_geometry"] = {
+                "stitched_tf": kld_metrics.get("kld_tf_stitched"),
+                "stitched_auto": kld_metrics.get("kld_auto_stitched"),
+                "per_window_tf": kld_metrics.get("kld_tf_per_window"),
+                "per_window_auto": kld_metrics.get("kld_auto_per_window"),
+                "note": kld_metrics.get("kld_metric_note"),
+            }
+            print(
+                f"[Eval] KL stitched (batch_all geometry): "
+                f"TF={metrics['kld_tf']:.4f}  Auto={metrics['kld_auto']:.4f}"
+            )
+            print(
+                f"[Eval] KL per-window median [IQR]: "
+                f"TF={metrics['kld_tf_median']:.4f} "
+                f"[{metrics['kld_tf_q25']:.4f}, {metrics['kld_tf_q75']:.4f}]  "
+                f"Auto={metrics['kld_auto_median']:.4f} "
+                f"[{metrics['kld_auto_q25']:.4f}, {metrics['kld_auto_q75']:.4f}]"
+            )
+
+            # Physical multi-channel baselines (Lorenz y/z; XHRO ch1–ch3 vs target)
+            # Old paper bars: refs | GT(0) | TF | Auto
+            reference_errors = None
+            if (
+                hasattr(metrics_dataloader.dataset, "get_full_xyz")
+                and batch_visual_records
+            ):
+                try:
+                    auto_len = len(batch_visual_records[0]["gt_auto"])
+                    td = int(batch_visual_records[0].get("time_delay", 10))
+                    dd = int(batch_visual_records[0].get("delay_dims", 3))
+                    full_len = len(batch_visual_records[0]["gt_full"])
+                    flip = full_len // 2 if auto_eval_mode == "half_half" else None
+                    if (
+                        auto_eval_mode == "flip_at_index"
+                        and auto_eval_flip_point is not None
+                    ):
+                        flip = int(auto_eval_flip_point)
+                    batch_ids = [r["batch_idx"] for r in batch_visual_records]
+                    primary_key = batch_visual_records[0].get("key")
+                    reference_errors = compute_reference_channel_errors(
+                        metrics_dataloader.dataset,
+                        batch_indices=batch_ids,
+                        auto_seg_len=auto_len,
+                        dataset_name=learning_algo.dataset_name,
+                        observation_process=observation_process,
+                        primary_key=primary_key,
+                        time_delay=td,
+                        delay_dims=dd,
+                        dt=float(channel_benchmarks.get("dt", 0.01)),
+                        flip_point=flip,
+                    )
+                    if reference_errors:
+                        print(
+                            f"[Eval] Multi-channel reference bars "
+                            f"({learning_algo.dataset_name}): {reference_errors}"
+                        )
+                    else:
+                        print(
+                            f"[Eval] Multi-channel reference bars "
+                            f"({learning_algo.dataset_name}): empty (skipped)"
+                        )
+                except Exception as exc:
+                    print(f"[Eval] batch_all reference channels skipped: {exc}")
+                    reference_errors = None
+
+            render_summary_error_bars(
+                mse_results_list,
+                geom_results_list,
+                spectrum_results_list,
+                save_dir=batch_all_dir,
+                reference_errors=reference_errors,
+                kld_metrics=kld_metrics,
+            )
 
             log_file = os.path.join(save_dir, "evaluation_log.txt")
             with open(log_file, "w") as f:
-                f.write(f"KL Teacher-forced: {metrics['kld_tf']:.4f}\n")
-                f.write(f"KL Autonomous: {metrics['kld_auto']:.4f}\n")
+                f.write(f"KL Teacher-forced (stitched): {metrics['kld_tf']:.4f}\n")
+                f.write(f"KL Autonomous (stitched): {metrics['kld_auto']:.4f}\n")
+                f.write(
+                    f"KL TF median/IQR: {metrics['kld_tf_median']:.4f} "
+                    f"[{metrics['kld_tf_q25']:.4f}, {metrics['kld_tf_q75']:.4f}]\n"
+                )
+                f.write(
+                    f"KL Auto median/IQR: {metrics['kld_auto_median']:.4f} "
+                    f"[{metrics['kld_auto_q25']:.4f}, {metrics['kld_auto_q75']:.4f}]\n"
+                )
                 f.write(f"MSE Teacher-forced: {metrics['mse_tf']:.6f}\n")
                 f.write(f"MSE Autonomous: {metrics['mse_auto']:.6f}\n")
                 f.write(f"Auto eval mode: {auto_eval_mode}\n")
+                f.write(f"Auto eval block_len: {auto_eval_block_len}\n")
+                f.write(f"Auto eval ratio: {auto_eval_ratio}\n")
                 f.write(f"Eval batches: {len(batch_metric_dicts)}\n")
 
         ##############################################################################

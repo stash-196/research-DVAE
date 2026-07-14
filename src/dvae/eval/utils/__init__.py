@@ -18,9 +18,19 @@ from dvae.eval.utils.forward_modes import (
     run_forward_with_mode,
     build_mode_selector,
     get_flip_point_for_mode,
+    get_auto_mask_1d,
+    mode_selector_to_1d,
+    count_auto_blocks,
+    list_auto_block_ranges,
 )
 from dvae.eval.utils.benchmark_signals import get_channel_benchmarks
 from dvae.eval.utils.metrics_aggregate import (
     merge_batch_metric_dicts,
     flatten_analysis_to_batch_metrics,
+)
+from dvae.eval.utils.batch_all_visuals import (
+    collect_batch_visual_record,
+    compute_stitched_kld_metrics,
+    render_batch_all_visuals,
+    render_summary_error_bars,
 )

@@ -202,9 +202,9 @@ def visualize_sequences(
         sequences[2]["data"] if len(sequences) > 2 else None
     )  # Optional noise sequence
     # Add offset for noise data if present
-    min_val = min(np.min(true_data), np.min(recon_data))
+    min_val = np.nanmin([np.nanmin(true_data), np.nanmin(recon_data)])
     if noise_data is not None:
-        offset = 1.1 * min_val - np.max(noise_data)
+        offset = 1.1 * min_val - np.nanmax(noise_data)
         noise_data = noise_data + offset
 
     PAPER_READY = True
@@ -1327,19 +1327,86 @@ def visualize_alpha_history_and_spectrums(
 # Visualize the errors from an error list of any error, using a bar graph. x-axis is the subjects of the error (name_lst), y-axis is the error value.
 # true_signal_index is the index of the true signal in the error_lst.
 def visualize_errors_from_lst(
-    error_lst, name_lst, error_unit, colors, save_dir, explain, true_signal_index=None
+    error_lst,
+    name_lst,
+    error_unit,
+    colors,
+    save_dir,
+    explain,
+    true_signal_index=None,
+    yerr=None,
+    median_markers=None,
+    subtitle=None,
 ):
+    """
+    Bar chart of errors.
+
+    Optional:
+      yerr: sequence of None or (err_low, err_high) per bar (asymmetric), or
+            a 1d array of symmetric errors; only drawn where provided/finite.
+      median_markers: sequence of optional floats (per-window median etc.) plotted
+            as black diamonds on top of bars.
+      subtitle: extra caption line (e.g. stitched vs median/IQR note).
+    """
     plt.figure(figsize=(12, 6))
-    plt.bar(name_lst, error_lst, color=colors)
+    x = np.arange(len(name_lst))
+    bars = plt.bar(x, error_lst, color=colors, zorder=2)
+    plt.xticks(x, name_lst)
+
+    if yerr is not None:
+        # Build asymmetric yerr shape (2, n)
+        lows, highs = [], []
+        for i, ye in enumerate(yerr):
+            if ye is None:
+                lows.append(0.0)
+                highs.append(0.0)
+            elif np.isscalar(ye):
+                v = float(ye) if np.isfinite(ye) else 0.0
+                lows.append(v)
+                highs.append(v)
+            else:
+                lo, hi = float(ye[0]), float(ye[1])
+                lows.append(lo if np.isfinite(lo) else 0.0)
+                highs.append(hi if np.isfinite(hi) else 0.0)
+        # Only draw whiskers where at least one side nonzero
+        if any(lo > 0 or hi > 0 for lo, hi in zip(lows, highs)):
+            plt.errorbar(
+                x,
+                error_lst,
+                yerr=np.vstack([lows, highs]),
+                fmt="none",
+                ecolor="black",
+                elinewidth=1.5,
+                capsize=5,
+                zorder=3,
+            )
+
+    if median_markers is not None:
+        mx, my = [], []
+        for i, med in enumerate(median_markers):
+            if med is not None and np.isfinite(med):
+                mx.append(x[i])
+                my.append(float(med))
+        if mx:
+            plt.scatter(
+                mx,
+                my,
+                marker="D",
+                s=50,
+                c="black",
+                zorder=4,
+                label="Per-window median",
+            )
+            plt.legend(loc="best", fontsize=10)
+
     plt.xlabel("Signals")
     plt.ylabel(f"{error_unit}")
-    plt.title(
-        textwrap.fill(
-            f"{explain} Error against True Signal", width=50, break_long_words=True
-        )
-    )
-    plt.grid(True)
+    title = f"{explain} Error against True Signal"
+    if subtitle:
+        title = title + "\n" + subtitle
+    plt.title(textwrap.fill(title, width=70, break_long_words=True))
+    plt.grid(True, zorder=0)
     fig_file = os.path.join(save_dir, f"vis_errors_{explain}.png")
-    plt.savefig(fig_file)
+    plt.savefig(fig_file, bbox_inches="tight")
     plt.close()
     print(f"Errors plot saved at: {fig_file}")

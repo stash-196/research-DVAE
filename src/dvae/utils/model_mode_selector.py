@@ -10,7 +10,7 @@ import torch
 
 
 def create_autonomous_mode_selector_1d(
-    seq_len, mode="all_1", autonomous_ratio=0.0, flip_point=None
+    seq_len, mode="all_1", autonomous_ratio=0.0, flip_point=None, block_len=None
 ):
     """
     Creates a 1D mode selector array for RNN training.
@@ -19,6 +19,7 @@ def create_autonomous_mode_selector_1d(
     :param mode: The mode of operation.
     :param autonomous_ratio: Ratio of autonomous steps for applicable modes.
     :param flip_point: For ``flip_at_index``, timestep where TF (0) switches to auto (1).
+    :param block_len: For ``alternating_blocks``, fixed TF/Auto block length (e.g. 1000).
     :return: A NumPy array of shape (seq_len,) where 0 represents teacher-forcing
              mode and 1 represents autonomous mode.
     """
@@ -52,15 +53,24 @@ def create_autonomous_mode_selector_1d(
         )
     elif mode == "even_bursts":
         mode_selector_list = []  # Use a list to build efficiently
-        flip_interval = int(
-            seq_len * autonomous_ratio
-        )  # if autonomous_ratio > 0 else seq_len + 1  # Avoid division by zero, make it never flip if ratio is 0
+        flip_interval = max(1, int(seq_len * autonomous_ratio))
         current_mode = 0  # Start with teacher forcing
         for i in range(seq_len):
             if i > 0 and (i % flip_interval == 0):  # Flip at interval, not at start
                 current_mode = 1 - current_mode
             mode_selector_list.append(current_mode)
         mode_selector = np.array(mode_selector_list, dtype=np.float32)
+    elif mode == "alternating_blocks":
+        # Paper-style fixed blocks: TF, Auto, TF, Auto, ... with constant block_len.
+        if block_len is None:
+            block_len = 1000
+        block_len = int(block_len)
+        if block_len <= 0:
+            raise ValueError(f"alternating_blocks requires positive block_len, got {block_len}.")
+        mode_selector = np.array(
+            [1.0 if (i // block_len) % 2 == 1 else 0.0 for i in range(seq_len)],
+            dtype=np.float32,
+        )
     elif mode == "mix_sampling":
         mode_selector = np.full(seq_len, autonomous_ratio, dtype=np.float32)
     elif mode == "bernoulli_sampling":
@@ -81,6 +91,7 @@ def create_autonomous_mode_selector(
     x_dim=None,
     device="cpu",
     flip_point=None,
+    block_len=None,
 ):
     """
     Creates a mode selector array for RNN training,
@@ -88,18 +99,23 @@ def create_autonomous_mode_selector(
 
     :param seq_len: Length of the sequence.
     :param mode: The mode of operation - 'all_1', 'all_0', 'half_half', 'flip_at_index',
-                'flip_at_middle', 'even_sampling', 'even_bursts', 'mix_sampling',
-                or 'bernoulli_sampling'.
+                'flip_at_middle', 'even_sampling', 'even_bursts', 'alternating_blocks',
+                'mix_sampling', or 'bernoulli_sampling'.
     :param autonomous_ratio: Ratio of autonomous steps for applicable modes.
     :param batch_size: Number of sequences in a batch. If None, batch dimension is not added.
     :param x_dim: Dimensionality of the input features. If None, x_dim dimension is not added.
     :param flip_point: Timestep index for ``flip_at_index`` (TF before, auto after).
+    :param block_len: Fixed block length for ``alternating_blocks`` (default 1000).
     :return: A NumPy array of shape (seq_len, [batch_size], [x_dim]) where 0 represents teacher-forcing
              mode and 1 represents autonomous mode. Dimensions are added only if batch_size/x_dim are provided.
     """
     # 1. Create the base 1D mode selector using the helper function
     mode_selector_1d = create_autonomous_mode_selector_1d(
-        seq_len, mode, autonomous_ratio, flip_point=flip_point
+        seq_len,
+        mode,
+        autonomous_ratio,
+        flip_point=flip_point,
+        block_len=block_len,
     )
 
     # Convert to PyTorch tensor immediately for expand/broadcast operations

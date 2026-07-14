@@ -1,11 +1,18 @@
 """Build per-channel ground-truth and reconstruction signals for evaluation."""
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 
 from dvae.dataset.xhro_dataset import select_columns_for_obs_conditions
+from dvae.eval.utils.forward_modes import (
+    count_auto_blocks,
+    get_auto_mask_1d,
+    list_auto_block_ranges,
+    mode_selector_to_1d,
+)
+
 
 CHANNEL_COLORS = {
     "ch1": "cyan",
@@ -101,26 +108,92 @@ def _align_missing_mask(
     return None
 
 
+def _resolve_auto_mask(
+    seq_len: int,
+    auto_mode: str,
+    flip_point: Optional[int],
+    mode_selector: Optional[Union[torch.Tensor, np.ndarray]],
+    block_len: Optional[int],
+    autonomous_ratio: float,
+) -> np.ndarray:
+    """
+    Boolean mask over time (True = score as autonomous free-run).
+
+    Prefer an explicit mode_selector from the mixed forward when available.
+    """
+    if mode_selector is not None:
+        sel = mode_selector_to_1d(mode_selector)
+        if sel.shape[0] != seq_len:
+            raise ValueError(
+                f"mode_selector length {sel.shape[0]} != seq_len {seq_len}"
+            )
+        return sel > 0.5
+
+    if auto_mode in ("half_half", "flip_at_index", "all_0", "all_1"):
+        if flip_point is None:
+            if auto_mode == "half_half":
+                flip_point = seq_len // 2
+            elif auto_mode == "all_0":
+                flip_point = seq_len
+            elif auto_mode == "all_1":
+                flip_point = 0
+            else:
+                flip_point = seq_len // 2
+        flip_point = int(max(0, min(flip_point, seq_len)))
+        mask = np.zeros(seq_len, dtype=bool)
+        mask[flip_point:] = True
+        return mask
+
+    return get_auto_mask_1d(
+        seq_len,
+        mode=auto_mode,
+        autonomous_ratio=autonomous_ratio,
+        flip_point=flip_point,
+        block_len=block_len,
+    )
+
+
 def get_channel_benchmarks(
     batch_data_long: torch.Tensor,
     recon_tf: np.ndarray,
     recon_auto_warmed: np.ndarray,
-    flip_point: int,
+    flip_point: Optional[int],
     dataset,
     batch_idx: int,
     observation_process: str,
     dataset_name: str,
     auto_mode: str = "half_half",
+    mode_selector: Optional[Union[torch.Tensor, np.ndarray]] = None,
+    block_len: Optional[int] = None,
+    autonomous_ratio: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Build per-channel GT / TF / Auto signals for metric computation.
 
-    Uses normalized batch data (training distribution). Auto signals are the
-    contiguous tail starting at flip_point from a single warmed forward pass.
+    Uses normalized batch data (training distribution).
+
+    Autonomous scoring uses timesteps where the eval schedule is in Auto mode:
+    - half_half / flip_at_index: contiguous tail after flip_point
+    - alternating_blocks / even_bursts: mask-gathered free-run blocks (paper-style
+      fixed blocks or legacy ratio bursts), re-anchored by intervening TF
     """
     seq_len = batch_data_long.shape[0]
-    flip_point = int(max(0, min(flip_point, seq_len)))
     x_dim = batch_data_long.shape[2]
+
+    auto_mask = _resolve_auto_mask(
+        seq_len=seq_len,
+        auto_mode=auto_mode,
+        flip_point=flip_point,
+        mode_selector=mode_selector,
+        block_len=block_len,
+        autonomous_ratio=autonomous_ratio,
+    )
+    if flip_point is None:
+        # First auto timestep (or seq_len if none)
+        auto_idx = np.flatnonzero(auto_mask)
+        flip_point = int(auto_idx[0]) if auto_idx.size else seq_len
+    else:
+        flip_point = int(max(0, min(flip_point, seq_len)))
 
     gt_np = batch_data_long[:, 0, :].detach().cpu().numpy()
     if recon_tf.ndim == 3:
@@ -137,6 +210,10 @@ def get_channel_benchmarks(
         dataset, batch_idx, seq_len, len(channel_specs)
     )
 
+    n_auto = int(np.sum(auto_mask))
+    n_auto_blocks = count_auto_blocks(auto_mask)
+    auto_block_ranges = list_auto_block_ranges(auto_mask)
+
     channels: List[Dict[str, Any]] = []
     for col_i, (key, dim_idx) in enumerate(channel_specs):
         if dim_idx >= x_dim:
@@ -146,15 +223,22 @@ def get_channel_benchmarks(
         tf_full = tf_np[:, dim_idx]
         auto_full = auto_np[:, dim_idx]
 
-        gt_auto = gt_full[flip_point:]
-        tf_auto = tf_full[flip_point:]
-        auto_seg = auto_full[flip_point:]
+        # Mask-gather free-run (and matching TF/GT) timesteps — multi-channel safe
+        # because we index each 1D channel series, not a 3D boolean of all dims.
+        if n_auto > 0:
+            gt_auto = gt_full[auto_mask]
+            tf_auto = tf_full[auto_mask]
+            auto_seg = auto_full[auto_mask]
+        else:
+            gt_auto = gt_full[0:0]
+            tf_auto = tf_full[0:0]
+            auto_seg = auto_full[0:0]
 
         mask_full = None
         mask_auto = None
         if missing_mask_full is not None and col_i < missing_mask_full.shape[1]:
             mask_full = missing_mask_full[:, col_i]
-            mask_auto = mask_full[flip_point:]
+            mask_auto = mask_full[auto_mask] if n_auto > 0 else mask_full[0:0]
 
         channels.append(
             {
@@ -180,6 +264,11 @@ def get_channel_benchmarks(
         "channels": channels,
         "flip_point": flip_point,
         "auto_mode": auto_mode,
+        "auto_mask": auto_mask,
+        "n_auto_steps": n_auto,
+        "n_auto_blocks": n_auto_blocks,
+        "auto_block_ranges": auto_block_ranges,
+        "block_len": block_len,
         "seq_len": seq_len,
         "dt": dt,
         "time_delay": time_delay,
@@ -233,6 +322,7 @@ def get_benchmark_signals(
         observation_process=observation_process or "",
         dataset_name=dataset_name,
         auto_mode="legacy_mixed",
+        mode_selector=autonomous_mode_selector_long,
     )
 
     long_data_lst = []

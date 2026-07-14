@@ -61,21 +61,22 @@ def run_mse_analysis_from_benchmarks(
     mse_auto_mean = float(np.mean(auto_values)) if auto_values else float("nan")
 
     if save_figures:
+        # One multi-bar chart (GT=0, then TF/Auto per channel) — not single-bar panels
+        comb_errs, comb_names, comb_colors = [0.0], ["Ground\nTruth"], ["blue"]
+        for ch_key, vals in per_channel.items():
+            comb_names.append(f"{ch_key}\nTF")
+            comb_errs.append(vals["mse_tf"])
+            comb_colors.append("green")
+            comb_names.append(f"{ch_key}\nAuto")
+            comb_errs.append(vals["mse_auto"])
+            comb_colors.append("red")
         visualize_errors_from_lst(
-            tf_errors,
-            name_lst=tf_names,
+            comb_errs,
+            name_lst=comb_names,
             save_dir=save_fig_dir,
-            explain=f"mse_tf_per_channel_batch{batch_idx}",
+            explain=f"mse_error_per_signal_batch{batch_idx}",
             error_unit="MSE",
-            colors=tf_colors,
-        )
-        visualize_errors_from_lst(
-            auto_errors,
-            name_lst=auto_names,
-            save_dir=save_fig_dir,
-            explain=f"mse_auto_per_channel_batch{batch_idx}",
-            error_unit="MSE",
-            colors=auto_colors,
+            colors=comb_colors,
         )
 
     return {
