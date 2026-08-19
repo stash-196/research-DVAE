@@ -41,6 +41,31 @@ research-DVAE/
 
 Now, your environment is set up and ready to use! 🚀
 
+## Deigo train / eval loop
+
+Edit and test train/eval on the **Studio**. Sync code with **git** to Deigo home `~/workspace/research-DVAE`. Then on Deigo:
+
+1. Edit `bin/generate_config_file_for_multiple.py` — experiment name and the sweep lists (dataset, model, ptf, dims, etc.).
+2. Load Singularity and generate the batch configs:
+   ```sh
+   ml singularity
+   singularity exec /bucket/DoyaU/stash/containers/generic_ml_container.sif python3 bin/generate_config_file_for_multiple.py
+   ```
+3. Check that the printed experiment count matches what you meant. Configs land in `config/general_signal/generated/<experiment_name>/`.
+4. Put that same batch name in `scripts/slurm/train/run_training_multiple.sh` (`experiments=(...)`).
+5. Submit:
+   ```sh
+   bash scripts/slurm/train/run_training_multiple.sh
+   ```
+   That writes one temp `.slurm` per `.ini` and `sbatch`s them.
+6. `squeue` to confirm they landed, then monitor.
+
+**Outputs** — training writes `/flash/DoyaU/stash/research-DVAE/saved_model`. Copy the date folders you care about to `/bucket/DoyaU/stash/research-DVAE/saved_model` so the Studio mount can see them. Helper: `scripts/bash/sync_saved_models_btw_clusters.sh` (uncomment the date dirs first).
+
+Eval / aggregate after a pull: `scripts/slurm/evaluation/run_eval_multiple.sh`, `scripts/slurm/evaluation/run_aggregate_multiple.sh`.
+
+Paths for this machine vs Deigo live in `config/device_paths.yaml`. Studio `~/mounts/bucket/...` is a local cache, not a live cluster mount.
+
 
 # Dynamical Variational Autoencoders A Comprehensive Review
 
