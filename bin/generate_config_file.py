@@ -310,3 +310,8 @@ if __name__ == "__main__":
 
     with open(os.path.join(output_dir, "params_being_compared.json"), "w") as file:
         json.dump(json_params, file, indent=4)
+
+    print(
+        "Submit with:\n"
+        f"  bash scripts/slurm/train/run_training_multiple.sh {experiment_name}"
+    )

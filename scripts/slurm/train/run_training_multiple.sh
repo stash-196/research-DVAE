@@ -1,10 +1,21 @@
 #!/bin/bash
 
+# Submit one sbatch job per generated .ini. Pass experiment directory names
+# (under config/general_signal/generated/), not by editing this file:
+#   bash scripts/slurm/train/run_training_multiple.sh 20260816-XHRO_...
+# Multiple batches: extra names as extra args.
+
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 EXPERIMENT_NAME [EXPERIMENT_NAME ...]" >&2
+    echo "Names are directories under config/general_signal/generated/" >&2
+    echo "Example:" >&2
+    echo "  $0 20260816-XHRO_packet_loss_ep20000_ptf0-7_MTRNN9d_clip10_chAll_4d_hdim200_eStop500" >&2
+    exit 1
+fi
+
 # Base directory where the configurations are stored
 BASE_DIR=~/workspace/research-DVAE/config/general_signal/generated
-
-# Define a list of experiment names, each corresponding to a subdirectory under BASE_DIR
-declare -a experiments=("20260816-XHRO_packet_loss_ep20000_ptf0-7_MTRNN9d_clip10_chAll_4d_hdim200_eStop500")
+experiments=("$@")
 
 # Get the current date in YYYY-MM-DD format
 today=$(date +%Y-%m-%d)
@@ -32,6 +43,14 @@ mkdir -p "$TEMP_DIR"
 # Loop over each experiment name to process its configuration files
 for experiment in "${experiments[@]}"; do
     CONFIG_DIR="$BASE_DIR/$experiment"
+    if [ ! -d "$CONFIG_DIR" ]; then
+        echo "Error: no config dir $CONFIG_DIR" >&2
+        exit 1
+    fi
+    if ! find "$CONFIG_DIR" -name "*.ini" | grep -q .; then
+        echo "Error: no .ini files in $CONFIG_DIR" >&2
+        exit 1
+    fi
     LOG_DIR="$OUTPUT_TODAY_DIR/deigo_cluster/$experiment/logs"
     echo "[bash] LOG_DIR: $LOG_DIR"
     mkdir -p "$LOG_DIR"

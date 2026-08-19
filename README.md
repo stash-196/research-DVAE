@@ -51,14 +51,13 @@ Edit and test train/eval on the **Studio**. Sync code with **git** to Deigo home
    ml singularity
    singularity exec /bucket/DoyaU/stash/containers/generic_ml_container.sif python3 bin/generate_config_file_for_multiple.py
    ```
-3. Check that the printed experiment count matches what you meant. Configs land in `config/general_signal/generated/<experiment_name>/`.
-4. Put that same batch name in `scripts/slurm/train/run_training_multiple.sh` (`experiments=(...)`).
-5. Submit:
+3. Check that the printed experiment count matches what you meant. Configs land in `config/general_signal/generated/<experiment_name>/`. Generate-config also prints the submit command.
+4. Submit that batch (pass the experiment name; do not edit the script just to point at a folder):
    ```sh
-   bash scripts/slurm/train/run_training_multiple.sh
+   bash scripts/slurm/train/run_training_multiple.sh <experiment_name>
    ```
-   That writes one temp `.slurm` per `.ini` and `sbatch`s them.
-6. `squeue` to confirm they landed, then monitor.
+   That writes one temp `.slurm` per `.ini` and `sbatch`s them. Extra names as extra args if you are submitting more than one batch.
+5. `squeue` to confirm they landed, then monitor.
 
 **Outputs** — training writes `/flash/DoyaU/stash/research-DVAE/saved_model`. Copy the date folders you care about to `/bucket/DoyaU/stash/research-DVAE/saved_model` so the Studio mount can see them. Helper: `scripts/bash/sync_saved_models_btw_clusters.sh` (uncomment the date dirs first).
 
