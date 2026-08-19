@@ -17,7 +17,7 @@ Working list folded from [PhD Thesis Research Notes](https://www.notion.so/PhD-T
   - [ ] More public medical / wearable datasets
   - [ ] Kalman filtering capability
   - [ ] Latent-variable forcing capability
-- [ ] Land uncommitted XhroProper path: `xhro_proper_dataset.py`, `generate_xhro_proper_configs.py`, `tests/test_xhro_proper.py`, dataset_builder / packet-loss / SLURM / config-generator edits
+- [ ] Land uncommitted XhroProper path: `xhro_proper_dataset.py`, `tests/test_xhro_proper.py`, dataset_builder / packet-loss / SLURM / config-generator edits
   - Parity vs `Xhro` / `XhroPacketLoss` (same seq_len, split, observation names)
   - Do not mix parquet and grok NPZ corpora in one tensor
 

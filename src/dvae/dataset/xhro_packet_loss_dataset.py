@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Dataset loader for xhro_packet_loss preprocessed biop parquet files."""
+"""Dataset loader for xhro_packet_loss preprocessed biop parquet files.
+
+This reads the *older* ``processed/{realtime,recovered}/…/filtered_data.parquet``
+port. For the grok named-bank pipeline (``grok_output/…/intermediates/*.npz``),
+use ``XhroProper``.
+"""
 
 import numpy as np
 import pandas as pd
