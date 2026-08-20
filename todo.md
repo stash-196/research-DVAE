@@ -4,9 +4,6 @@ Working list folded from [PhD Thesis Research Notes](https://www.notion.so/PhD-T
 
 ## Now
 
-- [ ] **Lag-Operator SSM** (frequency-preserving basis)
-  - [ ] Fix numerical instability in the recurrence
-  - [ ] Test on XHRO and VitalPatch
 - [ ] **XHRO packet loss**
   - [ ] Re-run preprocessing (missed artifacts)
   - [ ] Train and compare realtime vs recovered

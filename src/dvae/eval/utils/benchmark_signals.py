@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 from dvae.dataset.xhro_dataset import select_columns_for_obs_conditions
+from dvae.dataset.physionet2012_dataset import PHYSINET_OBS_COLUMNS
 from dvae.eval.utils.forward_modes import (
     count_auto_blocks,
     get_auto_mask_1d,
@@ -19,6 +20,11 @@ CHANNEL_COLORS = {
     "ch2": "orange",
     "ch3": "magenta",
     "ch4": "yellow",
+    "HR": "red",
+    "SysABP": "purple",
+    "DiasABP": "brown",
+    "RespRate": "green",
+    "Temp": "olive",
     "x": "blue",
     "y": "magenta",
     "z": "orange",
@@ -51,6 +57,13 @@ def resolve_channel_keys(
         cols = select_columns_for_obs_conditions["original"][observation_process]
         return [(col, i) for i, col in enumerate(cols)]
 
+    base = observation_process
+    if isinstance(base, str) and base.endswith("_interpolate"):
+        base = base[: -len("_interpolate")]
+    if base in PHYSINET_OBS_COLUMNS:
+        cols = PHYSINET_OBS_COLUMNS[base]
+        return [(col, i) for i, col in enumerate(cols)]
+
     if dataset_name == "Lorenz63":
         if x_dim == 1:
             return [("x", 0)]
@@ -67,6 +80,8 @@ def _get_dt(dataset, dataset_name: str) -> float:
         return 1.0 / float(dataset.sampling_freq)
     if dataset_name in ("Xhro", "XhroPacketLoss"):
         return 1.0 / 250.0
+    if dataset_name == "PhysioNet2012":
+        return 3600.0
     if dataset_name == "Lorenz63":
         return 1e-2
     return 1e-2

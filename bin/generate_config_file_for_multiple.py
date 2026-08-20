@@ -63,6 +63,7 @@ if __name__ == "__main__":
     dataset_name = [
         # "Xhro",
         "XhroPacketLoss",
+        # "PhysioNet2012",
         # "Lorenz63",
         # "SHO",
         # "DampedSHO"
@@ -84,6 +85,8 @@ if __name__ == "__main__":
     # Change to dictionary of lists
     # Network
     x_dim = [4]
+    if dataset_name[0] == "PhysioNet2012":
+        x_dim = [5]
     # dense_x = [1]
     dense_x = x_dim
     z_dim = [9]
@@ -109,7 +112,7 @@ if __name__ == "__main__":
     lr = [0.001]
     alpha_lr = [0.01]
     epochs = [20000]
-    if dataset_name[0] in ("Xhro", "XhroPacketLoss", "XhroProper"):
+    if dataset_name[0] in ("Xhro", "XhroPacketLoss", "XhroProper", "PhysioNet2012"):
         early_stop_patience = [500]
     else:
         early_stop_patience = [200]
@@ -123,7 +126,7 @@ if __name__ == "__main__":
         # "sm"
     ]
 
-    if dataset_name[0] in ("Xhro", "XhroPacketLoss", "XhroProper"):
+    if dataset_name[0] in ("Xhro", "XhroPacketLoss", "XhroProper", "PhysioNet2012"):
         sampling_ratio = [
             0.0,
             0.1,
@@ -212,6 +215,10 @@ if __name__ == "__main__":
         dataset_label = [
             "XHRO3506_20260622T142410000+0900",
         ]
+    elif dataset_name[0] == "PhysioNet2012":
+        dataset_label = [
+            "hourly_v1",
+        ]
     elif dataset_name[0] == "SHO":
         dataset_label = [
             # "None",
@@ -243,6 +250,10 @@ if __name__ == "__main__":
             "realtime",
             # "retrans",
         ]
+    elif dataset_name[0] == "PhysioNet2012":
+        mask_label = [
+            "None",
+        ]
     elif dataset_name[0] == "Lorenz63":
         mask_label = [
             "None",
@@ -267,6 +278,8 @@ if __name__ == "__main__":
     batch_size = [128]
     num_workers = [8]
     sequence_len = [1000]
+    if dataset_name[0] == "PhysioNet2012":
+        sequence_len = [48]
     val_indices = [0.2]
 
     if dataset_name[0] in ("Xhro", "XhroPacketLoss"):
@@ -305,6 +318,14 @@ if __name__ == "__main__":
             # "ppg_primary",
             # "acc_xyz",
             # "acc_motion",
+        ]
+    elif dataset_name[0] == "PhysioNet2012":
+        observation_process = [
+            "raw_vitals",
+            # "raw_hr",
+            # "raw_hr_indicate",
+            # "raw_vitals_interpolate",
+            # "raw_vitals_indicate",
         ]
     elif dataset_name[0] == "Lorenz63":
         observation_process = [
