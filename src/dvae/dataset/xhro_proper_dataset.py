@@ -455,8 +455,11 @@ class XhroProper(Xhro):
         arr = data.to_numpy(dtype=np.float64)
 
         if suffix is None:
-            return torch.tensor(self.normalize(arr.astype(np.float32)), dtype=torch.float32)
-
+            mean = np.nanmean(arr, axis=0)
+            std = np.nanstd(arr, axis=0)
+            std = np.where((std == 0) | np.isnan(std), 1.0, std)
+            normed = (arr - mean) / std
+            return torch.tensor(normed.astype(np.float32), dtype=torch.float32)
         if suffix == "interpolate":
             out = arr.copy()
             for j in range(out.shape[1]):
