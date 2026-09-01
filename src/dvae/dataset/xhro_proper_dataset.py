@@ -230,6 +230,8 @@ def _align_on_datetime(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
 def _maybe_resample(df: pd.DataFrame, resample_hz: float | None) -> pd.DataFrame:
     if resample_hz is None:
         return df
+    if float(resample_hz) <= 0:
+        raise ValueError(f"resample_hz must be > 0, got {resample_hz!r}")
     if "datetime" not in df.columns or df.empty:
         return df
     period_ns = int(round(1e9 / float(resample_hz)))
