@@ -154,8 +154,7 @@ def _infer_t0(session_dir: Path) -> pd.Timestamp | None:
 def _load_npz(path: Path) -> np.lib.npyio.NpzFile:
     if not path.exists():
         raise FileNotFoundError(f"Missing grok intermediate: {path}")
-    return np.load(path, allow_pickle=True)
-
+    return np.load(path, allow_pickle=False)
 
 def _series_from_stage05(npz) -> dict[str, np.ndarray]:
     return {
