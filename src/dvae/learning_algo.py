@@ -657,6 +657,8 @@ class LearningAlgorithm:
                     or self.dataset_name == "Sinusoid"
                     or self.dataset_name == "Xhro"
                     or self.dataset_name == "XhroPacketLoss"
+                    or self.dataset_name == "XhroProper"
+                    or self.dataset_name == "PhysioNet2012"
                     or self.dataset_name == "SHO"
                     or self.dataset_name == "DampedSHO"
                 ):
@@ -913,6 +915,8 @@ class LearningAlgorithm:
                     or self.dataset_name == "Sinusoid"
                     or self.dataset_name == "Xhro"
                     or self.dataset_name == "XhroPacketLoss"
+                    or self.dataset_name == "XhroProper"
+                    or self.dataset_name == "PhysioNet2012"
                     or self.dataset_name == "SHO"
                     or self.dataset_name == "DampedSHO"
                 ):
