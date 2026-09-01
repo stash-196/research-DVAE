@@ -53,14 +53,17 @@ if __name__ == "__main__":
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
     experiment_name = (
-        "20260701-"
-        + "XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500"
+        "20260816-"
+        + "XHRO_packet_loss_ep20000_ptf0-7_MTRNN9d_clip10_chAll_4d_hdim200_eStop500"
+        # + "20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500"
         # + "Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LSTM_hdim40_obsIndicate"
     )
     print("Experiment name:", experiment_name)
     #  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< data name >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     dataset_name = [
-        "Xhro",
+        # "Xhro",
+        "XhroPacketLoss",
+        # "PhysioNet2012",
         # "Lorenz63",
         # "SHO",
         # "DampedSHO"
@@ -82,6 +85,8 @@ if __name__ == "__main__":
     # Change to dictionary of lists
     # Network
     x_dim = [4]
+    if dataset_name[0] == "PhysioNet2012":
+        x_dim = [5]
     # dense_x = [1]
     dense_x = x_dim
     z_dim = [9]
@@ -107,7 +112,7 @@ if __name__ == "__main__":
     lr = [0.001]
     alpha_lr = [0.01]
     epochs = [20000]
-    if dataset_name[0] in ("Xhro", "XhroPacketLoss"):
+    if dataset_name[0] in ("Xhro", "XhroPacketLoss", "XhroProper", "PhysioNet2012"):
         early_stop_patience = [500]
     else:
         early_stop_patience = [200]
@@ -121,7 +126,7 @@ if __name__ == "__main__":
         # "sm"
     ]
 
-    if dataset_name[0] in ("Xhro", "XhroPacketLoss"):
+    if dataset_name[0] in ("Xhro", "XhroPacketLoss", "XhroProper", "PhysioNet2012"):
         sampling_ratio = [
             0.0,
             0.1,
@@ -206,9 +211,13 @@ if __name__ == "__main__":
             # "XHRO_04_XH057",
             "XHRO_02_XH070",
         ]
-    elif dataset_name[0] == "XhroPacketLoss":
+    elif dataset_name[0] in ("XhroPacketLoss", "XhroProper"):
         dataset_label = [
             "XHRO3506_20260622T142410000+0900",
+        ]
+    elif dataset_name[0] == "PhysioNet2012":
+        dataset_label = [
+            "hourly_v1",
         ]
     elif dataset_name[0] == "SHO":
         dataset_label = [
@@ -236,6 +245,15 @@ if __name__ == "__main__":
             "realtime",
             # "recovered",
         ]
+    elif dataset_name[0] == "XhroProper":
+        mask_label = [
+            "realtime",
+            # "retrans",
+        ]
+    elif dataset_name[0] == "PhysioNet2012":
+        mask_label = [
+            "None",
+        ]
     elif dataset_name[0] == "Lorenz63":
         mask_label = [
             "None",
@@ -260,6 +278,8 @@ if __name__ == "__main__":
     batch_size = [128]
     num_workers = [8]
     sequence_len = [1000]
+    if dataset_name[0] == "PhysioNet2012":
+        sequence_len = [48]
     val_indices = [0.2]
 
     if dataset_name[0] in ("Xhro", "XhroPacketLoss"):
@@ -283,6 +303,29 @@ if __name__ == "__main__":
             # "ch4_alpha",
             # "all_ch_relative_powers",
             # "mixed_1d",
+        ]
+    elif dataset_name[0] == "XhroProper":
+        observation_process = [
+            "raw_all",
+            # "raw_ch1",
+            # "raw_ch1_indicate",
+            # "raw_ecg",
+            # "bipolar_ecg",
+            # "bipolar_ecg_indicate",
+            # "bipolar_eeg",
+            # "bipolar_both",
+            # "ppg_ch1",
+            # "ppg_primary",
+            # "acc_xyz",
+            # "acc_motion",
+        ]
+    elif dataset_name[0] == "PhysioNet2012":
+        observation_process = [
+            "raw_vitals",
+            # "raw_hr",
+            # "raw_hr_indicate",
+            # "raw_vitals_interpolate",
+            # "raw_vitals_indicate",
         ]
     elif dataset_name[0] == "Lorenz63":
         observation_process = [
@@ -442,3 +485,8 @@ if __name__ == "__main__":
 
     with open(os.path.join(output_dir, "params_being_compared.json"), "w") as file:
         json.dump(json_params, file, indent=4)
+
+    print(
+        "Submit with:\n"
+        f"  bash scripts/slurm/train/run_training_multiple.sh {experiment_name}"
+    )

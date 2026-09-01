@@ -8,15 +8,21 @@ from dvae.dataset.sho_dataset import SimpleHarmonicOscillator
 from dvae.dataset.damped_sho_dataset import DampedSimpleHarmonicOscillator
 from dvae.dataset.xhro_dataset import Xhro
 from dvae.dataset.xhro_packet_loss_dataset import XhroPacketLoss
+from dvae.dataset.physionet2012_dataset import PhysioNet2012
 from dataclasses import dataclass
+
+from dvae.dataset.xhro_proper_dataset import XhroProper
 
 DATASET_REGISTRY = {
     "Lorenz63": Lorenz63,
     "Xhro": Xhro,
     "XhroPacketLoss": XhroPacketLoss,
+    "PhysioNet2012": PhysioNet2012,
     "SHO": SimpleHarmonicOscillator,
     "DampedSHO": DampedSimpleHarmonicOscillator,
 }
+if XhroProper is not None:
+    DATASET_REGISTRY["XhroProper"] = XhroProper
 
 
 @dataclass
