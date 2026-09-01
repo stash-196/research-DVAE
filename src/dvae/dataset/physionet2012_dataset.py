@@ -26,8 +26,6 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from .utils import data_utils
-
 HOURS_PER_STAY = 48
 DEFAULT_LABEL = "hourly_v1"
 # 1 sample / hour. eval dt = 1 / sampling_freq = 3600 s.
@@ -42,6 +40,56 @@ PHYSINET_OBS_COLUMNS = {
     "raw_hr": ["HR"],
     "raw_vitals": list(VITAL_COLUMNS),
 }
+
+
+def unique_stay_ids_in_order(stay_ids) -> list:
+    """Contiguous run labels, preserving first-seen order."""
+    ordered = []
+    for sid in stay_ids:
+        if not ordered or ordered[-1] != sid:
+            ordered.append(sid)
+    return ordered
+
+
+def partition_stay_ids(unique_ids: list, *, val_frac: float = 0.2):
+    """Last 20% of stays → test; remaining stays split train/valid.
+
+    Splits are by stay, never by concatenated hour, so a record cannot land
+    in two splits and a cut cannot fall mid-stay.
+    """
+    ids = list(unique_ids)
+    n = len(ids)
+    n_test = n // 5
+    if n >= 2 and n_test == 0:
+        n_test = 1
+    test_ids = ids[n - n_test :] if n_test else []
+    pool = ids[: n - n_test] if n_test else ids
+    n_val = int(len(pool) * val_frac) if pool else 0
+    if val_frac > 0 and n_val == 0 and len(pool) > 1:
+        n_val = 1
+    val_ids = pool[len(pool) - n_val :] if n_val else []
+    train_ids = pool[: len(pool) - n_val] if n_val else list(pool)
+    return train_ids, val_ids, test_ids
+
+
+def intra_stay_window_starts(
+    stay_id_per_row: np.ndarray, seq_len: int, overlap: bool
+) -> np.ndarray:
+    """Window starts that lie entirely inside one stay."""
+    stay_id_per_row = np.asarray(stay_id_per_row)
+    starts = []
+    n = len(stay_id_per_row)
+    i = 0
+    while i < n:
+        sid = stay_id_per_row[i]
+        j = i + 1
+        while j < n and stay_id_per_row[j] == sid:
+            j += 1
+        if j - i >= seq_len:
+            step = 1 if overlap else seq_len
+            starts.extend(range(i, j - seq_len + 1, step))
+        i = j
+    return np.asarray(starts, dtype=np.int64)
 
 
 def _resolve_obs_base(observation_process: str) -> tuple[str, str | None]:
@@ -191,7 +239,12 @@ def _interp_1d(x: np.ndarray) -> np.ndarray:
 
 
 class PhysioNet2012(Dataset):
-    """Hourly ICU vitals with native missingness. Same constructor as Xhro."""
+    """Hourly ICU vitals with native missingness. Same constructor as Xhro.
+
+    Stays are split by ``stay_id`` (last 20% test; remaining train/valid).
+    Sliding windows never cross a stay boundary, and interpolation is
+    applied per stay so NaNs are not filled from another patient.
+    """
 
     def __init__(
         self,
@@ -241,12 +294,28 @@ class PhysioNet2012(Dataset):
             drop=True
         )
 
+        unique_ids = unique_stay_ids_in_order(the_sequence["stay_id"].tolist())
+        train_ids, val_ids, test_ids = partition_stay_ids(
+            unique_ids, val_frac=float(self.val_indices)
+        )
         if self.split == "test":
-            the_sequence = the_sequence.iloc[-the_sequence.shape[0] // 5 :]
+            keep = test_ids
+        elif self.split == "valid":
+            keep = val_ids
         else:
-            the_sequence = the_sequence.iloc[: -the_sequence.shape[0] // 5]
+            keep = train_ids
+        if not keep:
+            raise ValueError(
+                f"No stays left for split={self.split!r} "
+                f"(n_stays={len(unique_ids)}, val_indices={self.val_indices})."
+            )
+        keep_set = set(keep)
+        the_sequence = the_sequence[
+            the_sequence["stay_id"].isin(keep_set)
+        ].reset_index(drop=True)
 
         self.full_sequence = the_sequence
+        self.stay_id_per_row = the_sequence["stay_id"].to_numpy()
         self.missing_mask = self._extract_missing_mask(the_sequence)
         processed = self.apply_observation_process(the_sequence)
         if isinstance(processed, torch.Tensor):
@@ -277,17 +346,29 @@ class PhysioNet2012(Dataset):
 
     def apply_observation_process(self, sequence: pd.DataFrame) -> torch.Tensor:
         base, suffix = _resolve_obs_base(self.observation_process)
-        data = sequence[PHYSINET_OBS_COLUMNS[base]].to_numpy(dtype=np.float64)
-        n_nan_before = int(np.isnan(data).sum())
-
+        cols = PHYSINET_OBS_COLUMNS[base]
         if suffix == "interpolate":
-            data = np.stack([_interp_1d(data[:, i]) for i in range(data.shape[1])], axis=1)
+            parts = []
+            n_nan_before = 0
+            for _, grp in sequence.groupby("stay_id", sort=False):
+                block = grp[cols].to_numpy(dtype=np.float64)
+                n_nan_before += int(np.isnan(block).sum())
+                parts.append(
+                    np.stack(
+                        [_interp_1d(block[:, i]) for i in range(block.shape[1])],
+                        axis=1,
+                    )
+                )
+            data = np.concatenate(parts, axis=0)
             n_nan_after = int(np.isnan(data).sum())
             print(
                 f"[PhysioNet2012][{self.observation_process}] "
                 f"NaNs before: {n_nan_before}, after: {n_nan_after}"
             )
             return torch.tensor(self.normalize(data), dtype=torch.float32)
+
+        data = sequence[cols].to_numpy(dtype=np.float64)
+        n_nan_before = int(np.isnan(data).sum())
 
         if suffix == "indicate":
             # Match Xhro: indicate flag on the first selected column only.
@@ -336,34 +417,47 @@ class PhysioNet2012(Dataset):
         return torch.as_tensor(item, dtype=torch.float32)
 
     def update_sequence_length(self, new_seq_len=None, minimum_nan_ratio=None):
-        if new_seq_len is not None:
-            self.seq_len = new_seq_len
-            num_frames = self.seq.shape[0]
-            if num_frames < self.seq_len:
-                raise ValueError(
-                    f"seq length {num_frames} < seq_len {self.seq_len}"
-                )
-            all_indices = data_utils.find_indices(
-                num_frames, self.seq_len, max(1, num_frames // self.seq_len)
-            )
-            if minimum_nan_ratio is not None:
-                valid_frames = []
-                for idx in all_indices:
-                    seq_slice = self.seq[idx : idx + self.seq_len]
-                    nan_ratio = np.float16(np.isnan(seq_slice)).mean()
-                    if nan_ratio <= minimum_nan_ratio:
-                        valid_frames.append(idx)
-                valid_frames = np.array(valid_frames)
-            else:
-                valid_frames = all_indices
-            train_indices, validation_indices = self.split_dataset(
-                valid_frames, self.val_indices
-            )
-            if self.split == "train":
-                valid_frames = train_indices
-            else:
-                valid_frames = validation_indices
-            self.data_idx = list(valid_frames)
-        else:
+        if new_seq_len is None:
             self.data_idx = [0]
+            return
+        stay_lens = np.diff(
+            np.r_[
+                0,
+                1 + np.flatnonzero(self.stay_id_per_row[1:] != self.stay_id_per_row[:-1]),
+                len(self.stay_id_per_row),
+            ]
+        )
+        max_stay = int(stay_lens.max()) if len(stay_lens) else 0
+        self.seq_len = min(int(new_seq_len), max_stay)
+        if self.seq_len < 1:
+            raise ValueError("seq_len must be >= 1 after stay-length cap")
+        all_indices = intra_stay_window_starts(
+            self.stay_id_per_row, self.seq_len, overlap=bool(self.overlap)
+        )
+        if all_indices.size == 0:
+            raise ValueError(
+                f"No intra-stay windows of length {self.seq_len} "
+                f"(max stay length {max_stay})."
+            )
+        if minimum_nan_ratio is not None:
+            valid_frames = []
+            for idx in all_indices:
+                seq_slice = self.seq[idx : idx + self.seq_len]
+                nan_ratio = np.float16(np.isnan(seq_slice)).mean()
+                if nan_ratio <= minimum_nan_ratio:
+                    valid_frames.append(idx)
+            valid_frames = np.array(valid_frames, dtype=np.int64)
+            if valid_frames.size == 0:
+                raise ValueError(
+                    f"No intra-stay windows of length {self.seq_len} "
+                    f"with nan_ratio <= {minimum_nan_ratio}."
+                )
+        else:
+            valid_frames = all_indices
+        # Stay membership already selected this split; keep every intra-stay
+        # window (do not re-split by val_indices).
+        if self.shuffle:
+            rng = np.random.default_rng()
+            rng.shuffle(valid_frames)
+        self.data_idx = list(valid_frames)
         return
