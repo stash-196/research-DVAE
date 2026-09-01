@@ -11,10 +11,7 @@ from dvae.dataset.xhro_packet_loss_dataset import XhroPacketLoss
 from dvae.dataset.physionet2012_dataset import PhysioNet2012
 from dataclasses import dataclass
 
-try:
-    from dvae.dataset.xhro_proper_dataset import XhroProper
-except ImportError:  # optional; file may live on another branch
-    XhroProper = None
+from dvae.dataset.xhro_proper_dataset import XhroProper
 
 DATASET_REGISTRY = {
     "Lorenz63": Lorenz63,
