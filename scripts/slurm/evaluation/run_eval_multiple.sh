@@ -79,7 +79,10 @@ declare -a experiments=(
 #     "/flash/DoyaU/stash/research-DVAE/saved_model/2026-02-12/deigo_cluster/20260212_Lorenz_len1000_drop0_ptf0.6-7-_clip1_AllLoss_MTRNN_hdi20-40_ptientHigh"
 
 # 2026-05-28/
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-28/deigo_cluster/20260528-Lorenz_auto0-0.8_miss0-0.7_clip1_ep20000_LossNone_MTRNN3-9d_hdim80"
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-28/deigo_cluster/20260528-Lorenz_auto0-0.8_miss0-0.7_clip1_ep20000_LossNone_MTRNN3-9d_hdim80"
+
+# 2026-08-16/ resume_XhroPacketLoss realtime MTRNN-9d ptf 0.0-0.7
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-08-16/deigo_cluster/20260816-XHRO_packet_loss_ep20000_ptf0-7_MTRNN9d_clip10_chAll_4d_hdim200_eStop500"
 
     # Add more directories here as needed
 )
@@ -94,6 +97,11 @@ VENV_PATH=/bucket/DoyaU/stash/containers/venvs/research-DVAE/
 DATA_HOST_PATH=/bucket/DoyaU/stash/research-DVAE/data
 SAVED_HOST_PATH=/flash/DoyaU/stash/research-DVAE/saved_model
 
+# Ensure temp dir exists (relative to repo root when script is run from there)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEMP_DIR="$SCRIPT_DIR/../temp"
+mkdir -p "$TEMP_DIR"
+
 # Loop over each experiment directory
 for EXPERIMENT_DIR in "${experiments[@]}"; do
     # Create log directory under the experiment directory
@@ -102,25 +110,61 @@ for EXPERIMENT_DIR in "${experiments[@]}"; do
     echo "[bash] LOG_DIR: $LOG_DIR"
     mkdir -p "$LOG_DIR"
 
-# Find all .pt files containing 'final' in subdirectories of EXPERIMENT_DIR
-find "$EXPERIMENT_DIR" -type f -name "*final*.pt" | while read MODEL_FILE; do
+    if [ ! -d "$EXPERIMENT_DIR" ]; then
+        echo "[bash] Experiment directory does not exist: $EXPERIMENT_DIR"
+        continue
+    fi
+
+# Prefer *final*.pt per run dir; else *checkpoint*.pt; skip if neither
+find "$EXPERIMENT_DIR" -mindepth 1 -maxdepth 1 -type d | while read RUN_DIR; do
+    RUN_BASENAME=$(basename "$RUN_DIR")
+    case "$RUN_BASENAME" in
+        logs|resume_logs|eval_logs|temp) continue ;;
+    esac
+
+    FINAL_FILE=$(find "$RUN_DIR" -maxdepth 1 -type f -name "*final*.pt" | head -n 1)
+    CHECKPOINT_FILE=$(find "$RUN_DIR" -maxdepth 1 -type f -name "*checkpoint*.pt" | head -n 1)
+
+    if [ -n "$FINAL_FILE" ]; then
+        MODEL_FILE="$FINAL_FILE"
+        WEIGHTS_SOURCE=final
+    elif [ -n "$CHECKPOINT_FILE" ]; then
+        MODEL_FILE="$CHECKPOINT_FILE"
+        WEIGHTS_SOURCE=checkpoint
+    else
+        echo "[bash] SKIP (no final/checkpoint weights): $RUN_DIR"
+        continue
+    fi
+
+    echo "=============================================="
+    echo "[bash] WEIGHTS_SOURCE=$WEIGHTS_SOURCE"
+    echo "[bash] RUN_DIR=$RUN_DIR"
+    echo "[bash] MODEL_FILE=$MODEL_FILE"
+    echo "=============================================="
+
     # Extract the base name of the model file for the job name
     MODEL_BASENAME=$(basename "$MODEL_FILE" .pt)
+    # Unique short tag so concurrent ptf jobs do not clobber the same temp slurm file
+    PTF_TAG=$(echo "$RUN_BASENAME" | grep -oE 'ptf_[0-9.]+' | head -n 1)
+    if [ -z "$PTF_TAG" ]; then
+        PTF_TAG=$(echo "$RUN_BASENAME" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-48)
+    fi
+    UNIQUE_NAME="${PTF_TAG}_${MODEL_BASENAME}"
 
     # Compute the container-internal path for the model file
     MODEL_CONTAINER_PATH=${MODEL_FILE/#$SAVED_HOST_PATH/\/saved_model}
 
     # Create a temporary SLURM script for this model
-    cat > "scripts/slurm/temp/run_eval_$MODEL_BASENAME.slurm" <<EOL
+    cat > "$TEMP_DIR/run_eval_$UNIQUE_NAME.slurm" <<EOL
 #!/bin/bash
-#SBATCH --job-name=${MODEL_BASENAME}_eval
+#SBATCH --job-name=${UNIQUE_NAME}_eval
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
 #SBATCH --time=1-00:00:00
-#SBATCH --output=${LOG_DIR}/%j_eval_${MODEL_BASENAME}.log
-#SBATCH --error=${LOG_DIR}/%j_eval_${MODEL_BASENAME}.err
+#SBATCH --output=${LOG_DIR}/%j_eval_${UNIQUE_NAME}.log
+#SBATCH --error=${LOG_DIR}/%j_eval_${UNIQUE_NAME}.err
 #SBATCH --partition=compute
 
 # Define variables
@@ -133,13 +177,16 @@ EXPERIMENT_DIR=$EXPERIMENT_DIR
 MODEL_FILE=$MODEL_FILE
 LOG_DIR=$LOG_DIR
 MODEL_BASENAME=$MODEL_BASENAME
+UNIQUE_NAME=$UNIQUE_NAME
+WEIGHTS_SOURCE=$WEIGHTS_SOURCE
 MODEL_CONTAINER_PATH=$MODEL_CONTAINER_PATH
 
 # Print the time, hostname, and job ID
 echo "[slurm] Time BEGIN: \$(date)"
 echo "[slurm] Running on host: \$(hostname)"
 echo "[slurm] Under SLURM JobID: \$SLURM_JOBID"
-echo "[slurm] Log file: \${LOG_DIR}/%j_eval_\${MODEL_BASENAME}.log"
+echo "[slurm] WEIGHTS_SOURCE=\$WEIGHTS_SOURCE"
+echo "[slurm] Log file: \${LOG_DIR}/%j_eval_\${UNIQUE_NAME}.log"
 echo "[slurm] MODEL_CONTAINER_PATH: \$MODEL_CONTAINER_PATH"
 
 # Check if model file exists on host
@@ -156,6 +203,19 @@ for PATH_VAR in "\$CONTAINER_PATH" "\$PROJECT_PATH" "\$VENV_PATH" "\$DATA_HOST_P
     fi
 done
 
+# Ensure Lmod/ml is available on compute nodes (non-login bash)
+if ! type ml >/dev/null 2>&1; then
+  source /etc/profile.d/modules.sh 2>/dev/null || source /etc/profile 2>/dev/null || true
+fi
+# Initialize Modules (compute nodes expose singularity under /apps MODULEPATH)
+if [ -f /etc/profile.d/zz_deigo_base.sh ]; then
+  # shellcheck disable=SC1091
+  source /etc/profile.d/zz_deigo_base.sh
+fi
+if [ -f /etc/profile.d/modules.sh ]; then
+  # shellcheck disable=SC1091
+  source /etc/profile.d/modules.sh
+fi
 ml singularity
 
 # Set environment variables to prevent buffering and thread oversubscription
@@ -165,14 +225,15 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
-# Run the Apptainer container
+# Run the Apptainer container (cwd = project root on host, bound as /workspace/project)
 singularity exec \\
+  --pwd /workspace/project \\
   --bind \$PROJECT_PATH:/workspace/project \\
   --bind \$VENV_PATH:/workspace/venv \\
   --bind \$DATA_HOST_PATH:/data \\
   --bind \$SAVED_HOST_PATH:/saved_model \\
   \$CONTAINER_PATH \\
-  bash -c "source /workspace/venv/bin/activate && python3 src/dvae/eval/eval_signal.py --saved_dict \$MODEL_CONTAINER_PATH"
+  bash -c "source /workspace/venv/bin/activate && python3 src/dvae/eval/eval_signal.py --saved_dict \$MODEL_CONTAINER_PATH --weights-source \$WEIGHTS_SOURCE --save-3d False"
 
 # Check exit code
 EXIT_CODE=\$?
@@ -186,10 +247,10 @@ echo "[slurm] Time END: \$(date)"
 EOL
 
     # Submit the temporary SLURM script to the queue
-    echo "[bash] Submitting eval for $MODEL_BASENAME"
-    sbatch "scripts/slurm/temp/run_eval_$MODEL_BASENAME.slurm"
+    echo "[bash] Submitting eval for $UNIQUE_NAME (WEIGHTS_SOURCE=$WEIGHTS_SOURCE)"
+    sbatch "$TEMP_DIR/run_eval_$UNIQUE_NAME.slurm"
 
     # Optionally, remove the temporary SLURM script after submission
-    # rm "scripts/slurm/temp/run_eval_$MODEL_BASENAME.slurm"
+    # rm "$TEMP_DIR/run_eval_$UNIQUE_NAME.slurm"
 done
 done

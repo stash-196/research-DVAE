@@ -18,7 +18,13 @@ def _embed_signal(sig, time_delay, delay_dims):
     sig = np.asarray(sig, dtype=np.float64)
     if sig.ndim != 1 or len(sig) < (delay_dims - 1) * time_delay + 2:
         return None
-    return compute_delay_embedding(sig, delay=time_delay, dimensions=delay_dims)
+    # Packet-loss / NaN-heavy segments can yield zero valid delay rows.
+    # Treat as skipped channel (caller already maps None -> nan KLD).
+    try:
+        return compute_delay_embedding(sig, delay=time_delay, dimensions=delay_dims)
+    except ValueError as exc:
+        print(f"[Eval][Geometry] Skipping embedding ({exc})")
+        return None
 
 
 def run_geometry_analysis_from_benchmarks(

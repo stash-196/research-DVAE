@@ -87,8 +87,8 @@ class Options:
             "--save-3d",
             dest="save_3d",
             type=lambda s: str(s).lower() in ("true", "1", "yes", "y"),
-            default=True,
-            help="Whether to save 3D visualizations (True/False). Default: True",
+            default=False,
+            help="Whether to save 3D visualizations (True/False). Default: False",
         )
         self.parser.add_argument(
             "--max-eval-batches",
@@ -148,6 +148,15 @@ class Options:
             help=(
                 "Only save metric figures (MSE/KLD/spectrum/GIFs) for window 0; "
                 "later windows compute scalars only (default: True)."
+            ),
+        )
+        self.parser.add_argument(
+            "--weights-source",
+            type=str,
+            default=None,
+            help=(
+                "Origin of weights file: 'final' or 'checkpoint'. "
+                "Stamped into evaluation_summary.yaml as weights_source."
             ),
         )
 
@@ -457,6 +466,13 @@ if __name__ == "__main__":
     metrics["total_params"] = int(dvae.parameter_count())
     # Add config to metrics
     metrics["config"] = config_dict
+    # Stamp weight provenance for eval harness (final vs checkpoint)
+    metrics["weights_source"] = params.get("weights_source")
+    metrics["weights_path"] = params.get("saved_dict")
+    print(
+        f"[Eval] WEIGHTS_SOURCE={metrics['weights_source']} "
+        f"weights_path={metrics['weights_path']}"
+    )
 
     # Check if the loss_model.pckl file exists
     if os.path.isfile(loss_file):

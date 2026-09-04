@@ -28,7 +28,7 @@ CONTAINER_PATH=/bucket/DoyaU/stash/containers/generic_ml_container.sif
 PROJECT_PATH=~/workspace/research-DVAE
 VENV_PATH=/bucket/DoyaU/stash/containers/venvs/research-DVAE/
 DATA_HOST_PATH=/bucket/DoyaU/stash/research-DVAE/data
-SAVED_HOST_PATH=/flash/DoyaU/stash/research-DVAE/saved_modelba
+SAVED_HOST_PATH=/flash/DoyaU/stash/research-DVAE/saved_model
 
 # Create output directory for today using SAVED_HOST_PATH
 OUTPUT_TODAY_DIR="$SAVED_HOST_PATH/$today"
