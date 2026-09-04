@@ -148,8 +148,8 @@ experiments=(
 # 	"/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-28/deigo_cluster/20260528-Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LossNone_LSTM_hdim40 --parameters sampling_ratio mask_label"
 # 	"/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-28/deigo_cluster/20260528-Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LossNone_LSTM_hdim40_obsIndicateMiss --parameters sampling_ratio mask_label"
 # 	"/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-28/deigo_cluster/20260528-Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LossNone_LSTM_hdim40_obsInterp --parameters sampling_ratio mask_label"
-	"/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-28/deigo_cluster/20260528-Lorenz_auto0-0.8_miss0-0.7_clip1_ep20000_LossNone_MTRNN3-9d_hdim80 --parameters sampling_ratio mask_label --filter alphas='0.1, 0.1, 0.1' "
-	"/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-28/deigo_cluster/20260528-Lorenz_auto0-0.8_miss0-0.7_clip1_ep20000_LossNone_MTRNN3-9d_hdim80 --parameters sampling_ratio mask_label --filter alphas='0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1' "
+	# "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-28/deigo_cluster/20260528-Lorenz_auto0-0.8_miss0-0.7_clip1_ep20000_LossNone_MTRNN3-9d_hdim80 --parameters sampling_ratio mask_label --filter alphas='0.1, 0.1, 0.1' "
+	# "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-28/deigo_cluster/20260528-Lorenz_auto0-0.8_miss0-0.7_clip1_ep20000_LossNone_MTRNN3-9d_hdim80 --parameters sampling_ratio mask_label --filter alphas='0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1' "
 
 # # 2026-05-29/
 #    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-05-29/deigo_cluster/20260529-Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_MTRNN3-9d_hdim80 --parameters sampling_ratio mask_label --filter alphas='0.1, 0.1, 0.1' "
@@ -181,6 +181,9 @@ experiments=(
 
 # 2026-07-01/
     # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-07-01/deigo_cluster/20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500 --parameters sampling_ratio"
+
+# 2026-08-16/ packet-loss realtime MTRNN-9d checkpoint evals
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-08-16/deigo_cluster/20260816-XHRO_packet_loss_ep20000_ptf0-7_MTRNN9d_clip10_chAll_4d_hdim200_eStop500 --parameters sampling_ratio"
 )
 
 # Get the current date in YYYY-MM-DD format
@@ -287,6 +290,15 @@ echo "[slurm] EXPERIMENT_CONTAINER_PATH: $EXPERIMENT_CONTAINER_PATH"
 echo "[slurm] Parameters: $PARAMETERS"
 echo "[slurm] Filters: $FILTERS"
 
+# Initialize Modules (compute nodes expose singularity under /apps MODULEPATH)
+if [ -f /etc/profile.d/zz_deigo_base.sh ]; then
+  # shellcheck disable=SC1091
+  source /etc/profile.d/zz_deigo_base.sh
+fi
+if [ -f /etc/profile.d/modules.sh ]; then
+  # shellcheck disable=SC1091
+  source /etc/profile.d/modules.sh
+fi
 ml singularity
 
 # Run the Apptainer container
