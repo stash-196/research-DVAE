@@ -53,16 +53,17 @@ if __name__ == "__main__":
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
     experiment_name = (
-        "20260816-"
-        + "XHRO_packet_loss_ep20000_ptf0-7_MTRNN9d_clip10_chAll_4d_hdim200_eStop500"
+        "20260904-"
+        # + "XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500_interpolate"
+        + "XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_chAll_4d_indicate_x8_hdim200_eStop500"
+        # + "20260816-XHRO_packet_loss_ep20000_ptf0-7_MTRNN9d_clip10_chAll_4d_hdim200_eStop500"
         # + "20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500"
-        # + "Lorenz_auto0-0.8_miss0-0.7_clip10_ep20000_LSTM_hdim40_obsIndicate"
     )
     print("Experiment name:", experiment_name)
     #  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< data name >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     dataset_name = [
-        # "Xhro",
-        "XhroPacketLoss",
+        "Xhro",
+        # "XhroPacketLoss",
         # "PhysioNet2012",
         # "Lorenz63",
         # "SHO",
@@ -289,6 +290,8 @@ if __name__ == "__main__":
             # "raw_ch2",
             # "raw_ch3",
             # "raw_ch4",
+            # "raw_all_interpolate",
+            "raw_all_indicate",
             # "raw_ch1_interpolate",
             # "raw_ch2_interpolate",
             # "raw_ch3_interpolate",
@@ -297,7 +300,6 @@ if __name__ == "__main__":
             # "raw_ch2_indicate",
             # "raw_ch3_indicate",
             # "raw_ch4_indicate",
-            "raw_all"
             # "ch4_relative_powers",
             # "ch4_3_vars",
             # "ch4_alpha",
