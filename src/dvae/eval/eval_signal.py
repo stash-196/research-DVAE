@@ -159,6 +159,17 @@ class Options:
                 "Stamped into evaluation_summary.yaml as weights_source."
             ),
         )
+        self.parser.add_argument(
+            "--no-viz",
+            dest="no_viz",
+            action="store_true",
+            default=False,
+            help=(
+                "Skip all qualitative plots and figure/GIF writing "
+                "(short/long/3d, metric figs, batch_all renders). "
+                "Still computes scalar metrics + evaluation_summary.yaml."
+            ),
+        )
 
     def get_params(self):
         self._initial()
@@ -514,392 +525,420 @@ if __name__ == "__main__":
         except Exception:
             pass
 
-        ############################################################################
-        # For shorter sequence
-        ############################################################################
-        if learning_algo.dataset_name == "Lorenz63":
-            new_seq_len = 1000
-        else:
-            new_seq_len = min(1000, len(test_dataloader.dataset.seq))
-        print(f"[Eval] New sequence length: {new_seq_len}")
-        # set random seed
-        torch.manual_seed(42)
-        test_dataloader.dataset.update_sequence_length(new_seq_len)
-        # Prepare the long sequence data
-        for i, batch_data_long in enumerate(test_dataloader):
-            # batch_data_long = next(iter(test_dataloader))  # Single batch for demonstration
-            batch_data_long = batch_data_long.to(device)
-            # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
-            batch_data_long = batch_data_long.permute(1, 0, 2)
-            seq_len_long, batch_size_long, _ = batch_data_long.shape
-            half_point_long = seq_len_long // 2
+        no_viz = bool(params.get("no_viz", False))
+        metrics["no_viz"] = no_viz
+        if no_viz:
+            print(
+                "[Eval] --no-viz: skipping qualitative short/long/3d and all "
+                "figure/GIF writing; scalar metrics only"
+            )
+            sys.stdout.flush()
+            missingness_stats = compute_missing_stats(
+                dataset_name=learning_algo.dataset_name,
+                dataset_config=dataset_config,
+            )
+            if missingness_stats is not None:
+                metrics["missingness_statistics"] = missingness_stats
+                train_s = missingness_stats.get("train", {})
+                test_s = missingness_stats.get("test", {})
+                metrics["missingness_train_count"] = int(train_s.get("missing_count", 0))
+                metrics["missingness_train_total_x"] = int(train_s.get("total_x", 0))
+                metrics["missingness_train_pct"] = float(
+                    train_s.get("missing_percentage", 0.0)
+                )
+                metrics["missingness_test_count"] = int(test_s.get("missing_count", 0))
+                metrics["missingness_test_total_x"] = int(test_s.get("total_x", 0))
+                metrics["missingness_test_pct"] = float(
+                    test_s.get("missing_percentage", 0.0)
+                )
 
-            # Extract missing mask for this batch
-            missing_mask_long = None
-            observation_process = getattr(dataset_config, "observation_process", None)
+        if not no_viz:
+            ############################################################################
+            # For shorter sequence
+            ############################################################################
+            if learning_algo.dataset_name == "Lorenz63":
+                new_seq_len = 1000
+            else:
+                new_seq_len = min(1000, len(test_dataloader.dataset.seq))
+            print(f"[Eval] New sequence length: {new_seq_len}")
+            # set random seed
+            torch.manual_seed(42)
+            test_dataloader.dataset.update_sequence_length(new_seq_len)
+            # Prepare the long sequence data
+            for i, batch_data_long in enumerate(test_dataloader):
+                # batch_data_long = next(iter(test_dataloader))  # Single batch for demonstration
+                batch_data_long = batch_data_long.to(device)
+                # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
+                batch_data_long = batch_data_long.permute(1, 0, 2)
+                seq_len_long, batch_size_long, _ = batch_data_long.shape
+                half_point_long = seq_len_long // 2
 
-            if (
-                _is_indicate_observation(observation_process)
-                and batch_data_long.size(2) >= 2
-            ):
-                # Interleaved indicate: per-signal missing from odd mask dims
-                missing_mask_long = _missing_mask_from_indicate(batch_data_long)
+                # Extract missing mask for this batch
+                missing_mask_long = None
+                observation_process = getattr(dataset_config, "observation_process", None)
 
-            elif hasattr(test_dataloader.dataset, "missing_mask"):
-                # Fallback for other observation processes
-                batch_start_idx = (
+                if (
+                    _is_indicate_observation(observation_process)
+                    and batch_data_long.size(2) >= 2
+                ):
+                    # Interleaved indicate: per-signal missing from odd mask dims
+                    missing_mask_long = _missing_mask_from_indicate(batch_data_long)
+
+                elif hasattr(test_dataloader.dataset, "missing_mask"):
+                    # Fallback for other observation processes
+                    batch_start_idx = (
+                        test_dataloader.dataset.data_idx[i]
+                        if i < len(test_dataloader.dataset.data_idx)
+                        else 0
+                    )
+                    batch_end_idx = min(
+                        batch_start_idx + seq_len_long,
+                        len(test_dataloader.dataset.missing_mask),
+                    )
+                    missing_mask_slice = test_dataloader.dataset.missing_mask[
+                        batch_start_idx:batch_end_idx
+                    ]
+
+                    # Convert to tensor and expand to batch size
+                    if isinstance(missing_mask_slice, np.ndarray):
+                        missing_mask_long = (
+                            torch.from_numpy(missing_mask_slice)
+                            .float()
+                            .unsqueeze(1)
+                            .expand(-1, batch_size_long, -1)
+                        )
+                    else:
+                        missing_mask_long = missing_mask_slice.unsqueeze(1).expand(
+                            -1, batch_size_long, -1
+                        )
+
+                # Plot the spectral analysis
+                autonomous_mode_selector_long = create_autonomous_mode_selector(
+                    seq_len_long,
+                    mode="half_half",
+                    batch_size=batch_size_long,
+                    x_dim=dataset_config.x_dim,
+                )
+                # === MASKING BASELINE: Force pure teacher-forcing on mask dimension during evaluation ===
+                # For observation_process == "only_x_indicate", the mask channel must always be 100% TF
+                # to keep evaluation consistent with training behavior.
+                if _is_indicate_observation(
+                    getattr(dataset_config, "observation_process", None)
+                ):
+                    autonomous_mode_selector_long = _force_indicate_mask_tf(
+                        autonomous_mode_selector_long
+                    )
+                # ====================================================================================
+                # turn input into tensor and send to GPU if needed
+                batch_data_long_tensor = batch_data_long.clone().detach().to(device)
+                recon_data_long = (
+                    dvae(
+                        batch_data_long_tensor,
+                        mode_selector=autonomous_mode_selector_long,
+                        inference_mode=True,
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
+
+                if test_dataloader.dataset.is_segmented_1d:
+                    x_data_long = batch_data_long[:, 0, :].reshape(-1)
+                    recon_x_data_long = recon_data_long[:, 0, :].reshape(-1)
+                else:
+                    x_data_long = batch_data_long[:, 0, 0]
+                    recon_x_data_long = recon_data_long[:, 0, 0]
+
+                # Plot the reconstruction vs true sequence
+                visualize_teacherforcing_2_autonomous(
+                    batch_data_long[:, 1:, :],
+                    dvae,
+                    auto_mode_selector=autonomous_mode_selector_long[:, 1:, :],
+                    save_path=save_fig_dir,
+                    explain=f"final_short_inference_mode_half_half_short",
+                    inference_mode=True,
+                    missing_mask=(
+                        missing_mask_long[1:, :, :]
+                        if missing_mask_long is not None
+                        else None
+                    ),
+                    is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
+                    hide_mask_output=_is_indicate_observation(
+                        getattr(dataset_config, "observation_process", None)
+                    ),
+                )
+
+            # Visualize training mode short sequence with missingness
+            print("[Eval] Visualizing training mode short sequence with missingness...")
+            visualize_training_mode_short_sequence(
+                dataset_name=learning_algo.dataset_name,
+                dataset_config=dataset_config,
+                device=device,
+                dvae=dvae,
+                save_fig_dir=save_fig_dir,
+                seq_len=new_seq_len,
+            )
+
+            # Compute missing-value statistics (train & test)
+            missingness_stats = compute_missing_stats(
+                dataset_name=learning_algo.dataset_name,
+                dataset_config=dataset_config,
+            )
+            if missingness_stats is not None:
+                metrics["missingness_statistics"] = missingness_stats
+                # Flattened summary keys for easy ingestion
+                train_s = missingness_stats.get("train", {})
+                test_s = missingness_stats.get("test", {})
+                metrics["missingness_train_count"] = int(train_s.get("missing_count", 0))
+                metrics["missingness_train_total_x"] = int(train_s.get("total_x", 0))
+                metrics["missingness_train_pct"] = float(
+                    train_s.get("missing_percentage", 0.0)
+                )
+                metrics["missingness_test_count"] = int(test_s.get("missing_count", 0))
+                metrics["missingness_test_total_x"] = int(test_s.get("total_x", 0))
+                metrics["missingness_test_pct"] = float(
+                    test_s.get("missing_percentage", 0.0)
+                )
+
+            # visualize the hidden states
+            visualize_variable_evolution(
+                dvae.h,
+                batch_data=batch_data_long,
+                save_dir=save_fig_dir,
+                variable_name=f"hidden",
+                alphas=alphas_per_unit,
+                add_lines_lst=[half_point_long],
+                is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
+            )
+
+            # visualize the x_features
+            visualize_variable_evolution(
+                dvae.feature_x,
+                batch_data=batch_data_long,
+                save_dir=save_fig_dir,
+                variable_name=f"x_features",
+                add_lines_lst=[half_point_long],
+                is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
+            )
+
+            ############################################################################
+            # For longer sequence
+            ############################################################################
+
+            new_seq_len = min(20000, len(test_dataloader.dataset.seq))
+            print(f"[Eval] Long-sequence eval: seq_len={new_seq_len}")
+            test_dataloader.dataset.update_sequence_length(new_seq_len)
+            n_long_windows = len(test_dataloader.dataset.data_idx)
+            print(
+                f"[Eval] Test set has {n_long_windows} window(s) at seq_len={new_seq_len} "
+                f"(qualitative figures use window 0 only)"
+            )
+            sys.stdout.flush()
+            # Prepare the long sequence data
+            for i, batch_data_long in enumerate(test_dataloader):
+                # batch_data_long = next(iter(test_dataloader))  # Single batch for demonstration
+                batch_data_long = batch_data_long.to(device)
+                # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
+                batch_data_long = batch_data_long.permute(1, 0, 2)
+                seq_len_long, batch_size_long, _ = batch_data_long.shape
+                half_point_long = seq_len_long // 2
+                start_frame = (
                     test_dataloader.dataset.data_idx[i]
                     if i < len(test_dataloader.dataset.data_idx)
                     else 0
                 )
-                batch_end_idx = min(
-                    batch_start_idx + seq_len_long,
-                    len(test_dataloader.dataset.missing_mask),
+                print(
+                    f"[Eval] Qualitative visualizations: window 0 "
+                    f"(start_frame={start_frame}, seq_len={seq_len_long})"
                 )
-                missing_mask_slice = test_dataloader.dataset.missing_mask[
-                    batch_start_idx:batch_end_idx
-                ]
+                sys.stdout.flush()
 
-                # Convert to tensor and expand to batch size
-                if isinstance(missing_mask_slice, np.ndarray):
-                    missing_mask_long = (
-                        torch.from_numpy(missing_mask_slice)
-                        .float()
-                        .unsqueeze(1)
-                        .expand(-1, batch_size_long, -1)
+                # Extract missing mask for this batch
+                missing_mask_long = None
+                observation_process = getattr(dataset_config, "observation_process", None)
+
+                if (
+                    _is_indicate_observation(observation_process)
+                    and batch_data_long.size(2) >= 2
+                ):
+                    # Interleaved indicate: per-signal missing from odd mask dims
+                    missing_mask_long = _missing_mask_from_indicate(batch_data_long)
+
+                elif hasattr(test_dataloader.dataset, "missing_mask"):
+                    # Fallback for other observation processes
+                    batch_start_idx = start_frame
+                    batch_end_idx = min(
+                        batch_start_idx + seq_len_long,
+                        len(test_dataloader.dataset.missing_mask),
                     )
+                    missing_mask_slice = test_dataloader.dataset.missing_mask[
+                        batch_start_idx:batch_end_idx
+                    ]
+
+                    # Convert to tensor and expand to batch size
+                    if isinstance(missing_mask_slice, np.ndarray):
+                        missing_mask_long = (
+                            torch.from_numpy(missing_mask_slice)
+                            .float()
+                            .unsqueeze(1)
+                            .expand(-1, batch_size_long, -1)
+                        )
+                    else:
+                        missing_mask_long = missing_mask_slice.unsqueeze(1).expand(
+                            -1, batch_size_long, -1
+                        )
+
+                # Plot the spectral analysis
+                autonomous_mode_selector_long = create_autonomous_mode_selector(
+                    seq_len_long,
+                    # mode="half_half",
+                    mode="even_bursts",
+                    autonomous_ratio=0.1,
+                    batch_size=batch_size_long,
+                    x_dim=dataset_config.x_dim,
+                )
+                # === MASKING BASELINE: Force pure teacher-forcing on mask dimension during evaluation ===
+                # For observation_process == "only_x_indicate", the mask channel must always be 100% TF
+                # to keep evaluation consistent with training behavior.
+                if _is_indicate_observation(
+                    getattr(dataset_config, "observation_process", None)
+                ):
+                    autonomous_mode_selector_long = _force_indicate_mask_tf(
+                        autonomous_mode_selector_long
+                    )
+                # ====================================================================================
+                # turn input into tensor and send to GPU if needed
+                batch_data_long_tensor = batch_data_long.clone().detach().to(device)
+                recon_data_long = (
+                    dvae(
+                        batch_data_long_tensor,
+                        mode_selector=autonomous_mode_selector_long,
+                        inference_mode=True,
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
+
+                if test_dataloader.dataset.is_segmented_1d:
+                    x_data_long = batch_data_long[:, 0, :].reshape(-1)
+                    recon_x_data_long = recon_data_long[:, 0, :].reshape(-1)
                 else:
-                    missing_mask_long = missing_mask_slice.unsqueeze(1).expand(
-                        -1, batch_size_long, -1
-                    )
+                    x_data_long = batch_data_long[:, 0, 0]
+                    recon_x_data_long = recon_data_long[:, 0, 0]
 
-            # Plot the spectral analysis
-            autonomous_mode_selector_long = create_autonomous_mode_selector(
-                seq_len_long,
-                mode="half_half",
-                batch_size=batch_size_long,
-                x_dim=dataset_config.x_dim,
-            )
-            # === MASKING BASELINE: Force pure teacher-forcing on mask dimension during evaluation ===
-            # For observation_process == "only_x_indicate", the mask channel must always be 100% TF
-            # to keep evaluation consistent with training behavior.
-            if _is_indicate_observation(
-                getattr(dataset_config, "observation_process", None)
-            ):
-                autonomous_mode_selector_long = _force_indicate_mask_tf(
-                    autonomous_mode_selector_long
-                )
-            # ====================================================================================
-            # turn input into tensor and send to GPU if needed
-            batch_data_long_tensor = batch_data_long.clone().detach().to(device)
-            recon_data_long = (
-                dvae(
-                    batch_data_long_tensor,
-                    mode_selector=autonomous_mode_selector_long,
+                visualize_teacherforcing_2_autonomous(
+                    batch_data_long,
+                    dvae,
+                    auto_mode_selector=autonomous_mode_selector_long,
+                    save_path=save_fig_dir,
+                    explain="final_long_inference_mode_even_burst",
                     inference_mode=True,
+                    missing_mask=missing_mask_long,
+                    is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
+                    hide_mask_output=_is_indicate_observation(
+                        getattr(dataset_config, "observation_process", None)
+                    ),
                 )
-                .detach()
-                .cpu()
-                .numpy()
-            )
-
-            if test_dataloader.dataset.is_segmented_1d:
-                x_data_long = batch_data_long[:, 0, :].reshape(-1)
-                recon_x_data_long = recon_data_long[:, 0, :].reshape(-1)
-            else:
-                x_data_long = batch_data_long[:, 0, 0]
-                recon_x_data_long = recon_data_long[:, 0, 0]
-
-            # Plot the reconstruction vs true sequence
-            visualize_teacherforcing_2_autonomous(
-                batch_data_long[:, 1:, :],
-                dvae,
-                auto_mode_selector=autonomous_mode_selector_long[:, 1:, :],
-                save_path=save_fig_dir,
-                explain=f"final_short_inference_mode_half_half_short",
-                inference_mode=True,
-                missing_mask=(
-                    missing_mask_long[1:, :, :]
-                    if missing_mask_long is not None
-                    else None
-                ),
-                is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
-                hide_mask_output=_is_indicate_observation(
+                # Also visualize a half-half TF/Auto schedule on the same long sequence
+                autonomous_mode_selector_half = create_autonomous_mode_selector(
+                    seq_len_long,
+                    mode="half_half",
+                    batch_size=batch_size_long,
+                    x_dim=dataset_config.x_dim,
+                )
+                if _is_indicate_observation(
                     getattr(dataset_config, "observation_process", None)
-                ),
-            )
-
-        # Visualize training mode short sequence with missingness
-        print("[Eval] Visualizing training mode short sequence with missingness...")
-        visualize_training_mode_short_sequence(
-            dataset_name=learning_algo.dataset_name,
-            dataset_config=dataset_config,
-            device=device,
-            dvae=dvae,
-            save_fig_dir=save_fig_dir,
-            seq_len=new_seq_len,
-        )
-
-        # Compute missing-value statistics (train & test)
-        missingness_stats = compute_missing_stats(
-            dataset_name=learning_algo.dataset_name,
-            dataset_config=dataset_config,
-        )
-        if missingness_stats is not None:
-            metrics["missingness_statistics"] = missingness_stats
-            # Flattened summary keys for easy ingestion
-            train_s = missingness_stats.get("train", {})
-            test_s = missingness_stats.get("test", {})
-            metrics["missingness_train_count"] = int(train_s.get("missing_count", 0))
-            metrics["missingness_train_total_x"] = int(train_s.get("total_x", 0))
-            metrics["missingness_train_pct"] = float(
-                train_s.get("missing_percentage", 0.0)
-            )
-            metrics["missingness_test_count"] = int(test_s.get("missing_count", 0))
-            metrics["missingness_test_total_x"] = int(test_s.get("total_x", 0))
-            metrics["missingness_test_pct"] = float(
-                test_s.get("missing_percentage", 0.0)
-            )
-
-        # visualize the hidden states
-        visualize_variable_evolution(
-            dvae.h,
-            batch_data=batch_data_long,
-            save_dir=save_fig_dir,
-            variable_name=f"hidden",
-            alphas=alphas_per_unit,
-            add_lines_lst=[half_point_long],
-            is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
-        )
-
-        # visualize the x_features
-        visualize_variable_evolution(
-            dvae.feature_x,
-            batch_data=batch_data_long,
-            save_dir=save_fig_dir,
-            variable_name=f"x_features",
-            add_lines_lst=[half_point_long],
-            is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
-        )
-
-        ############################################################################
-        # For longer sequence
-        ############################################################################
-
-        new_seq_len = min(20000, len(test_dataloader.dataset.seq))
-        print(f"[Eval] Long-sequence eval: seq_len={new_seq_len}")
-        test_dataloader.dataset.update_sequence_length(new_seq_len)
-        n_long_windows = len(test_dataloader.dataset.data_idx)
-        print(
-            f"[Eval] Test set has {n_long_windows} window(s) at seq_len={new_seq_len} "
-            f"(qualitative figures use window 0 only)"
-        )
-        sys.stdout.flush()
-        # Prepare the long sequence data
-        for i, batch_data_long in enumerate(test_dataloader):
-            # batch_data_long = next(iter(test_dataloader))  # Single batch for demonstration
-            batch_data_long = batch_data_long.to(device)
-            # (batch_size, seq_len, x_dim) -> (seq_len, batch_size, x_dim)
-            batch_data_long = batch_data_long.permute(1, 0, 2)
-            seq_len_long, batch_size_long, _ = batch_data_long.shape
-            half_point_long = seq_len_long // 2
-            start_frame = (
-                test_dataloader.dataset.data_idx[i]
-                if i < len(test_dataloader.dataset.data_idx)
-                else 0
-            )
-            print(
-                f"[Eval] Qualitative visualizations: window 0 "
-                f"(start_frame={start_frame}, seq_len={seq_len_long})"
-            )
-            sys.stdout.flush()
-
-            # Extract missing mask for this batch
-            missing_mask_long = None
-            observation_process = getattr(dataset_config, "observation_process", None)
-
-            if (
-                _is_indicate_observation(observation_process)
-                and batch_data_long.size(2) >= 2
-            ):
-                # Interleaved indicate: per-signal missing from odd mask dims
-                missing_mask_long = _missing_mask_from_indicate(batch_data_long)
-
-            elif hasattr(test_dataloader.dataset, "missing_mask"):
-                # Fallback for other observation processes
-                batch_start_idx = start_frame
-                batch_end_idx = min(
-                    batch_start_idx + seq_len_long,
-                    len(test_dataloader.dataset.missing_mask),
-                )
-                missing_mask_slice = test_dataloader.dataset.missing_mask[
-                    batch_start_idx:batch_end_idx
-                ]
-
-                # Convert to tensor and expand to batch size
-                if isinstance(missing_mask_slice, np.ndarray):
-                    missing_mask_long = (
-                        torch.from_numpy(missing_mask_slice)
-                        .float()
-                        .unsqueeze(1)
-                        .expand(-1, batch_size_long, -1)
+                ):
+                    autonomous_mode_selector_half = _force_indicate_mask_tf(
+                        autonomous_mode_selector_half
                     )
+                visualize_teacherforcing_2_autonomous(
+                    batch_data_long,
+                    dvae,
+                    auto_mode_selector=autonomous_mode_selector_half,
+                    save_path=save_fig_dir,
+                    explain="final_long_inference_mode_half_half",
+                    inference_mode=True,
+                    missing_mask=missing_mask_long,
+                    is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
+                    hide_mask_output=_is_indicate_observation(
+                        getattr(dataset_config, "observation_process", None)
+                    ),
+                )
+                visualize_teacherforcing_2_autonomous(
+                    batch_data_long,
+                    dvae,
+                    auto_mode_selector=autonomous_mode_selector_long,
+                    save_path=save_fig_dir,
+                    explain="final_long_generative_mode",
+                    inference_mode=False,
+                    missing_mask=missing_mask_long,
+                    is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
+                    hide_mask_output=_is_indicate_observation(
+                        getattr(dataset_config, "observation_process", None)
+                    ),
+                )
+
+                # Hidden-state 3D embedding uses warmed half-half pass (batch 0 only)
+                _, half_mode_selector = run_forward_with_mode(
+                    dvae,
+                    batch_data_long,
+                    mode="half_half",
+                    observation_process=observation_process,
+                )
+                teacher_forced_mask = ~half_mode_selector[:, 0, 0].bool()
+                autonomous_mask = half_mode_selector[:, 0, 0].bool()
+                teacherforced_states = dvae.h[teacher_forced_mask, 0, :]
+                autonomous_states = dvae.h[autonomous_mask, 0, :]
+                embedding_states_list = [teacherforced_states, autonomous_states]
+                embedding_states_conditions = ["teacher-forced", "autonomous"]
+                embedding_states_colors = ["Greens", "Reds"]
+
+                if params.get("save_3d", True):
+                    hidden_3d_gif_dir = os.path.join(save_fig_dir, "3d_hidden_gifs")
+                    if not os.path.exists(hidden_3d_gif_dir):
+                        os.makedirs(hidden_3d_gif_dir)
+                    vis_embedding_space_params = [
+                        {
+                            "states_list": embedding_states_list,
+                            "save_dir": hidden_3d_gif_dir,
+                            "variable_name": f"hidden",
+                            "condition_names": embedding_states_conditions,
+                            "base_colors": embedding_states_colors,
+                            "technique": "kernel_pca",
+                        },
+                        {
+                            "states_list": embedding_states_list,
+                            "save_dir": hidden_3d_gif_dir,
+                            "variable_name": f"hidden",
+                            "condition_names": embedding_states_conditions,
+                            "base_colors": embedding_states_colors,
+                            "technique": "ica",
+                        },
+                        {
+                            "states_list": embedding_states_list,
+                            "save_dir": hidden_3d_gif_dir,
+                            "variable_name": f"hidden",
+                            "condition_names": embedding_states_conditions,
+                            "base_colors": embedding_states_colors,
+                            "technique": "tsne",
+                        },
+                    ]
+                    print("[Eval] [CHECKPOINT] Starting parallel visualizations...")
+                    sys.stdout.flush()
+                    run_parallel_visualizations(
+                        visualize_embedding_space, vis_embedding_space_params
+                    )
+                    print("[Eval] [CHECKPOINT] Parallel visualizations completed")
+                    sys.stdout.flush()
                 else:
-                    missing_mask_long = missing_mask_slice.unsqueeze(1).expand(
-                        -1, batch_size_long, -1
-                    )
+                    print("[Eval] Skipping 3D visualizations (save_3d=False)")
+                    sys.stdout.flush()
 
-            # Plot the spectral analysis
-            autonomous_mode_selector_long = create_autonomous_mode_selector(
-                seq_len_long,
-                # mode="half_half",
-                mode="even_bursts",
-                autonomous_ratio=0.1,
-                batch_size=batch_size_long,
-                x_dim=dataset_config.x_dim,
-            )
-            # === MASKING BASELINE: Force pure teacher-forcing on mask dimension during evaluation ===
-            # For observation_process == "only_x_indicate", the mask channel must always be 100% TF
-            # to keep evaluation consistent with training behavior.
-            if _is_indicate_observation(
-                getattr(dataset_config, "observation_process", None)
-            ):
-                autonomous_mode_selector_long = _force_indicate_mask_tf(
-                    autonomous_mode_selector_long
-                )
-            # ====================================================================================
-            # turn input into tensor and send to GPU if needed
-            batch_data_long_tensor = batch_data_long.clone().detach().to(device)
-            recon_data_long = (
-                dvae(
-                    batch_data_long_tensor,
-                    mode_selector=autonomous_mode_selector_long,
-                    inference_mode=True,
-                )
-                .detach()
-                .cpu()
-                .numpy()
-            )
+                break  # Visualizations only on first long-sequence batch
 
-            if test_dataloader.dataset.is_segmented_1d:
-                x_data_long = batch_data_long[:, 0, :].reshape(-1)
-                recon_x_data_long = recon_data_long[:, 0, :].reshape(-1)
-            else:
-                x_data_long = batch_data_long[:, 0, 0]
-                recon_x_data_long = recon_data_long[:, 0, 0]
-
-            visualize_teacherforcing_2_autonomous(
-                batch_data_long,
-                dvae,
-                auto_mode_selector=autonomous_mode_selector_long,
-                save_path=save_fig_dir,
-                explain="final_long_inference_mode_even_burst",
-                inference_mode=True,
-                missing_mask=missing_mask_long,
-                is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
-                hide_mask_output=_is_indicate_observation(
-                    getattr(dataset_config, "observation_process", None)
-                ),
-            )
-            # Also visualize a half-half TF/Auto schedule on the same long sequence
-            autonomous_mode_selector_half = create_autonomous_mode_selector(
-                seq_len_long,
-                mode="half_half",
-                batch_size=batch_size_long,
-                x_dim=dataset_config.x_dim,
-            )
-            if _is_indicate_observation(
-                getattr(dataset_config, "observation_process", None)
-            ):
-                autonomous_mode_selector_half = _force_indicate_mask_tf(
-                    autonomous_mode_selector_half
-                )
-            visualize_teacherforcing_2_autonomous(
-                batch_data_long,
-                dvae,
-                auto_mode_selector=autonomous_mode_selector_half,
-                save_path=save_fig_dir,
-                explain="final_long_inference_mode_half_half",
-                inference_mode=True,
-                missing_mask=missing_mask_long,
-                is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
-                hide_mask_output=_is_indicate_observation(
-                    getattr(dataset_config, "observation_process", None)
-                ),
-            )
-            visualize_teacherforcing_2_autonomous(
-                batch_data_long,
-                dvae,
-                auto_mode_selector=autonomous_mode_selector_long,
-                save_path=save_fig_dir,
-                explain="final_long_generative_mode",
-                inference_mode=False,
-                missing_mask=missing_mask_long,
-                is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
-                hide_mask_output=_is_indicate_observation(
-                    getattr(dataset_config, "observation_process", None)
-                ),
-            )
-
-            # Hidden-state 3D embedding uses warmed half-half pass (batch 0 only)
-            _, half_mode_selector = run_forward_with_mode(
-                dvae,
-                batch_data_long,
-                mode="half_half",
-                observation_process=observation_process,
-            )
-            teacher_forced_mask = ~half_mode_selector[:, 0, 0].bool()
-            autonomous_mask = half_mode_selector[:, 0, 0].bool()
-            teacherforced_states = dvae.h[teacher_forced_mask, 0, :]
-            autonomous_states = dvae.h[autonomous_mask, 0, :]
-            embedding_states_list = [teacherforced_states, autonomous_states]
-            embedding_states_conditions = ["teacher-forced", "autonomous"]
-            embedding_states_colors = ["Greens", "Reds"]
-
-            if params.get("save_3d", True):
-                hidden_3d_gif_dir = os.path.join(save_fig_dir, "3d_hidden_gifs")
-                if not os.path.exists(hidden_3d_gif_dir):
-                    os.makedirs(hidden_3d_gif_dir)
-                vis_embedding_space_params = [
-                    {
-                        "states_list": embedding_states_list,
-                        "save_dir": hidden_3d_gif_dir,
-                        "variable_name": f"hidden",
-                        "condition_names": embedding_states_conditions,
-                        "base_colors": embedding_states_colors,
-                        "technique": "kernel_pca",
-                    },
-                    {
-                        "states_list": embedding_states_list,
-                        "save_dir": hidden_3d_gif_dir,
-                        "variable_name": f"hidden",
-                        "condition_names": embedding_states_conditions,
-                        "base_colors": embedding_states_colors,
-                        "technique": "ica",
-                    },
-                    {
-                        "states_list": embedding_states_list,
-                        "save_dir": hidden_3d_gif_dir,
-                        "variable_name": f"hidden",
-                        "condition_names": embedding_states_conditions,
-                        "base_colors": embedding_states_colors,
-                        "technique": "tsne",
-                    },
-                ]
-                print("[Eval] [CHECKPOINT] Starting parallel visualizations...")
-                sys.stdout.flush()
-                run_parallel_visualizations(
-                    visualize_embedding_space, vis_embedding_space_params
-                )
-                print("[Eval] [CHECKPOINT] Parallel visualizations completed")
-                sys.stdout.flush()
-            else:
-                print("[Eval] Skipping 3D visualizations (save_3d=False)")
-                sys.stdout.flush()
-
-            break  # Visualizations only on first long-sequence batch
-
-        ############################################################################
+            ############################################################################
         # Quantitative metrics (multi-batch, modular mode selectors)
         ############################################################################
         auto_eval_mode = params.get("auto_eval_mode", "half_half")
@@ -979,7 +1018,9 @@ if __name__ == "__main__":
             f"[Eval] Forward passes per window: TF=all_0, Auto={auto_eval_mode}"
             f"{extra_mode_info}"
         )
-        if skip_metrics_viz_after_batch_0:
+        if no_viz:
+            print("[Eval] Metric figures: disabled (--no-viz)")
+        elif skip_metrics_viz_after_batch_0:
             print(
                 "[Eval] Metric figures: window 0 only "
                 "(set --skip-metrics-viz-after-batch-0 false to save all windows)"
@@ -1005,7 +1046,9 @@ if __name__ == "__main__":
                 flip_point=auto_eval_flip_point,
                 block_len=auto_eval_block_len,
             )
-            save_metric_figures = (i == 0) or (not skip_metrics_viz_after_batch_0)
+            save_metric_figures = (not no_viz) and (
+                (i == 0) or (not skip_metrics_viz_after_batch_0)
+            )
 
             print(
                 f"[Eval] Evaluating window {i + 1}/{n_eval_windows} "
@@ -1254,17 +1297,24 @@ if __name__ == "__main__":
 
             # --- batch_all: stitched visuals across all scored windows ---
             batch_all_dir = os.path.join(metrics_save_fig_dir, "batch_all")
-            print(
-                f"[Eval] Rendering batch_all visuals ({len(batch_visual_records)} windows) "
-                f"-> {batch_all_dir}"
-            )
-            sys.stdout.flush()
-            render_batch_all_visuals(
-                batch_visual_records,
-                save_dir=batch_all_dir,
-                gap=1,
-                explain_suffix=f"mode_{auto_eval_mode}_n{len(batch_visual_records)}",
-            )
+            if no_viz:
+                print(
+                    "[Eval] --no-viz: skipping batch_all figure renders "
+                    f"({len(batch_visual_records)} windows collected for scalars)"
+                )
+                sys.stdout.flush()
+            else:
+                print(
+                    f"[Eval] Rendering batch_all visuals ({len(batch_visual_records)} windows) "
+                    f"-> {batch_all_dir}"
+                )
+                sys.stdout.flush()
+                render_batch_all_visuals(
+                    batch_visual_records,
+                    save_dir=batch_all_dir,
+                    gap=1,
+                    explain_suffix=f"mode_{auto_eval_mode}_n{len(batch_visual_records)}",
+                )
 
             # Stitched-cloud KLD (bar height) + per-window median/IQR (spread)
             kld_metrics = compute_stitched_kld_metrics(
@@ -1355,14 +1405,15 @@ if __name__ == "__main__":
                     print(f"[Eval] batch_all reference channels skipped: {exc}")
                     reference_errors = None
 
-            render_summary_error_bars(
-                mse_results_list,
-                geom_results_list,
-                spectrum_results_list,
-                save_dir=batch_all_dir,
-                reference_errors=reference_errors,
-                kld_metrics=kld_metrics,
-            )
+            if not no_viz:
+                render_summary_error_bars(
+                    mse_results_list,
+                    geom_results_list,
+                    spectrum_results_list,
+                    save_dir=batch_all_dir,
+                    reference_errors=reference_errors,
+                    kld_metrics=kld_metrics,
+                )
 
             log_file = os.path.join(save_dir, "evaluation_log.txt")
             with open(log_file, "w") as f:

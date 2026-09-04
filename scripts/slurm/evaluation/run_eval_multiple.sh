@@ -224,6 +224,11 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
+NO_VIZ_FLAG=""
+if [ "${NO_VIZ:-0}" = "1" ]; then
+  NO_VIZ_FLAG="--no-viz"
+  echo "[slurm] NO_VIZ=1 -> passing --no-viz"
+fi
 
 # Run the Apptainer container (cwd = project root on host, bound as /workspace/project)
 singularity exec \\
@@ -233,7 +238,7 @@ singularity exec \\
   --bind \$DATA_HOST_PATH:/data \\
   --bind \$SAVED_HOST_PATH:/saved_model \\
   \$CONTAINER_PATH \\
-  bash -c "source /workspace/venv/bin/activate && python3 src/dvae/eval/eval_signal.py --saved_dict \$MODEL_CONTAINER_PATH --weights-source \$WEIGHTS_SOURCE --save-3d False"
+  bash -c "source /workspace/venv/bin/activate && python3 src/dvae/eval/eval_signal.py --saved_dict \$MODEL_CONTAINER_PATH --weights-source \$WEIGHTS_SOURCE --save-3d False \$NO_VIZ_FLAG"
 
 # Check exit code
 EXIT_CODE=\$?
