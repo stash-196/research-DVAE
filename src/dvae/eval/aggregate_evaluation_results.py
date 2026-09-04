@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from collections import defaultdict
 import glob
+import re
 import csv
 import shutil
 from PIL import Image
@@ -87,29 +88,71 @@ def get_value_display_name(val):
 
 
 def find_delay_embedding_gif(yaml_dir, mode):
-    """Find a delay embedding GIF for the requested mode.
+    """Find a single delay embedding GIF (legacy 1d flat layout).
 
-    The TF output name has varied across runs, so we try a small set of glob
-    patterns before giving up.
+    Prefer the first per-channel GIF from find_delay_embedding_gifs_by_channel
+    when multi-dim eval wrote metrics_batches/batch_0/; else fall back to the
+    old flat post_training_figs/ naming.
+    """
+    by_ch = find_delay_embedding_gifs_by_channel(yaml_dir, mode)
+    if by_ch:
+        # Stable order: ch1, ch2, … then any unlabeled singleton.
+        keys = sorted(by_ch, key=lambda k: (k == "default", k))
+        return by_ch[keys[0]]
+    return None
+
+
+def find_delay_embedding_gifs_by_channel(yaml_dir, mode):
+    """Map channel label -> GIF path for delay embeddings.
+
+    Multi-dim eval writes per-channel GIFs under
+    post_training_figs/metrics_batches/batch_0/ as
+    vis_delay_embedding_of_ch{N}_{tf|auto}_…_{teacher_forced|autonomous}.gif.
+
+    Legacy 1d runs keep a single GIF directly under post_training_figs/; those
+    are returned under the key "default".
     """
     post_dir = os.path.join(yaml_dir, "post_training_figs")
+    batch0 = os.path.join(post_dir, "metrics_batches", "batch_0")
+
     if mode == "tf":
-        patterns = [
+        nested_patterns = [
+            os.path.join(batch0, "vis_delay_embedding_of_ch*_tf_*teacher_forced*.gif"),
+            os.path.join(batch0, "vis_delay_embedding_of_ch*_tf_*teacher-forced*.gif"),
+            os.path.join(batch0, "vis_delay_embedding_of_*teacher_forced*.gif"),
+            os.path.join(batch0, "vis_delay_embedding_of_*teacher-forced*.gif"),
+        ]
+        flat_patterns = [
             os.path.join(post_dir, "vis_delay_embedding_of_*teacher-forced*.gif"),
             os.path.join(post_dir, "vis_delay_embedding_of_*teacher_forced*.gif"),
             os.path.join(post_dir, "vis_delay_embedding_of_*teacher-_forced*.gif"),
             os.path.join(post_dir, "vis_delay_embedding_of_*teacher*forced*.gif"),
         ]
     else:
-        patterns = [
+        nested_patterns = [
+            os.path.join(batch0, "vis_delay_embedding_of_ch*_auto_*autonomous*.gif"),
+            os.path.join(batch0, "vis_delay_embedding_of_*autonomous*.gif"),
+        ]
+        flat_patterns = [
             os.path.join(post_dir, "vis_delay_embedding_of_*autonomous*.gif"),
         ]
 
-    for pattern in patterns:
-        gif_files = glob.glob(pattern)
+    by_channel = {}
+    for pattern in nested_patterns:
+        for gif_path in sorted(glob.glob(pattern)):
+            name = os.path.basename(gif_path)
+            m = re.search(r"_of_(ch\d+)_", name)
+            label = m.group(1) if m else "default"
+            # First match wins per channel (patterns are ordered).
+            by_channel.setdefault(label, gif_path)
+        if by_channel:
+            return by_channel
+
+    for pattern in flat_patterns:
+        gif_files = sorted(glob.glob(pattern))
         if gif_files:
-            return gif_files[0]
-    return None
+            return {"default": gif_files[0]}
+    return {}
 
 
 def sort_key(x):
@@ -1026,8 +1069,32 @@ def plot_2d(data, param1, metric, output_dir, param2=None):
     plt.close(fig)
 
 
+def _load_delay_embed_frame(gif_path):
+    """Load frame 0 of a delay-embedding GIF, auto-cropped to content."""
+    with Image.open(gif_path) as im:
+        im.seek(0)
+        img = np.array(im.convert("RGBA"))
+    non_white = np.where((img[:, :, :3] < 245).any(axis=2))
+    if len(non_white[0]) > 0:
+        y1, y2 = np.min(non_white[0]), np.max(non_white[0])
+        x1, x2 = np.min(non_white[1]), np.max(non_white[1])
+        pad = 10
+        y1 = max(0, y1 - pad)
+        y2 = min(img.shape[0], y2 + pad)
+        x1 = max(0, x1 - pad)
+        x2 = min(img.shape[1], x2 + pad)
+        img = img[y1:y2, x1:x2]
+    return img
+
+
 def aggregate_delay_embeddings(data, args, output_dir):
-    """Aggregate delay embedding GIFs into tiled figures for autonomous and teacher-forced modes."""
+    """Aggregate delay embedding GIFs into tiled figures for TF and autonomous.
+
+    Multi-dim evals write one GIF per channel under metrics_batches/batch_0/.
+    In that case we emit one montage table per channel:
+      aggregated_delay_embeddings_{tf|autonomous}_ch{N}.png
+    Legacy 1d (single flat GIF) keeps the old filename without a channel suffix.
+    """
     param1 = args.parameters[0]
     param2 = args.parameters[1] if len(args.parameters) > 1 else None
 
@@ -1061,136 +1128,150 @@ def aggregate_delay_embeddings(data, args, output_dir):
 
     get_plot_config(paper_ready=True)
 
+    # Discover channel labels across runs (union). Prefer explicit chN keys.
+    channels_seen = set()
+    for d in data:
+        yaml_dir = os.path.dirname(d["yaml_file"])
+        for mode_probe in ("tf", "autonomous"):
+            channels_seen.update(
+                find_delay_embedding_gifs_by_channel(yaml_dir, mode_probe).keys()
+            )
+    if not channels_seen:
+        print("No delay embedding GIFs found in any run. Skipping delay montages.")
+        return
+
+    # Multi-dim if we found any chN label; otherwise legacy single "default".
+    channel_labels = sorted(
+        (c for c in channels_seen if c != "default"),
+        key=lambda c: int(re.search(r"\d+", c).group()) if re.search(r"\d+", c) else c,
+    )
+    if not channel_labels:
+        channel_labels = ["default"]
+
     for mode in ["tf", "autonomous"]:
-        fig, axs = plt.subplots(
-            rows, cols, figsize=montage_figsize(rows, cols, layout_mode)
-        )
-        axs = np.atleast_2d(axs).reshape(rows, cols)
+        for ch_label in channel_labels:
+            fig, axs = plt.subplots(
+                rows, cols, figsize=montage_figsize(rows, cols, layout_mode)
+            )
+            axs = np.atleast_2d(axs).reshape(rows, cols)
+            filled = {}
 
-        # Dictionary to store which cells have been filled
-        filled = {}
-
-        for d in data:
-            val1 = get_param_value(d, param1)
-            if val1 is None:
-                continue
-
-            if param2:
-                val2 = get_param_value(d, param2)
-                if val2 is None:
+            for d in data:
+                val1 = get_param_value(d, param1)
+                if val1 is None:
                     continue
-            else:
-                val2 = "-"
 
-            try:
-                param1_index = unique_param1.index(val1)
                 if param2:
-                    i = param1_index
-                    j = unique_param2.index(val2)
+                    val2 = get_param_value(d, param2)
+                    if val2 is None:
+                        continue
                 else:
-                    i, j = montage_cell_for_param1(param1_index, layout_mode)
-            except ValueError:
-                continue
+                    val2 = "-"
 
-            if (i, j) in filled:
-                continue  # Skip if already filled
+                try:
+                    param1_index = unique_param1.index(val1)
+                    if param2:
+                        i = param1_index
+                        j = unique_param2.index(val2)
+                    else:
+                        i, j = montage_cell_for_param1(param1_index, layout_mode)
+                except ValueError:
+                    continue
 
-            # Find the output dir
-            yaml_dir = os.path.dirname(d["yaml_file"])
-            gif_path = find_delay_embedding_gif(yaml_dir, mode)
-            if not gif_path:
-                print(f"No delay embedding GIF found for {yaml_dir}")
-                axs[i, j].text(
-                    0.5,
-                    0.5,
-                    "No GIF",
-                    ha="center",
-                    va="center",
-                    transform=axs[i, j].transAxes,
-                )
-                filled[(i, j)] = True
-                continue
+                if (i, j) in filled:
+                    continue
 
-            try:
-                with Image.open(gif_path) as im:
-                    im.seek(0)
-                    img = np.array(im.convert("RGBA"))
+                yaml_dir = os.path.dirname(d["yaml_file"])
+                by_ch = find_delay_embedding_gifs_by_channel(yaml_dir, mode)
+                gif_path = by_ch.get(ch_label)
+                if not gif_path and ch_label != "default":
+                    # Fall back only within the same run if channel missing.
+                    gif_path = by_ch.get("default")
+                if not gif_path:
+                    print(
+                        f"No delay embedding GIF for {yaml_dir} "
+                        f"(mode={mode}, channel={ch_label})"
+                    )
+                    axs[i, j].text(
+                        0.5,
+                        0.5,
+                        "No GIF",
+                        ha="center",
+                        va="center",
+                        transform=axs[i, j].transAxes,
+                    )
+                    filled[(i, j)] = True
+                    continue
 
-                # Auto-crop the white background surrounding the GIF plot to blow up the tile
-                non_white = np.where((img[:, :, :3] < 245).any(axis=2))
-                if len(non_white[0]) > 0:
-                    y1, y2 = np.min(non_white[0]), np.max(non_white[0])
-                    x1, x2 = np.min(non_white[1]), np.max(non_white[1])
-                    pad = 10
-                    y1 = max(0, y1 - pad)
-                    y2 = min(img.shape[0], y2 + pad)
-                    x1 = max(0, x1 - pad)
-                    x2 = min(img.shape[1], x2 + pad)
-                    img = img[y1:y2, x1:x2]
-
-                axs[i, j].imshow(img)
-                axs[i, j].set_xticks([])
-                axs[i, j].set_yticks([])
-                for spine in axs[i, j].spines.values():
-                    spine.set_visible(False)
-                filled[(i, j)] = True
-            except Exception as e:
-                print(f"Error loading GIF {gif_path}: {e}")
-                axs[i, j].text(
-                    0.5,
-                    0.5,
-                    "Error",
-                    ha="center",
-                    va="center",
-                    transform=axs[i, j].transAxes,
-                )
-                filled[(i, j)] = True
-
-        # Hide unused subplots, leaving axis for labels
-        for i in range(rows):
-            for j in range(cols):
-                if (i, j) not in filled:
+                try:
+                    img = _load_delay_embed_frame(gif_path)
+                    axs[i, j].imshow(img)
                     axs[i, j].set_xticks([])
                     axs[i, j].set_yticks([])
                     for spine in axs[i, j].spines.values():
                         spine.set_visible(False)
+                    filled[(i, j)] = True
+                except Exception as e:
+                    print(f"Error loading GIF {gif_path}: {e}")
+                    axs[i, j].text(
+                        0.5,
+                        0.5,
+                        "Error",
+                        ha="center",
+                        va="center",
+                        transform=axs[i, j].transAxes,
+                    )
+                    filled[(i, j)] = True
 
-                if layout_mode == "two_param":
-                    if i == 0:
+            for i in range(rows):
+                for j in range(cols):
+                    if (i, j) not in filled:
+                        axs[i, j].set_xticks([])
+                        axs[i, j].set_yticks([])
+                        for spine in axs[i, j].spines.values():
+                            spine.set_visible(False)
+
+                    if layout_mode == "two_param":
+                        if i == 0:
+                            axs[i, j].set_title(
+                                str(get_value_display_name(unique_param2[j])),
+                                fontsize=45,
+                                pad=15,
+                            )
+                        if j == 0:
+                            axs[i, j].set_ylabel(
+                                str(get_value_display_name(unique_param1[i])),
+                                fontsize=45,
+                                labelpad=15,
+                            )
+                    elif layout_mode == "single_param_row":
                         axs[i, j].set_title(
-                            str(get_value_display_name(unique_param2[j])),
+                            str(get_value_display_name(unique_param1[j])),
                             fontsize=45,
                             pad=15,
                         )
-                    if j == 0:
-                        axs[i, j].set_ylabel(
-                            str(get_value_display_name(unique_param1[i])),
-                            fontsize=45,
-                            labelpad=15,
-                        )
-                elif layout_mode == "single_param_row":
-                    axs[i, j].set_title(
-                        str(get_value_display_name(unique_param1[j])),
-                        fontsize=45,
-                        pad=15,
-                    )
 
-        if layout_mode == "two_param":
-            fig.suptitle(get_display_name(param2), fontsize=55, y=1.02)
-            fig.supylabel(get_display_name(param1), fontsize=55)
-        elif layout_mode == "single_param_row":
-            fig.suptitle(get_display_name(param1), fontsize=55, y=1.05)
+            ch_title = "" if ch_label == "default" else f" ({ch_label})"
+            if layout_mode == "two_param":
+                fig.suptitle(
+                    f"{get_display_name(param2)}{ch_title}", fontsize=55, y=1.02
+                )
+                fig.supylabel(get_display_name(param1), fontsize=55)
+            elif layout_mode == "single_param_row":
+                fig.suptitle(
+                    f"{get_display_name(param1)}{ch_title}", fontsize=55, y=1.05
+                )
 
-        plt.tight_layout(pad=2.0)
-        plt.subplots_adjust(wspace=0.05, hspace=0.0)
-        plt.savefig(
-            os.path.join(output_dir, f"aggregated_delay_embeddings_{mode}.png"),
-            bbox_inches="tight",
-        )
-        plt.close()
-        print(
-            f"Aggregated delay embeddings for {mode} saved to {os.path.join(output_dir, f'aggregated_delay_embeddings_{mode}.png')}"
-        )
+            plt.tight_layout(pad=2.0)
+            plt.subplots_adjust(wspace=0.05, hspace=0.0)
+            if ch_label == "default":
+                out_name = f"aggregated_delay_embeddings_{mode}.png"
+            else:
+                out_name = f"aggregated_delay_embeddings_{mode}_{ch_label}.png"
+            out_path = os.path.join(output_dir, out_name)
+            plt.savefig(out_path, bbox_inches="tight")
+            plt.close()
+            print(f"Aggregated delay embeddings for {mode}/{ch_label} saved to {out_path}")
 
 
 def main():
