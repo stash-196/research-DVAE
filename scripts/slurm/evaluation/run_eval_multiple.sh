@@ -87,6 +87,11 @@ declare -a experiments=(
     # Add more directories here as needed
 )
 
+# Optional: pass experiment dirs as args (overrides the list above)
+if [ "$#" -gt 0 ]; then
+    experiments=("$@")
+fi
+
 # Get the current date in YYYY-MM-DD format
 today=$(date +%Y-%m-%d)
 
