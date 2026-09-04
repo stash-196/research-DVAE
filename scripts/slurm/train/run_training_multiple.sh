@@ -100,7 +100,11 @@ echo "[slurm] Log file: \${LOG_DIR}/%j_training_\${CONFIG_BASENAME}.log"
 OUTPUT_EXPERIMENT_DIR="\${SAVED_HOST_PATH}/\${today}/\${experiment}"
 echo "[slurm] OUTPUT_EXPERIMENT_DIR: \$OUTPUT_EXPERIMENT_DIR"
 mkdir -p "\$OUTPUT_EXPERIMENT_DIR"
-cp "\${CONFIG_DIR}/params_being_compared.txt" "\$OUTPUT_EXPERIMENT_DIR/"
+if [ -f "\${CONFIG_DIR}/params_being_compared.txt" ]; then
+  cp "\${CONFIG_DIR}/params_being_compared.txt" "\$OUTPUT_EXPERIMENT_DIR/"
+else
+  echo "[slurm] Warning: params_being_compared.txt missing; continuing"
+fi
 
 # Validate paths
 for PATH_VAR in "\$CONTAINER_PATH" "\$PROJECT_PATH" "\$VENV_PATH" "\$DATA_HOST_PATH" "\$SAVED_HOST_PATH"; do
@@ -110,6 +114,18 @@ for PATH_VAR in "\$CONTAINER_PATH" "\$PROJECT_PATH" "\$VENV_PATH" "\$DATA_HOST_P
     fi
 done
 
+# Ensure Lmod/ml is available on compute nodes (non-login bash)
+if ! type ml >/dev/null 2>&1; then
+  source /etc/profile.d/modules.sh 2>/dev/null || source /etc/profile 2>/dev/null || true
+fi
+if [ -f /etc/profile.d/zz_deigo_base.sh ]; then
+  # shellcheck disable=SC1091
+  source /etc/profile.d/zz_deigo_base.sh
+fi
+if [ -f /etc/profile.d/modules.sh ]; then
+  # shellcheck disable=SC1091
+  source /etc/profile.d/modules.sh
+fi
 ml singularity
 
 # Run the Apptainer container

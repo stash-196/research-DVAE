@@ -143,6 +143,18 @@ for PATH_VAR in "\$CONTAINER_PATH" "\$PROJECT_PATH" "\$VENV_PATH" "\$DATA_HOST_P
     fi
 done
 
+# Ensure Lmod/ml is available on compute nodes (non-login bash)
+if ! type ml >/dev/null 2>&1; then
+  source /etc/profile.d/modules.sh 2>/dev/null || source /etc/profile 2>/dev/null || true
+fi
+if [ -f /etc/profile.d/zz_deigo_base.sh ]; then
+  # shellcheck disable=SC1091
+  source /etc/profile.d/zz_deigo_base.sh
+fi
+if [ -f /etc/profile.d/modules.sh ]; then
+  # shellcheck disable=SC1091
+  source /etc/profile.d/modules.sh
+fi
 ml singularity
 
 # Run the Apptainer container
