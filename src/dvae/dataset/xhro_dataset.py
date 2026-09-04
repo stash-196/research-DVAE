@@ -253,27 +253,33 @@ class Xhro(Dataset):
                 data = sequence[select_columns_for_obs_conditions["original"][base]]
                 if first_valid_index is not None:
                     data = data.loc[first_valid_index:]
-                # operate on first column and linearly interpolate NaNs
-                x = data.iloc[:, 0].to_numpy(dtype=np.float64)
-                nan_mask = np.isnan(x)
-                n_nan_before = int(np.sum(nan_mask))
-                if n_nan_before > 0:
-                    idx = np.arange(x.shape[0])
-                    valid = ~nan_mask
-                    if valid.any():
-                        x[nan_mask] = np.interp(idx[nan_mask], idx[valid], x[valid])
-                    else:
-                        x[:] = 0.0
-                n_nan_after = int(np.isnan(x).sum())
-                # normalize after interpolation (matches existing only_x_interpolate behavior)
-                normalized_x = self.normalize(x.reshape(-1, 1))[:, 0]
+                arr = data.to_numpy(dtype=np.float64)
+                if arr.ndim == 1:
+                    arr = arr.reshape(-1, 1)
+                n_nan_before = int(np.isnan(arr).sum())
+                idx = np.arange(arr.shape[0])
+                for j in range(arr.shape[1]):
+                    x = arr[:, j]
+                    nan_mask = np.isnan(x)
+                    if nan_mask.any():
+                        valid = ~nan_mask
+                        if valid.any():
+                            x[nan_mask] = np.interp(idx[nan_mask], idx[valid], x[valid])
+                        else:
+                            x[:] = 0.0
+                    arr[:, j] = x
+                n_nan_after = int(np.isnan(arr).sum())
+                normalized = self.normalize(arr)
                 print(
-                    f"[Xhro][{self.observation_process}] NaNs before: {n_nan_before}, after: {n_nan_after}"
+                    f"[Xhro][{self.observation_process}] NaNs before: {n_nan_before}, "
+                    f"after: {n_nan_after}, shape: {normalized.shape}"
                 )
-                return torch.tensor(normalized_x, dtype=torch.float32)
+                out = normalized[:, 0] if normalized.shape[1] == 1 else normalized
+                return torch.tensor(out, dtype=torch.float32)
             raise ValueError(f"Invalid observation process: {self.observation_process}")
 
-        # Support for pattern: <base>_indicate where <base> is an "original" key
+        # Support for pattern: <base>_indicate where <base> is an "original" key.
+        # Layout: interleaved [x0, m0, x1, m1, ...] so x_dim = 2 * n_channels.
         elif isinstance(
             self.observation_process, str
         ) and self.observation_process.endswith("_indicate"):
@@ -284,18 +290,23 @@ class Xhro(Dataset):
                 data = sequence[select_columns_for_obs_conditions["original"][base]]
                 if first_valid_index is not None:
                     data = data.loc[first_valid_index:]
-                # operate on first column and produce (imputed_normalized, is_observed)
-                x = data.iloc[:, 0].to_numpy(dtype=np.float32)
-                missing_mask = np.isnan(x)
-                missing_count = int(np.sum(missing_mask))
+                arr = data.to_numpy(dtype=np.float32)
+                if arr.ndim == 1:
+                    arr = arr.reshape(-1, 1)
+                missing_mask = np.isnan(arr)
+                missing_count = int(missing_mask.sum())
                 # Normalize while NaNs are present so stats ignore missing values
-                x_normalized = self.normalize(x.reshape(-1, 1))[:, 0]
-                # Zero-impute after normalization (preserves the meaning of the 0 flag)
+                x_normalized = self.normalize(arr)
                 x_imputed = np.nan_to_num(x_normalized, nan=0.0).astype(np.float32)
                 is_observed = (~missing_mask).astype(np.float32)
-                result = np.stack([x_imputed, is_observed], axis=1)
+                # Interleave signal and mask per channel: [x0, m0, x1, m1, ...]
+                t, c = x_imputed.shape
+                result = np.empty((t, 2 * c), dtype=np.float32)
+                result[:, 0::2] = x_imputed
+                result[:, 1::2] = is_observed
                 print(
-                    f"[Xhro][{self.observation_process}] missing_count: {missing_count}, result_shape: {result.shape}"
+                    f"[Xhro][{self.observation_process}] missing_count: {missing_count}, "
+                    f"result_shape: {result.shape}"
                 )
                 return torch.tensor(result, dtype=torch.float32)
             raise ValueError(f"Invalid observation process: {self.observation_process}")

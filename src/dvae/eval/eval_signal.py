@@ -1156,17 +1156,34 @@ if __name__ == "__main__":
                 channel_benchmarks=channel_benchmarks,
                 save_figures=save_metric_figures,
             )
-            geom_results = run_geometry_analysis(
-                test_dataloader=test_dataloader,
-                recon_data_long=None,
-                save_fig_dir=batch_fig_dir if save_metric_figures else None,
-                i=i,
-                autonomous_mode_selector_long=None,
-                dataset_name=learning_algo.dataset_name,
-                batch_data_long=batch_data_long,
-                channel_benchmarks=channel_benchmarks,
-                save_figures=save_metric_figures,
-            )
+            try:
+                geom_results = run_geometry_analysis(
+                    test_dataloader=test_dataloader,
+                    recon_data_long=None,
+                    save_fig_dir=batch_fig_dir if save_metric_figures else None,
+                    i=i,
+                    autonomous_mode_selector_long=None,
+                    dataset_name=learning_algo.dataset_name,
+                    batch_data_long=batch_data_long,
+                    channel_benchmarks=channel_benchmarks,
+                    save_figures=save_metric_figures,
+                )
+            except Exception as geom_exc:
+                print(
+                    f"[Eval][Geometry] run_geometry_analysis failed "
+                    f"(batch={i}): {geom_exc}; continuing with empty geom metrics"
+                )
+                geom_results = {
+                    "per_channel": {},
+                    "kld_tf_mean": float("nan"),
+                    "kld_auto_mean": float("nan"),
+                    "kld_tf": float("nan"),
+                    "kld_auto": float("nan"),
+                    "kld_scores": [],
+                    "signal_keys": [],
+                    "tf_keys": [],
+                    "auto_keys": [],
+                }
 
             batch_metric_dicts.append(
                 flatten_analysis_to_batch_metrics(

@@ -347,12 +347,12 @@ if __name__ == "__main__":
             # "alpha",
         ]
 
-    if observation_process[0] == "only_x_indicate":
-        x_dim = [2]
-        dense_x = x_dim
-    # if observation_proccess has "indicate", then add 1 to x_dim and dense_x for all models
-    elif observation_process[0].endswith("indicate"):
-        x_dim = [dim + 1 for dim in x_dim]
+    # Masked-var (indicate): one observation mask per signal channel → x_dim doubles.
+    # (1d: [x, m] → 2; 4d raw_all_indicate: 8). Shared +1 mask is not used here.
+    if observation_process[0] == "only_x_indicate" or observation_process[0].endswith(
+        "indicate"
+    ):
+        x_dim = [dim * 2 for dim in x_dim]
         dense_x = x_dim
 
     model_params = {

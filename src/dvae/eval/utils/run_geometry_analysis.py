@@ -68,9 +68,21 @@ def run_geometry_analysis_from_benchmarks(
 
         kld_tf = float("nan")
         kld_auto = float("nan")
+
+        def _safe_kld(a, b):
+            # GMM needs enough samples; packet-loss NaN pruning can leave too few.
+            min_n = 10
+            if a is None or b is None or len(a) < min_n or len(b) < min_n:
+                return float("nan")
+            try:
+                return float(state_space_kl(a, b, use_gmm=True))
+            except Exception as exc:
+                print(f"[Eval][Geometry] state_space_kl failed ({exc}); using nan")
+                return float("nan")
+
         if tf_emb is not None:
-            kld_tf = float(state_space_kl(gt_emb, tf_emb, use_gmm=True))
-            if save_figures:
+            kld_tf = _safe_kld(gt_emb, tf_emb)
+            if save_figures and np.isfinite(kld_tf):
                 visualize_delay_embedding(
                     embedded=tf_emb,
                     save_dir=save_fig_dir,
@@ -79,8 +91,8 @@ def run_geometry_analysis_from_benchmarks(
                     base_color="Greens",
                 )
         if auto_emb is not None:
-            kld_auto = float(state_space_kl(gt_emb, auto_emb, use_gmm=True))
-            if save_figures:
+            kld_auto = _safe_kld(gt_emb, auto_emb)
+            if save_figures and np.isfinite(kld_auto):
                 visualize_delay_embedding(
                     embedded=auto_emb,
                     save_dir=save_fig_dir,

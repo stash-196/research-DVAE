@@ -219,14 +219,14 @@ class LearningAlgorithm:
         )
 
         if is_masking_baseline:
-            # Force 100% teacher forcing on the mask channel (dimension 1)
+            # Indicate layout is interleaved [x0, m0, x1, m1, ...]:
+            # force TF on mask channels (odd dims); loss only on signal (even dims).
             model_mode_selector = model_mode_selector.clone()
-            model_mode_selector[:, :, 1] = 0.0
+            model_mode_selector[:, :, 1::2] = 0.0
 
-            # Compute loss only on signal dimension (dimension 0)
-            target_signal = batch_data[:, :, 0:1]
-            pred_signal = recon_batch_data[:, :, 0:1]
-            loss_mask_signal = loss_mask[:, :, 0:1]
+            target_signal = batch_data[:, :, 0::2]
+            pred_signal = recon_batch_data[:, :, 0::2]
+            loss_mask_signal = loss_mask[:, :, 0::2]
         else:
             target_signal = batch_data
             pred_signal = recon_batch_data
@@ -617,7 +617,7 @@ class LearningAlgorithm:
                     getattr(dataset_config, "observation_process", None)
                 ):
                     model_mode_selector = model_mode_selector.clone()
-                    model_mode_selector[:, :, 1] = 0.0  # Force pure TF on mask channel
+                    model_mode_selector[:, :, 1::2] = 0.0  # Force pure TF on mask channel(s)
 
                 # START: Compute masked batch std for adaptive noise #####################
                 noise_config = noise_configs.get(self.noise_sampling_method)
@@ -875,7 +875,7 @@ class LearningAlgorithm:
                     getattr(dataset_config, "observation_process", None)
                 ):
                     model_mode_selector = model_mode_selector.clone()
-                    model_mode_selector[:, :, 1] = 0.0  # Force pure TF on mask channel
+                    model_mode_selector[:, :, 1::2] = 0.0  # Force pure TF on mask channel(s)
 
                 # START: Compute masked batch std for adaptive noise #####################
                 noise_config = noise_configs.get(self.noise_sampling_method)
