@@ -1470,13 +1470,9 @@ class LearningAlgorithm:
                     self._is_indicate_observation(observation_process)
                     and temp_batch_data.size(2) >= 2
                 ):
-                    # For indicate modes, dimension 1 is the is_observed indicator (1.0=observed, 0.0=missing)
-                    # Derive missing_mask directly from this indicator to ensure perfect alignment
-                    is_observed = temp_batch_data[:, :, 1]  # (seq_len, batch_size)
-                    # missing_mask = True where is_observed == 0.0
-                    temp_missing_mask = (
-                        (is_observed < 0.5).float().unsqueeze(-1)
-                    )  # (seq_len, batch_size, 1)
+                    # Interleaved [x,m,...]: odd dims are is_observed → per-signal missing
+                    is_observed = temp_batch_data[:, :, 1::2]
+                    temp_missing_mask = (is_observed < 0.5).float()
 
                 elif hasattr(train_dataloader.dataset, "missing_mask"):
                     # Fallback for other observation processes

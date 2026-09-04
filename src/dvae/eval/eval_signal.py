@@ -184,6 +184,23 @@ def _is_indicate_observation(observation_process: Optional[str]) -> bool:
     return False
 
 
+def _force_indicate_mask_tf(mode_selector):
+    """Force pure TF on all interleaved mask dims (odd indices)."""
+    mode_selector = mode_selector.clone()
+    mode_selector[:, :, 1::2] = 0.0
+    return mode_selector
+
+
+def _missing_mask_from_indicate(batch_data):
+    """Build missing_mask (True=missing) from interleaved indicate mask dims.
+
+    batch_data: (seq, batch, x_dim) with layout [x0, m0, x1, m1, ...].
+    Returns (seq, batch, n_signal) float mask.
+    """
+    is_observed = batch_data[:, :, 1::2]
+    return (is_observed < 0.5).float()
+
+
 def visualize_training_mode_short_sequence(
     dataset_name,
     dataset_config,
@@ -228,11 +245,8 @@ def visualize_training_mode_short_sequence(
         observation_process = getattr(dataset_config, "observation_process", None)
 
         if _is_indicate_observation(observation_process) and batch_data.size(2) >= 2:
-            # For only_x_indicate, dimension 1 is the is_observed indicator
-            is_observed = batch_data[:, :, 1]  # (seq_len, batch_size)
-            missing_mask_short = (
-                (is_observed < 0.5).float().unsqueeze(-1)
-            )  # (seq_len, batch_size, 1)
+            # Interleaved [x,m,...]: odd dims are is_observed (1=obs, 0=missing)
+            missing_mask_short = _missing_mask_from_indicate(batch_data)
 
         elif hasattr(train_dataloader.dataset, "missing_mask"):
             # Fallback: extract from dataset.missing_mask
@@ -282,8 +296,7 @@ def visualize_training_mode_short_sequence(
 
         # === Force pure TF on mask dimension if observation_process is an indicate variant ===
         if _is_indicate_observation(observation_process):
-            model_mode_selector = model_mode_selector.clone()
-            model_mode_selector[:, :, 1] = 0.0  # Mask channel: pure TF
+            model_mode_selector = _force_indicate_mask_tf(model_mode_selector)
 
         # Generate reconstruction
         batch_data_tensor = batch_data.clone().detach().to(device)
@@ -529,13 +542,8 @@ if __name__ == "__main__":
                 _is_indicate_observation(observation_process)
                 and batch_data_long.size(2) >= 2
             ):
-                # For only_x_indicate, dimension 1 is the is_observed indicator (1.0=observed, 0.0=missing)
-                # Derive missing_mask directly from this indicator to ensure perfect alignment
-                is_observed = batch_data_long[:, :, 1]  # (seq_len, batch_size)
-                # missing_mask = True where is_observed == 0.0
-                missing_mask_long = (
-                    (is_observed < 0.5).float().unsqueeze(-1)
-                )  # (seq_len, batch_size, 1)
+                # Interleaved indicate: per-signal missing from odd mask dims
+                missing_mask_long = _missing_mask_from_indicate(batch_data_long)
 
             elif hasattr(test_dataloader.dataset, "missing_mask"):
                 # Fallback for other observation processes
@@ -578,9 +586,8 @@ if __name__ == "__main__":
             if _is_indicate_observation(
                 getattr(dataset_config, "observation_process", None)
             ):
-                autonomous_mode_selector_long = autonomous_mode_selector_long.clone()
-                autonomous_mode_selector_long[:, :, 1] = (
-                    0.0  # mask dimension always 100% TF
+                autonomous_mode_selector_long = _force_indicate_mask_tf(
+                    autonomous_mode_selector_long
                 )
             # ====================================================================================
             # turn input into tensor and send to GPU if needed
@@ -715,13 +722,8 @@ if __name__ == "__main__":
                 _is_indicate_observation(observation_process)
                 and batch_data_long.size(2) >= 2
             ):
-                # For only_x_indicate, dimension 1 is the is_observed indicator (1.0=observed, 0.0=missing)
-                # Derive missing_mask directly from this indicator to ensure perfect alignment
-                is_observed = batch_data_long[:, :, 1]  # (seq_len, batch_size)
-                # missing_mask = True where is_observed == 0.0
-                missing_mask_long = (
-                    (is_observed < 0.5).float().unsqueeze(-1)
-                )  # (seq_len, batch_size, 1)
+                # Interleaved indicate: per-signal missing from odd mask dims
+                missing_mask_long = _missing_mask_from_indicate(batch_data_long)
 
             elif hasattr(test_dataloader.dataset, "missing_mask"):
                 # Fallback for other observation processes
@@ -762,9 +764,8 @@ if __name__ == "__main__":
             if _is_indicate_observation(
                 getattr(dataset_config, "observation_process", None)
             ):
-                autonomous_mode_selector_long = autonomous_mode_selector_long.clone()
-                autonomous_mode_selector_long[:, :, 1] = (
-                    0.0  # mask dimension always 100% TF
+                autonomous_mode_selector_long = _force_indicate_mask_tf(
+                    autonomous_mode_selector_long
                 )
             # ====================================================================================
             # turn input into tensor and send to GPU if needed
@@ -810,8 +811,9 @@ if __name__ == "__main__":
             if _is_indicate_observation(
                 getattr(dataset_config, "observation_process", None)
             ):
-                autonomous_mode_selector_half = autonomous_mode_selector_half.clone()
-                autonomous_mode_selector_half[:, :, 1] = 0.0
+                autonomous_mode_selector_half = _force_indicate_mask_tf(
+                    autonomous_mode_selector_half
+                )
             visualize_teacherforcing_2_autonomous(
                 batch_data_long,
                 dvae,

@@ -48,18 +48,42 @@ def resolve_channel_keys(
     dataset_name: str,
 ) -> List[Tuple[str, int]]:
     """
-    Return (key, dim_index) pairs for signal channels to score (excludes mask channel).
-    """
-    if is_indicate_observation(observation_process):
-        return [("signal", 0)]
+    Return (key, dim_index) pairs for signal channels to score.
 
-    if observation_process in select_columns_for_obs_conditions.get("original", {}):
-        cols = select_columns_for_obs_conditions["original"][observation_process]
-        return [(col, i) for i, col in enumerate(cols)]
+    For *_indicate / only_x_indicate the layout is interleaved
+    [x0, m0, x1, m1, ...]; only even (signal) dims are scored — mask dims
+    never get delay embeds / KLD / spectrum tables.
+    """
+    original = select_columns_for_obs_conditions.get("original", {})
+    is_indicate = is_indicate_observation(observation_process)
 
     base = observation_process
-    if isinstance(base, str) and base.endswith("_interpolate"):
+    if is_indicate and observation_process != "only_x_indicate":
+        base = observation_process.rsplit("_", 1)[0]
+    elif isinstance(base, str) and base.endswith("_interpolate"):
         base = base[: -len("_interpolate")]
+
+    if is_indicate:
+        # Signal dims live at even indices.
+        if base in original:
+            cols = original[base]
+            return [(col, 2 * i) for i, col in enumerate(cols)]
+        n_signal = max(x_dim // 2, 1)
+        if n_signal == 1:
+            # Legacy 1d only_x_indicate naming (keeps old GIF names).
+            return [("signal", 0)]
+        if dataset_name in ("Xhro", "XhroPacketLoss"):
+            return [(f"ch{i + 1}", 2 * i) for i in range(n_signal)]
+        return [(f"ch{i + 1}", 2 * i) for i in range(n_signal)]
+
+    if observation_process in original:
+        cols = original[observation_process]
+        return [(col, i) for i, col in enumerate(cols)]
+
+    if base in original:
+        cols = original[base]
+        return [(col, i) for i, col in enumerate(cols)]
+
     if base in PHYSINET_OBS_COLUMNS:
         cols = PHYSINET_OBS_COLUMNS[base]
         return [(col, i) for i, col in enumerate(cols)]

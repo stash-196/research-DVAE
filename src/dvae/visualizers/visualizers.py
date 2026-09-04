@@ -688,18 +688,18 @@ def visualize_teacherforcing_2_autonomous(
             expanded_missing_mask = missing_mask[:n_seq, 0, :].reshape(-1)
         # If requested, hide mask output channel (e.g., only_x_indicate)
         if hide_mask_output:
-            # When flattened, keep only the first channel
+            # Indicate layout [x0,m0,x1,m1,...]: keep even (signal) dims only.
             if recon_series.ndim > 1:
-                recon_series = recon_series[:, :1].reshape(-1)
+                recon_series = recon_series[:, 0::2].reshape(-1)
             if true_series.ndim > 1:
-                true_series = true_series[:, :1].reshape(-1)
+                true_series = true_series[:, 0::2].reshape(-1)
             if expanded_mode_selector is not None:
                 expanded_mode_selector = (
-                    auto_mode_selector[:n_seq, 0, :1].reshape(-1).cpu().numpy()
+                    auto_mode_selector[:n_seq, 0, 0::2].reshape(-1).cpu().numpy()
                 )
             if expanded_missing_mask is not None:
-                # expanded_missing_mask already flattened per channel; take first channel
-                expanded_missing_mask = expanded_missing_mask
+                # Prefer already-per-signal mask; else take even dims of interleaved.
+                pass
         if noise_selector is not None:
             nv = None
             if hasattr(dvae, "noise_values"):
@@ -732,11 +732,18 @@ def visualize_teacherforcing_2_autonomous(
             expanded_missing_mask = missing_mask[:n_seq, 0, :]
         # Optionally hide the mask output dimension from plots
         if hide_mask_output and true_series.ndim > 1 and true_series.shape[1] > 1:
-            true_series = true_series[:, :1]
-            recon_series = recon_series[:, :1]
-            expanded_mode_selector = auto_mode_selector[:n_seq, 0, :1].cpu().numpy()
+            # Interleaved indicate: drop odd mask dims; keep all signal channels.
+            true_series = true_series[:, 0::2]
+            recon_series = recon_series[:, 0::2]
+            expanded_mode_selector = auto_mode_selector[:n_seq, 0, 0::2].cpu().numpy()
             if expanded_missing_mask is not None:
-                expanded_missing_mask = expanded_missing_mask[:, :1]
+                if expanded_missing_mask.shape[-1] == true_series.shape[1]:
+                    pass  # already per-signal
+                elif expanded_missing_mask.shape[-1] >= 2 * true_series.shape[1]:
+                    expanded_missing_mask = expanded_missing_mask[:, 0::2]
+                else:
+                    # Single shared mask channel — broadcast later in plotter if needed
+                    expanded_missing_mask = expanded_missing_mask[:, :1]
         if noise_selector is not None:
             nv = None
             if hasattr(dvae, "noise_values"):
