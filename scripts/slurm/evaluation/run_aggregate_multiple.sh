@@ -183,7 +183,11 @@ experiments=(
     # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-07-01/deigo_cluster/20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500 --parameters sampling_ratio"
 
 # 2026-08-16/ packet-loss realtime MTRNN-9d checkpoint evals
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-08-16/deigo_cluster/20260816-XHRO_packet_loss_ep20000_ptf0-7_MTRNN9d_clip10_chAll_4d_hdim200_eStop500 --parameters sampling_ratio"
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-08-16/deigo_cluster/20260816-XHRO_packet_loss_ep20000_ptf0-7_MTRNN9d_clip10_chAll_4d_hdim200_eStop500 --parameters sampling_ratio"
+
+# 2026-09-04/ Jul-1-style 4d interpolate + indicate (final evals done)
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-09-04/deigo_cluster/20260904-XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500_interpolate --parameters sampling_ratio"
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-09-04/deigo_cluster/20260904-XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_chAll_4d_indicate_x8_hdim200_eStop500 --parameters sampling_ratio"
 )
 
 # Get the current date in YYYY-MM-DD format
