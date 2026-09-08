@@ -20,9 +20,10 @@ import csv
 import shutil
 from PIL import Image
 from dvae.visualizers.visualizers import get_plot_config
-from matplotlib.colors import Normalize, SymLogNorm
+from matplotlib.colors import LogNorm, Normalize, SymLogNorm
 from matplotlib.ticker import (
     LogFormatterSciNotation,
+    LogLocator,
     MaxNLocator,
     NullFormatter,
     ScalarFormatter,
@@ -175,18 +176,48 @@ def resolve_heatmap_limits(metric):
 
 
 def _symlog_vmin_vmax(values, linthresh=SYMLOG_LINTHRESH):
-    """Pad finite values so symlog axes/colorbars always have a usable range."""
+    """Pad finite values for axis/colorbar limits.
+
+    If every finite value is non-negative (or non-positive), do not pad across
+    zero — that unused half is what made all-positive KLD-auto symlog plots
+    look like they ranged down to -1 / -10.
+    """
     arr = np.asarray(values, dtype=float)
     arr = arr[np.isfinite(arr)]
     if arr.size == 0:
         return -linthresh, linthresh
     vmin, vmax = float(np.min(arr)), float(np.max(arr))
+    all_nonneg = vmin >= 0.0
+    all_nonpos = vmax <= 0.0
     if vmin == vmax:
         magnitude = max(abs(vmin), linthresh, 1e-6)
+        if all_nonneg:
+            return max(0.0, vmin - 0.15 * magnitude), vmax + 0.15 * magnitude
+        if all_nonpos:
+            return vmin - 0.15 * magnitude, min(0.0, vmax + 0.15 * magnitude)
         return -magnitude, magnitude
     span = vmax - vmin
     pad = max(span * 0.15, linthresh)
-    return vmin - pad, vmax + pad
+    y_min, y_max = vmin - pad, vmax + pad
+    if all_nonneg:
+        y_min = max(0.0, y_min)
+    elif all_nonpos:
+        y_max = min(0.0, y_max)
+    return y_min, y_max
+
+
+def _log_vmin_vmax(values):
+    """Pad strictly positive values for a log-scaled axis (never crosses 0)."""
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr) & (arr > 0)]
+    if arr.size == 0:
+        return SYMLOG_LINTHRESH, 1.0
+    vmin, vmax = float(np.min(arr)), float(np.max(arr))
+    # ~0.15 decade of padding on each side
+    factor = 10 ** 0.15
+    if vmin == vmax:
+        return max(vmin / factor, np.nextafter(0, 1)), vmax * factor
+    return vmin / factor, vmax * factor
 
 
 def _configure_symlog_axis(axis, linthresh=SYMLOG_LINTHRESH):
@@ -196,8 +227,15 @@ def _configure_symlog_axis(axis, linthresh=SYMLOG_LINTHRESH):
     axis.set_minor_formatter(NullFormatter())
 
 
-def _needs_symlog_scale(vmin, vmax):
-    """Use symlog only when values span large or multi-decade ranges."""
+def _configure_log_axis(axis):
+    """Power-of-ten ticks for a strictly positive log axis."""
+    axis.set_major_locator(LogLocator(base=10))
+    axis.set_major_formatter(LogFormatterSciNotation())
+    axis.set_minor_formatter(NullFormatter())
+
+
+def _needs_wide_scale(vmin, vmax):
+    """True when linear ticks would be a bad fit (large span / many decades)."""
     span = vmax - vmin
     peak = max(abs(vmin), abs(vmax))
     if peak > 50 or span > 50:
@@ -209,6 +247,10 @@ def _needs_symlog_scale(vmin, vmax):
     if vmin < 0 < vmax:
         return peak > 20 and span > 10
     return False
+
+
+# Back-compat alias used by older call sites / heatmaps.
+_needs_symlog_scale = _needs_wide_scale
 
 
 def _round_tick(value, decimals=4):
@@ -246,7 +288,11 @@ def _linear_ticks_in_range(vmin, vmax):
 
 
 def _setup_plot_y_axis(ax, values):
-    """Pick linear vs symlog y-scale so tick labels always render."""
+    """Pick linear / log / symlog so tick labels always render.
+
+    All-positive wide ranges use log (not symlog) so the unused negative
+    decade branch does not appear. Symlog is reserved for signed data.
+    """
     arr = np.asarray(values, dtype=float)
     arr = arr[np.isfinite(arr)]
     if arr.size == 0:
@@ -254,7 +300,14 @@ def _setup_plot_y_axis(ax, values):
     vmin, vmax = float(np.min(arr)), float(np.max(arr))
     y_min, y_max = _symlog_vmin_vmax(values)
 
-    if _needs_symlog_scale(vmin, vmax):
+    if _needs_wide_scale(vmin, vmax):
+        if vmin > 0:
+            y_min, y_max = _log_vmin_vmax(arr)
+            ax.set_yscale("log")
+            ax.set_ylim(y_min, y_max)
+            _configure_log_axis(ax.yaxis)
+            ax.set_autoscaley_on(False)
+            return
         ax.set_yscale("symlog", linthresh=SYMLOG_LINTHRESH)
         ax.set_ylim(y_min, y_max)
         _configure_symlog_axis(ax.yaxis)
@@ -310,6 +363,10 @@ def _add_colorbar(mappable, label, vmin, vmax, scale):
     if scale == "symlog":
         cbar = plt.colorbar(mappable, format=LogFormatterSciNotation())
         cbar.locator = SymmetricalLogLocator(base=10, linthresh=SYMLOG_LINTHRESH)
+        cbar.update_ticks()
+    elif scale == "log":
+        cbar = plt.colorbar(mappable, format=LogFormatterSciNotation())
+        cbar.locator = LogLocator(base=10)
         cbar.update_ticks()
     else:
         cbar = plt.colorbar(mappable)
@@ -1007,13 +1064,18 @@ def plot_2d(data, param1, metric, output_dir, param2=None):
             )
     else:
         vmin, vmax = _symlog_vmin_vmax(finite)
-        scale = (
-            "symlog"
-            if _needs_symlog_scale(data_vmin, data_vmax)
-            else "linear"
-        )
+        if _needs_wide_scale(data_vmin, data_vmax):
+            if data_vmin > 0:
+                vmin, vmax = _log_vmin_vmax(finite)
+                scale = "log"
+            else:
+                scale = "symlog"
+        else:
+            scale = "linear"
     if scale == "symlog":
         norm = SymLogNorm(linthresh=SYMLOG_LINTHRESH, vmin=vmin, vmax=vmax)
+    elif scale == "log":
+        norm = LogNorm(vmin=max(vmin, np.nextafter(0, 1)), vmax=vmax)
     else:
         norm = Normalize(vmin=vmin, vmax=vmax)
     im = ax.imshow(grid, origin="lower", aspect="auto", norm=norm)
