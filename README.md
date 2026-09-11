@@ -61,7 +61,7 @@ Edit and test train/eval on the **Studio**. Sync code with **git** to Deigo home
 
 **Outputs** — training writes `/flash/DoyaU/stash/research-DVAE/saved_model`. Copy the date folders you care about to `/bucket/DoyaU/stash/research-DVAE/saved_model` so the Studio mount can see them. Helper: `scripts/bash/sync_saved_models_btw_clusters.sh` (uncomment the date dirs first).
 
-Eval / aggregate after a pull: `scripts/slurm/evaluation/run_eval_multiple.sh`, `scripts/slurm/evaluation/run_aggregate_multiple.sh`.
+Eval / aggregate after a pull: `scripts/slurm/evaluation/run_eval_multiple.sh`, `scripts/slurm/evaluation/run_aggregate_multiple.sh`. Overlay finished aggregates (OTF vs interpolate vs indicate, …): `scripts/slurm/evaluation/run_compare_aggregates.sh` (optional `DEPENDENCY_JOBIDS=123,456` → `sbatch --dependency=afterok:…`).
 
 Paths for this machine vs Deigo live in `config/device_paths.yaml`. Studio `~/mounts/bucket/...` is a local cache, not a live cluster mount.
 
