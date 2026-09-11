@@ -19,18 +19,27 @@ import re
 import csv
 import shutil
 from PIL import Image
+from dvae.eval.aggregate_plot_style import (
+    SYMLOG_LINTHRESH,
+    _linear_ticks_in_range,
+    _log_vmin_vmax,
+    _needs_wide_scale,
+    _save_figure,
+    _setup_plot_y_axis,
+    _symlog_vmin_vmax,
+    get_display_name,
+    get_metric_display_name,
+    is_numeric,
+    sort_key,
+)
 from dvae.visualizers.visualizers import get_plot_config
 from matplotlib.colors import LogNorm, Normalize, SymLogNorm
 from matplotlib.ticker import (
     LogFormatterSciNotation,
     LogLocator,
-    MaxNLocator,
-    NullFormatter,
     ScalarFormatter,
     SymmetricalLogLocator,
 )
-
-SYMLOG_LINTHRESH = 0.01
 
 # Fixed heatmap color limits so colorbars are comparable across images.
 # Spectrum: Hellinger distance is in [0, 1]. KLD: shared symlog scale for tf + auto.
@@ -40,28 +49,6 @@ HEATMAP_COLOR_LIMITS = {
 }
 SPECTRUM_HEATMAP_TICKS = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 
-# Dictionary for display names
-DISPLAY_NAMES = {
-    "mask_label": "Missing Ratio",
-    "sampling_ratio": "Auto Ratio",
-    "observation_process": "Channel",
-}
-
-# Dictionary for metric display names
-METRIC_DISPLAY_NAMES = {
-    "kld_tf": "KLD of Teacher Forced",
-    "kld_auto": "KLD of Autonomous",
-    "kld_tf_mean": "KLD TF (channel mean)",
-    "kld_auto_mean": "KLD Auto (channel mean)",
-    "mse_tf_mean": "MSE TF (channel mean)",
-    "mse_auto_mean": "MSE Auto (channel mean)",
-    "spectrum_error_gt": "Spectrum Error Ground Truth",
-    "spectrum_error_tf": "Spectrum Error Teacher Forced",
-    "spectrum_error_auto": "Spectrum Error Autonomous",
-    "spectrum_error_tf_mean": "Spectrum Error TF (channel mean)",
-    "spectrum_error_auto_mean": "Spectrum Error Auto (channel mean)",
-}
-
 # Dictionary for value display names (map raw labels to nicer labels)
 VALUE_DISPLAY_NAMES = {
     "raw_ch1": "Ch1",
@@ -69,14 +56,6 @@ VALUE_DISPLAY_NAMES = {
     "raw_ch3": "Ch3",
     "raw_ch4": "Ch4",
 }
-
-
-def is_numeric(val):
-    try:
-        float(val)
-        return True
-    except (ValueError, TypeError):
-        return False
 
 
 def get_value_display_name(val):
@@ -156,14 +135,6 @@ def find_delay_embedding_gifs_by_channel(yaml_dir, mode):
     return {}
 
 
-def sort_key(x):
-    """Sort key for numerical values, fallback to string."""
-    try:
-        return float(x)
-    except (ValueError, TypeError):
-        return str(x)
-
-
 def resolve_heatmap_limits(metric):
     """Return fixed (vmin, vmax, scale) for known metrics, else None."""
     if metric.startswith("spectrum_error_"):
@@ -173,154 +144,6 @@ def resolve_heatmap_limits(metric):
         cfg = HEATMAP_COLOR_LIMITS["kld"]
         return cfg["vmin"], cfg["vmax"], cfg["scale"]
     return None
-
-
-def _symlog_vmin_vmax(values, linthresh=SYMLOG_LINTHRESH):
-    """Pad finite values for axis/colorbar limits.
-
-    If every finite value is non-negative (or non-positive), do not pad across
-    zero — that unused half is what made all-positive KLD-auto symlog plots
-    look like they ranged down to -1 / -10.
-    """
-    arr = np.asarray(values, dtype=float)
-    arr = arr[np.isfinite(arr)]
-    if arr.size == 0:
-        return -linthresh, linthresh
-    vmin, vmax = float(np.min(arr)), float(np.max(arr))
-    all_nonneg = vmin >= 0.0
-    all_nonpos = vmax <= 0.0
-    if vmin == vmax:
-        magnitude = max(abs(vmin), linthresh, 1e-6)
-        if all_nonneg:
-            return max(0.0, vmin - 0.15 * magnitude), vmax + 0.15 * magnitude
-        if all_nonpos:
-            return vmin - 0.15 * magnitude, min(0.0, vmax + 0.15 * magnitude)
-        return -magnitude, magnitude
-    span = vmax - vmin
-    pad = max(span * 0.15, linthresh)
-    y_min, y_max = vmin - pad, vmax + pad
-    if all_nonneg:
-        y_min = max(0.0, y_min)
-    elif all_nonpos:
-        y_max = min(0.0, y_max)
-    return y_min, y_max
-
-
-def _log_vmin_vmax(values):
-    """Pad strictly positive values for a log-scaled axis (never crosses 0)."""
-    arr = np.asarray(values, dtype=float)
-    arr = arr[np.isfinite(arr) & (arr > 0)]
-    if arr.size == 0:
-        return SYMLOG_LINTHRESH, 1.0
-    vmin, vmax = float(np.min(arr)), float(np.max(arr))
-    # ~0.15 decade of padding on each side
-    factor = 10 ** 0.15
-    if vmin == vmax:
-        return max(vmin / factor, np.nextafter(0, 1)), vmax * factor
-    return vmin / factor, vmax * factor
-
-
-def _configure_symlog_axis(axis, linthresh=SYMLOG_LINTHRESH):
-    """Apply consistent power-of-ten tick labels to a symlog axis."""
-    axis.set_major_locator(SymmetricalLogLocator(base=10, linthresh=linthresh))
-    axis.set_major_formatter(LogFormatterSciNotation())
-    axis.set_minor_formatter(NullFormatter())
-
-
-def _configure_log_axis(axis):
-    """Power-of-ten ticks for a strictly positive log axis."""
-    axis.set_major_locator(LogLocator(base=10))
-    axis.set_major_formatter(LogFormatterSciNotation())
-    axis.set_minor_formatter(NullFormatter())
-
-
-def _needs_wide_scale(vmin, vmax):
-    """True when linear ticks would be a bad fit (large span / many decades)."""
-    span = vmax - vmin
-    peak = max(abs(vmin), abs(vmax))
-    if peak > 50 or span > 50:
-        return True
-    if vmin > 0 and vmax > 0:
-        return vmax / max(vmin, 1e-12) > 100
-    if vmax <= 0 and vmin < 0:
-        return False
-    if vmin < 0 < vmax:
-        return peak > 20 and span > 10
-    return False
-
-
-# Back-compat alias used by older call sites / heatmaps.
-_needs_symlog_scale = _needs_wide_scale
-
-
-def _round_tick(value, decimals=4):
-    """Round tick positions so labels stay readable."""
-    return float(np.round(value, decimals))
-
-
-def _nice_linear_ticks(vmin, vmax, n=6):
-    """Evenly spaced ticks for narrow linear axes (positive or negative)."""
-    span = max(vmax - vmin, 1e-12)
-    raw_step = span / max(n - 1, 1)
-    magnitude = 10 ** np.floor(np.log10(raw_step))
-    step = magnitude
-    for mult in (1, 2, 5, 10):
-        candidate = mult * magnitude
-        if candidate >= raw_step:
-            step = candidate
-            break
-    tick = np.floor(vmin / step) * step
-    ticks = []
-    while tick <= vmax + step * 0.51:
-        ticks.append(_round_tick(tick))
-        tick += step
-    return ticks
-
-
-def _linear_ticks_in_range(vmin, vmax):
-    """Pick linear ticks that stay inside padded axis limits."""
-    ticks = _nice_linear_ticks(vmin, vmax)
-    ticks = [t for t in ticks if vmin - 1e-9 <= t <= vmax + 1e-9]
-    if len(ticks) >= 2:
-        return ticks
-    locator = MaxNLocator(nbins=6, min_n_ticks=4)
-    return [float(t) for t in locator.tick_values(vmin, vmax) if vmin <= t <= vmax]
-
-
-def _setup_plot_y_axis(ax, values):
-    """Pick linear / log / symlog so tick labels always render.
-
-    All-positive wide ranges use log (not symlog) so the unused negative
-    decade branch does not appear. Symlog is reserved for signed data.
-    """
-    arr = np.asarray(values, dtype=float)
-    arr = arr[np.isfinite(arr)]
-    if arr.size == 0:
-        return
-    vmin, vmax = float(np.min(arr)), float(np.max(arr))
-    y_min, y_max = _symlog_vmin_vmax(values)
-
-    if _needs_wide_scale(vmin, vmax):
-        if vmin > 0:
-            y_min, y_max = _log_vmin_vmax(arr)
-            ax.set_yscale("log")
-            ax.set_ylim(y_min, y_max)
-            _configure_log_axis(ax.yaxis)
-            ax.set_autoscaley_on(False)
-            return
-        ax.set_yscale("symlog", linthresh=SYMLOG_LINTHRESH)
-        ax.set_ylim(y_min, y_max)
-        _configure_symlog_axis(ax.yaxis)
-        ax.set_autoscaley_on(False)
-        return
-
-    ax.set_yscale("linear")
-    ticks = _linear_ticks_in_range(y_min, y_max)
-    if ticks:
-        ax.set_yticks(ticks)
-    ax.set_ylim(y_min, y_max)
-    ax.yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
-    ax.set_autoscaley_on(False)
 
 
 def _nice_positive_ticks(vmin, vmax, n=6):
@@ -386,18 +209,6 @@ def _should_annotate_heatmap(n_rows, n_cols):
     return n_rows * n_cols <= 35 and max(n_rows, n_cols) <= 12
 
 
-def _save_figure(fig, path, left_margin=None):
-    """Save with enough padding that axis labels are not clipped."""
-    if left_margin is not None:
-        fig.subplots_adjust(left=left_margin)
-    else:
-        try:
-            fig.tight_layout()
-        except Exception:
-            pass
-    fig.savefig(path, bbox_inches="tight", pad_inches=0.3)
-
-
 TILE_SIZE_INCHES = 3.5
 SINGLE_PARAM_ROW_HEIGHT_INCHES = 5.5
 
@@ -431,16 +242,6 @@ def montage_cell_for_param1(param1_index, layout_mode):
     if layout_mode == "single_param_row":
         return 0, param1_index
     return param1_index, None
-
-
-def get_display_name(param):
-    """Get display name for parameter, default to param if not found."""
-    return DISPLAY_NAMES.get(param, param)
-
-
-def get_metric_display_name(metric):
-    """Get display name for metric, default to metric if not found."""
-    return METRIC_DISPLAY_NAMES.get(metric, metric)
 
 
 def resolve_metric(row, metric_name):
