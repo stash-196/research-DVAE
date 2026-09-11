@@ -53,9 +53,10 @@ if __name__ == "__main__":
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
     experiment_name = (
-        "20260904-"
+        "20260911-"
+        + "XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_raw_ch1-4_1d_sep_hdim200_eStop500"
         # + "XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500_interpolate"
-        + "XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_chAll_4d_indicate_x8_hdim200_eStop500"
+        # + "XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_chAll_4d_indicate_x8_hdim200_eStop500"
         # + "20260816-XHRO_packet_loss_ep20000_ptf0-7_MTRNN9d_clip10_chAll_4d_hdim200_eStop500"
         # + "20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500"
     )
@@ -85,7 +86,7 @@ if __name__ == "__main__":
 
     # Change to dictionary of lists
     # Network
-    x_dim = [4]
+    x_dim = [1]  # 1d separate-channel arm (joint Jul-1 used x_dim=4)
     if dataset_name[0] == "PhysioNet2012":
         x_dim = [5]
     # dense_x = [1]
@@ -286,12 +287,12 @@ if __name__ == "__main__":
     if dataset_name[0] in ("Xhro", "XhroPacketLoss"):
         observation_process = [
             # "raw_all",
-            # "raw_ch1",
-            # "raw_ch2",
-            # "raw_ch3",
-            # "raw_ch4",
+            "raw_ch1",
+            "raw_ch2",
+            "raw_ch3",
+            "raw_ch4",
             # "raw_all_interpolate",
-            "raw_all_indicate",
+            # "raw_all_indicate",
             # "raw_ch1_interpolate",
             # "raw_ch2_interpolate",
             # "raw_ch3_interpolate",
