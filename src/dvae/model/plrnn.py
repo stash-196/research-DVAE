@@ -70,6 +70,10 @@ class PLRNN(nn.Module):
         # computed on the fly from the parameter; not overwriting self.A with a Tensor
         return self.sigmoid_10(self.A_sigmas)
 
+    def alphas_per_unit(self):
+        """Diagonal A is the per-unit timescale (same role as MT_RNN alphas)."""
+        return self.A
+
 
 class shPLRNN(nn.Module):
     def __init__(self, input_size, hidden_size, hidden_sh_size, num_layers=1):
@@ -152,6 +156,10 @@ class shPLRNN(nn.Module):
     def A(self) -> torch.Tensor:
         # computed on the fly from the parameter; not overwriting self.A with a Tensor
         return self.sigmoid_10(self.A_sigmas)
+
+    def alphas_per_unit(self):
+        """Diagonal A is the per-unit timescale (same role as MT_RNN alphas)."""
+        return self.A
 
 
 class shPLRNN_wo_A(nn.Module):

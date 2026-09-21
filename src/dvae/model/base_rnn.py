@@ -79,6 +79,18 @@ class BaseRNN(BaseModel):
         else:
             raise ValueError(f"Unsupported RNN type!: {self.type_rnn}")
 
+    def alphas_per_unit(self):
+        """Per-unit timescales when the cell has them (diagonal A on PLRNN/shPLRNN).
+
+        Vanilla RNN/LSTM have no A; return None so eval/viz skip rather than
+        inventing placeholders. MT_RNN overrides this with mixing alphas.
+        """
+        cell = getattr(self, "rnn", None)
+        getter = getattr(cell, "alphas_per_unit", None)
+        if callable(getter):
+            return getter()
+        return None
+
     def generation_x(self, h_t):
         dec_output = self.mlp_h_x(h_t)
         y_t = self.gen_out(dec_output)

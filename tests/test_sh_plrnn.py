@@ -182,6 +182,19 @@ def test_smoke_ini_is_selectable_as_shplrnn():
     assert y.shape == (seq_len, batch, x_dim)
 
 
+def test_shplrnn_exposes_diagonal_A_as_alphas_per_unit():
+    """Eval/viz reuse alphas_per_unit: cell A == wrapper timescales."""
+    M, L, K = 5, 11, 3
+    cell = shPLRNN(input_size=K, hidden_size=M, hidden_sh_size=L)
+    torch.testing.assert_close(cell.alphas_per_unit(), cell.A)
+    assert cell.alphas_per_unit().shape == (M,)
+
+    cfg = _network_cfg(dim_rnn=M, hidden_sh_size=str(L), x_dim=K)
+    model = build_RNN(cfg, device="cpu")
+    torch.testing.assert_close(model.alphas_per_unit(), model.rnn.A)
+    assert model.alphas_per_unit().shape == (M,)
+
+
 def test_mt_rnn_shplrnn_forward_uses_existing_tf_path():
     cfg = _network_cfg(
         name="MT_RNN",

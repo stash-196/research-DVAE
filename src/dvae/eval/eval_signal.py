@@ -71,6 +71,7 @@ import configparser
 from typing import Any, Optional
 from dataclasses import replace
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
+from dvae.eval.maybe_alphas import alphas_to_metric_list, maybe_alphas_per_unit
 
 
 class Options:
@@ -475,10 +476,9 @@ if __name__ == "__main__":
 
     overlap = cfg["DataFrame"].getboolean("overlap")
 
-    # Check if "alpha" exists in the config.ini under the [Network] section
-    alphas_per_unit = None
-    if learning_algo.optimize_alphas is not None:
-        alphas_per_unit = dvae.alphas_per_unit()
+    # Timescales: MT mixing alphas, or PLRNN/shPLRNN diagonal A. Vanilla
+    # RNN/LSTM return None. Do not gate on optimize_alphas (False is not None).
+    alphas_per_unit = maybe_alphas_per_unit(dvae)
 
     ############################################################################
     # Path to the directory where the model and loss_model.pckl are saved
@@ -488,6 +488,9 @@ if __name__ == "__main__":
     # Initialize metrics
     metrics: dict[str, Any] = {"params": params}
     metrics["total_params"] = int(dvae.parameter_count())
+    recorded_alphas = alphas_to_metric_list(alphas_per_unit)
+    if recorded_alphas is not None:
+        metrics["alphas_per_unit"] = recorded_alphas
     # Add config to metrics
     metrics["config"] = config_dict
     # Stamp weight provenance for eval harness (final vs checkpoint)
