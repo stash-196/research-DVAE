@@ -33,6 +33,11 @@ class BaseRNN(BaseModel):
         self.dim_rnn = dim_rnn
         self.num_rnn = num_rnn
         self.type_rnn = type_rnn
+        # shPLRNN hidden width L (typically L >= M = dim_rnn). Unused for other cells.
+        raw_hidden_sh = cfg.get("Network", "hidden_sh_size", fallback="")
+        self.hidden_sh_size = (
+            int(raw_hidden_sh) if str(raw_hidden_sh).strip() else self.dim_rnn
+        )
 
         self.noise_std_factor = cfg.getfloat(
             "Training", "noise_std_factor", fallback=0.1
@@ -68,8 +73,9 @@ class BaseRNN(BaseModel):
         elif self.type_rnn == "PLRNN":
             return PLRNN(input_dim, self.dim_rnn, self.num_rnn)
         elif self.type_rnn == "shPLRNN":
-            hidden_sh_size = self.dim_rnn  # You can modify this as needed
-            return shPLRNN(input_dim, self.dim_rnn, hidden_sh_size, self.num_rnn)
+            return shPLRNN(
+                input_dim, self.dim_rnn, self.hidden_sh_size, self.num_rnn
+            )
         else:
             raise ValueError(f"Unsupported RNN type!: {self.type_rnn}")
 

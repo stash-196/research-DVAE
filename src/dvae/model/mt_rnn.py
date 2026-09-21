@@ -143,9 +143,13 @@ class MT_RNN(BaseRNN):
     def recurrence(self, feature_xt, h_t, c_t=None):
         if self.type_rnn == "LSTM":
             _, (h_tp1, c_tp1) = self.rnn(feature_xt, (h_t, c_t))
-        elif self.type_rnn == "RNN":
+        elif self.type_rnn in ["RNN", "PLRNN", "shPLRNN"]:
             _, h_tp1 = self.rnn(feature_xt, h_t)
             c_tp1 = None
+        else:
+            raise ValueError(
+                f"Unsupported RNN type for MT_RNN recurrence: {self.type_rnn}"
+            )
         h_tp1 = (1 - self.alphas_per_unit()) * h_t + self.alphas_per_unit() * h_tp1
         return h_tp1, c_tp1
 

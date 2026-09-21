@@ -66,7 +66,7 @@ if __name__ == "__main__":
     rnn_types = [
         # "PLRNN",
         "RNN",
-        # "shPLRNN",
+        # "shPLRNN",  # Hess/Durstewitz shallow PLRNN cell; no GTF. Set hidden_sh_size (L).
     ]
 
     # Change to dictionary of lists
@@ -77,6 +77,8 @@ if __name__ == "__main__":
     dense_z = [[16, 32]]
 
     dim_rnn = [64]
+    # shPLRNN hidden width L (typically L >= M = dim_rnn). Unused when type_rnn=RNN.
+    hidden_sh_size = dim_rnn
     alphas = [
         [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
         # [0.1],
@@ -206,6 +208,7 @@ if __name__ == "__main__":
             "x_dim": x_dim,
             "dense_x": dense_x,
             "dim_rnn": dim_rnn,
+            "hidden_sh_size": hidden_sh_size,
             "activation": activation,
             # Training
             "lr": lr,
