@@ -353,7 +353,9 @@ def summarize_metric_by_x_channel(
             stds_from_col[key].append(float(std_val))
 
     series: List[Dict[str, object]] = []
-    for x_val, channel in sorted(groups, key=lambda item: (sort_key(item[0]), channel_sort_key(item[1]))):
+    for x_val, channel in sorted(
+        groups, key=lambda item: (sort_key(item[0]), channel_sort_key(item[1]))
+    ):
         values = np.asarray(groups[(x_val, channel)], dtype=float)
         mean = float(np.mean(values))
         if values.size > 1:
@@ -747,7 +749,12 @@ def plot_metric_channel_panels(
         if by_channel[channel]
     }
     channels = channels_for_figure(found_channels)
-    if not any(summaries.get(exp.label, {}).get(ch) for exp in experiments for ch in channels):
+    has_series = any(
+        summaries.get(exp.label, {}).get(ch)
+        for exp in experiments
+        for ch in channels
+    )
+    if not has_series:
         print(f"No per-channel data to plot for {metric}. Skipping.")
         return False
 
