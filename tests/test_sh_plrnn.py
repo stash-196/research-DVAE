@@ -11,8 +11,9 @@ from pathlib import Path
 import pytest
 import torch
 
-from dvae.model import build_MT_RNN, build_RNN
+from dvae.model.mt_rnn import build_MT_RNN
 from dvae.model.plrnn import shPLRNN
+from dvae.model.rnn import build_RNN
 from dvae.utils.read_config import myconf
 
 pytest.importorskip("torch")
