@@ -32,18 +32,18 @@
 # Comment-toggle the comparison set. Labels appear in the plot legend.
 EXPERIMENTS=(
     # 2026-07-01/ original 4d XHRO OTF (re-eval + aggregate for fair Sep-4 compare)
-    "OTF|/flash/DoyaU/stash/research-DVAE/saved_model/2026-07-01/deigo_cluster/20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500"
+    # "OTF|/flash/DoyaU/stash/research-DVAE/saved_model/2026-07-01/deigo_cluster/20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500"
 
     # 2026-09-04/ Jul-1-style 4d interpolate + indicate
-    "interpolate|/flash/DoyaU/stash/research-DVAE/saved_model/2026-09-04/deigo_cluster/20260904-XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500_interpolate"
-    "indicate|/flash/DoyaU/stash/research-DVAE/saved_model/2026-09-04/deigo_cluster/20260904-XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_chAll_4d_indicate_x8_hdim200_eStop500"
+    # "interpolate|/flash/DoyaU/stash/research-DVAE/saved_model/2026-09-04/deigo_cluster/20260904-XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500_interpolate"
+    # "indicate|/flash/DoyaU/stash/research-DVAE/saved_model/2026-09-04/deigo_cluster/20260904-XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_chAll_4d_indicate_x8_hdim200_eStop500"
 
     # Example: point at an aggregate dir instead of the experiment root
     # "OTF|/flash/DoyaU/stash/research-DVAE/saved_model/2026-07-01/deigo_cluster/20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500/aggregate_eval_plots_sampling_ratio"
 
     # 1d-sep vs Jul-1 4d OTF (needs CHANNEL_PAIR=1 and a finished 1d re-agg)
-    # "1d-sep|/flash/DoyaU/stash/research-DVAE/saved_model/2026-09-11/deigo_cluster/20260911-XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_raw_ch1-4_1d_sep_hdim200_eStop500"
-    # "OTF-4d|/flash/DoyaU/stash/research-DVAE/saved_model/2026-07-01/deigo_cluster/20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500"
+    "1d-sep|/flash/DoyaU/stash/research-DVAE/saved_model/2026-09-11/deigo_cluster/20260911-XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_raw_ch1-4_1d_sep_hdim200_eStop500"
+    "OTF-4d|/flash/DoyaU/stash/research-DVAE/saved_model/2026-07-01/deigo_cluster/20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500"
 )
 
 METRICS="${METRICS:-kld_auto spectrum_error_auto kld_tf spectrum_error_tf}"

@@ -190,7 +190,10 @@ experiments=(
     # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-09-04/deigo_cluster/20260904-XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_chAll_4d_indicate_x8_hdim200_eStop500 --parameters sampling_ratio"
 
 # 2026-07-01/ original 4d XHRO ptf0-7 (re-eval + aggregate for fair compare with Sep-4)
-    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-07-01/deigo_cluster/20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500 --parameters sampling_ratio"
+    # "/flash/DoyaU/stash/research-DVAE/saved_model/2026-07-01/deigo_cluster/20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500 --parameters sampling_ratio"
+
+# 2026-09-11/ 1d-sep raw_ch1-4 × ptf (re-agg for channel-pair vs Jul-1)
+    "/flash/DoyaU/stash/research-DVAE/saved_model/2026-09-11/deigo_cluster/20260911-XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_raw_ch1-4_1d_sep_hdim200_eStop500 --parameters sampling_ratio observation_process"
 )
 
 # Get the current date in YYYY-MM-DD format
