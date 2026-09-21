@@ -414,10 +414,10 @@ def test_default_path_collapses_1d_rows_by_sampling_ratio_only(tmp_path: Path):
     assert "channel" not in rows[0]
     by_ratio = {float(row["sampling_ratio"]): row for row in rows}
     # raw_ch1..4 at 0.0 are 10, 20, 30, 40 → mean 25, n=4
-    assert by_ratio[0.0]["kld_auto"] == pytest.approx(25.0)
+    assert float(by_ratio[0.0]["kld_auto"]) == pytest.approx(25.0)
     assert int(by_ratio[0.0]["n"]) == 4
-    assert by_ratio[0.4]["kld_auto"] == pytest.approx(10.0)
-    assert by_ratio[0.7]["kld_auto"] == pytest.approx(2.5)
+    assert float(by_ratio[0.4]["kld_auto"]) == pytest.approx(10.0)
+    assert float(by_ratio[0.7]["kld_auto"]) == pytest.approx(2.5)
 
 
 def test_channel_pair_joins_1d_long_and_4d_wide(tmp_path: Path):
