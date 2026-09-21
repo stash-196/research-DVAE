@@ -22,6 +22,12 @@
 #   OUTPUT_DIR=/flash/.../saved_model/compare_aggregates/my_name
 #   COMPARE_NAME=otf_interpolate_indicate
 #   DEPENDENCY_JOBIDS=123,456
+#   CHANNEL_PAIR=1          # 1d-sep vs joint-4d per-channel join
+#
+# Or pass --channel-pair on the launcher (same as CHANNEL_PAIR=1).
+# After the 1d-sep full re-agg exists, compare it to Jul-1 4d OTF with:
+#   CHANNEL_PAIR=1 COMPARE_NAME=1d_vs_4d_otf bash scripts/slurm/evaluation/run_compare_aggregates.sh
+# after editing EXPERIMENTS to the 1d-sep aggregate dir + the Jul-1 4d OTF root.
 
 # Comment-toggle the comparison set. Labels appear in the plot legend.
 EXPERIMENTS=(
@@ -34,6 +40,10 @@ EXPERIMENTS=(
 
     # Example: point at an aggregate dir instead of the experiment root
     # "OTF|/flash/DoyaU/stash/research-DVAE/saved_model/2026-07-01/deigo_cluster/20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500/aggregate_eval_plots_sampling_ratio"
+
+    # 1d-sep vs Jul-1 4d OTF (needs CHANNEL_PAIR=1 and a finished 1d re-agg)
+    # "1d-sep|/flash/DoyaU/stash/research-DVAE/saved_model/2026-09-11/deigo_cluster/20260911-XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_raw_ch1-4_1d_sep_hdim200_eStop500"
+    # "OTF-4d|/flash/DoyaU/stash/research-DVAE/saved_model/2026-07-01/deigo_cluster/20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500"
 )
 
 METRICS="${METRICS:-kld_auto spectrum_error_auto kld_tf spectrum_error_tf}"
@@ -41,6 +51,7 @@ X_PARAMETER="${X_PARAMETER:-sampling_ratio}"
 COMPARE_NAME="${COMPARE_NAME:-otf_interpolate_indicate}"
 
 DEPENDENCY_JOBIDS="${DEPENDENCY_JOBIDS:-}"
+CHANNEL_PAIR="${CHANNEL_PAIR:-0}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --dependency)
@@ -51,13 +62,29 @@ while [ $# -gt 0 ]; do
             DEPENDENCY_JOBIDS="${1#*=}"
             shift
             ;;
+        --channel-pair)
+            CHANNEL_PAIR=1
+            shift
+            ;;
+        --channel-pair=*)
+            CHANNEL_PAIR="${1#*=}"
+            shift
+            ;;
         *)
             echo "[bash] Unknown argument: $1" >&2
-            echo "[bash] Usage: $0 [--dependency JOBID[,JOBID...]]" >&2
+            echo "[bash] Usage: $0 [--dependency JOBID[,JOBID...]] [--channel-pair]" >&2
             exit 1
             ;;
     esac
 done
+
+CHANNEL_PAIR_FLAG=""
+case "${CHANNEL_PAIR}" in
+    1|true|TRUE|yes|YES|on|ON)
+        CHANNEL_PAIR_FLAG="--channel-pair"
+        echo "[bash] Channel-pair mode: on"
+        ;;
+esac
 
 # Paths (aligned with run_aggregate_multiple.sh)
 CONTAINER_PATH=/bucket/DoyaU/stash/containers/generic_ml_container.sif
@@ -146,6 +173,7 @@ echo "[slurm] Under SLURM JobID: \$SLURM_JOBID"
 echo "[slurm] Experiments:${EXP_ARGS_STR}"
 echo "[slurm] Metrics: $METRICS"
 echo "[slurm] X parameter: $X_PARAMETER"
+echo "[slurm] Channel-pair: ${CHANNEL_PAIR_FLAG:-off}"
 echo "[slurm] Output: $OUTPUT_DIR_CONTAINER"
 
 if [ -f /etc/profile.d/zz_deigo_base.sh ]; then
@@ -165,7 +193,7 @@ singularity exec \\
   --bind \$DATA_HOST_PATH:/data \\
   --bind \$SAVED_HOST_PATH:/saved_model \\
   \$CONTAINER_PATH \\
-    bash -c "source /workspace/venv/bin/activate && python3 src/dvae/eval/compare_aggregated_results.py --experiments${EXP_ARGS_STR} --metrics $METRICS --x-parameter $X_PARAMETER --output_dir \$OUTPUT_DIR_CONTAINER"
+    bash -c "source /workspace/venv/bin/activate && python3 src/dvae/eval/compare_aggregated_results.py --experiments${EXP_ARGS_STR} --metrics $METRICS --x-parameter $X_PARAMETER --output_dir \$OUTPUT_DIR_CONTAINER $CHANNEL_PAIR_FLAG"
 
 EXIT_CODE=\$?
 if [ \$EXIT_CODE -ne 0 ]; then
@@ -178,6 +206,9 @@ EOL
 
 echo "[bash] Output dir: $OUTPUT_DIR_HOST"
 echo "[bash] Metrics: $METRICS"
+if [ -n "$CHANNEL_PAIR_FLAG" ]; then
+    echo "[bash] Channel-pair: $CHANNEL_PAIR_FLAG"
+fi
 echo "[bash] Submitting compare_aggregates"
 if [ -n "$SBATCH_DEP" ]; then
     sbatch $SBATCH_DEP "$SLURM_SCRIPT"
