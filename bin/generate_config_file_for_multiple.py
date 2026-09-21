@@ -53,40 +53,37 @@ if __name__ == "__main__":
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
     experiment_name = (
-        "20260911-"
-        + "XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_raw_ch1-4_1d_sep_hdim200_eStop500"
-        # + "XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500_interpolate"
-        # + "XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_chAll_4d_indicate_x8_hdim200_eStop500"
-        # + "20260816-XHRO_packet_loss_ep20000_ptf0-7_MTRNN9d_clip10_chAll_4d_hdim200_eStop500"
-        # + "20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500"
+        "20260921-"
+        + "Lorenz_ep20000_auto0-0.8_miss0.1-0.7_shPLRNN_hdim40_L80_clip10_eStop200_indicate"
+        # + "XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_raw_ch1-4_1d_sep_hdim200_eStop500"
     )
     print("Experiment name:", experiment_name)
     #  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< data name >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     dataset_name = [
-        "Xhro",
+        # "Xhro",
         # "XhroPacketLoss",
         # "PhysioNet2012",
-        # "Lorenz63",
+        "Lorenz63",
         # "SHO",
         # "DampedSHO"
     ]
 
     models = [
-        # "RNN",
+        "RNN",
         # "VRNN",
-        "MT_RNN",
+        # "MT_RNN",
         # "MT_VRNN"
     ]
     rnn_types = [
         # "PLRNN",
-        "RNN",
-        # "shPLRNN",  # Hess/Durstewitz shallow PLRNN cell; no GTF. Set hidden_sh_size (L).
+        # "RNN",
+        "shPLRNN",  # Hess/Durstewitz shallow PLRNN cell; no GTF. Set hidden_sh_size (L).
         # "LSTM",
     ]
 
     # Change to dictionary of lists
     # Network
-    x_dim = [1]  # 1d separate-channel arm (joint Jul-1 used x_dim=4)
+    x_dim = [1]  # Lorenz only_x / indicate doubles x_dim below
     if dataset_name[0] == "PhysioNet2012":
         x_dim = [5]
     # dense_x = [1]
@@ -94,9 +91,9 @@ if __name__ == "__main__":
     z_dim = [9]
     dense_z = [[16, 32]]
 
-    dim_rnn = [200]
+    dim_rnn = [40]  # M — match prior Lorenz LSTM/RNN hdim40 sweeps
     # shPLRNN hidden width L (typically L >= M = dim_rnn). Unused when type_rnn=RNN.
-    hidden_sh_size = dim_rnn
+    hidden_sh_size = [80]  # L = 2M
     alphas = [
         # [0.1, 0.1, 0.1],
         # [0.1],
@@ -122,7 +119,7 @@ if __name__ == "__main__":
         early_stop_patience = [200]
     save_frequency = [200]
     gradient_clip = [10.0]
-    optimize_alphas = [True]
+    optimize_alphas = [False]  # unused for shPLRNN; A already sigmoid-constrained
     sampling_method = [
         # "ss",
         "ptf",
@@ -146,17 +143,10 @@ if __name__ == "__main__":
     else: # Lorenz
         sampling_ratio = [
             0.0,
-            # 0.01,
-            # 0.05,
-            0.1,
-            # 0.2,
             0.3,
-            # 0.4,
             0.5,
-            # 0.6,
             0.7,
             0.8,
-            0.9,
         ]
     auto_warm_start = [
         0.0,
@@ -260,17 +250,11 @@ if __name__ == "__main__":
         ]
     elif dataset_name[0] == "Lorenz63":
         mask_label = [
-            "None",
-            # "Markov_AvgLen15_0.0",
+            # "None",
             "Markov_AvgLen15_0.1",
-            # "Markov_AvgLen15_0.2",
             "Markov_AvgLen15_0.3",
-            # "Markov_AvgLen15_0.4",
             "Markov_AvgLen15_0.5",
-            # "Markov_AvgLen15_0.6",
             "Markov_AvgLen15_0.7",
-            "Markov_AvgLen15_0.8",
-            # "Markov_AvgLen15_0.9",
         ]
     else:
         mask_label = [
