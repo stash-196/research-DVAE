@@ -4,6 +4,8 @@ from typing import Any, Dict, List
 
 import numpy as np
 
+from dvae.eval.utils.intrinsic_dim import ID_PER_CHANNEL_PREFIXES, ID_SUMMARY_KEYS
+
 
 def _nanmean_std(values: List[float]):
     arr = np.array(values, dtype=np.float64)
@@ -69,6 +71,19 @@ def flatten_analysis_to_batch_metrics(
             out[f"kld_tf_{ch_key}"] = float(vals["kld_tf"])
         if "kld_auto" in vals and np.isfinite(vals["kld_auto"]):
             out[f"kld_auto_{ch_key}"] = float(vals["kld_auto"])
+        for prefix in ID_PER_CHANNEL_PREFIXES:
+            if prefix in vals and vals[prefix] is not None:
+                try:
+                    out[f"{prefix}_{ch_key}"] = float(vals[prefix])
+                except (TypeError, ValueError):
+                    continue
+
+    for key in ID_SUMMARY_KEYS:
+        if key in geom_results and geom_results[key] is not None:
+            try:
+                out[key] = float(geom_results[key])
+            except (TypeError, ValueError):
+                continue
 
     for key in (
         "spectrum_error_tf",

@@ -7,6 +7,7 @@ import torch
 
 from dvae.dataset.xhro_dataset import select_columns_for_obs_conditions
 from dvae.dataset.physionet2012_dataset import PHYSINET_OBS_COLUMNS
+from dvae.eval.utils.delay_params import _get_delay_params
 from dvae.eval.utils.forward_modes import (
     count_auto_blocks,
     get_auto_mask_1d,
@@ -111,12 +112,6 @@ def _get_dt(dataset, dataset_name: str) -> float:
     return 1e-2
 
 
-def _get_delay_params(dataset_name: str) -> Tuple[int, int]:
-    if dataset_name == "Lorenz63":
-        return 10, 3
-    return 5, 3
-
-
 def _align_missing_mask(
     dataset, batch_idx: int, seq_len: int, n_channels: int
 ) -> Optional[np.ndarray]:
@@ -205,6 +200,10 @@ def get_channel_benchmarks(
     mode_selector: Optional[Union[torch.Tensor, np.ndarray]] = None,
     block_len: Optional[int] = None,
     autonomous_ratio: float = 0.0,
+    time_delay: Optional[int] = None,
+    delay_dims: Optional[int] = None,
+    delay_dims_by_channel: Optional[Dict[str, int]] = None,
+    joint_delay_dims: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Build per-channel GT / TF / Auto signals for metric computation.
@@ -297,7 +296,18 @@ def get_channel_benchmarks(
         )
 
     dt = _get_dt(dataset, dataset_name)
-    time_delay, delay_dims = _get_delay_params(dataset_name)
+    # Default tau / m stay on the hardcoded table so existing callers replicate.
+    # Eval passes overrides only for an explicit CLI delay or a frozen GT scan.
+    default_tau, default_m = _get_delay_params(dataset_name)
+    if time_delay is None:
+        time_delay = default_tau
+    if delay_dims is None:
+        delay_dims = default_m
+    time_delay = int(time_delay)
+    delay_dims = int(delay_dims)
+    by_channel = None
+    if delay_dims_by_channel:
+        by_channel = {str(k): int(v) for k, v in delay_dims_by_channel.items()}
 
     return {
         "channels": channels,
@@ -312,6 +322,10 @@ def get_channel_benchmarks(
         "dt": dt,
         "time_delay": time_delay,
         "delay_dims": delay_dims,
+        "delay_dims_by_channel": by_channel,
+        "joint_delay_dims": (
+            None if joint_delay_dims is None else int(joint_delay_dims)
+        ),
         "is_multidim": len(channels) > 1,
         "dataset_name": dataset_name,
         "observation_process": observation_process,
