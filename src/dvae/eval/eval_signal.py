@@ -79,6 +79,10 @@ from dvae.eval.utils.delay_dim_selection import (
     make_gt_fingerprint,
     resolve_delay_embedding,
 )
+from dvae.eval.utils.jacobian_lyapunov import (
+    attach_lyapunov_metrics,
+    resolve_lyapunov_settings,
+)
 
 
 class Options:
@@ -243,6 +247,60 @@ class Options:
             action="store_true",
             default=False,
             help="Ignore an existing GT delay cache and scan again.",
+        )
+        self.parser.add_argument(
+            "--compute-lyapunov",
+            dest="compute_lyapunov",
+            type=lambda s: str(s).lower() in ("true", "1", "yes", "y"),
+            default=None,
+            help=(
+                "Autonomous Jacobian summaries and Benettin Lyapunov spectrum "
+                "(Hess et al. ICML 2023). Default off, unless "
+                "[Evaluation] compute_lyapunov is true. Pass true or false "
+                "to override the config. Does not change the default eval."
+            ),
+        )
+        self.parser.add_argument(
+            "--lyap-n-steps",
+            dest="lyap_n_steps",
+            type=int,
+            default=None,
+            help=(
+                "Benettin QR steps after the transient "
+                "(default 1000, or [Evaluation] lyap_n_steps)."
+            ),
+        )
+        self.parser.add_argument(
+            "--lyap-n-transient",
+            dest="lyap_n_transient",
+            type=int,
+            default=None,
+            help=(
+                "Autonomous steps discarded before accumulating exponents "
+                "(default 100, or [Evaluation] lyap_n_transient)."
+            ),
+        )
+        self.parser.add_argument(
+            "--lyap-n-warmup",
+            dest="lyap_n_warmup",
+            type=int,
+            default=None,
+            help=(
+                "Teacher-forced steps used only to choose z0 "
+                "(default 50, or [Evaluation] lyap_n_warmup). "
+                "The spectrum is an autonomous free-run with the external "
+                "observation held at 0; warmup is not accumulated."
+            ),
+        )
+        self.parser.add_argument(
+            "--lyap-k",
+            dest="lyap_k",
+            type=int,
+            default=None,
+            help=(
+                "How many Lyapunov exponents to keep "
+                "(default: full latent dimension)."
+            ),
         )
 
     def get_params(self):
@@ -1703,6 +1761,64 @@ if __name__ == "__main__":
 
     # Wait for parallel visualizations to complete (optional - can be removed if not needed)
     # The YAML is already saved above, so we can exit early if desired
+
+    # Optional Jacobian opnorm + Benettin spectrum. Off unless
+    # --compute-lyapunov / [Evaluation] compute_lyapunov, so the default
+    # summary stays identical. The free-run is autonomous: observation
+    # input is 0 (no decoder feedback). TF warmup only picks z0.
+    lyap_settings = resolve_lyapunov_settings(params, cfg)
+    if lyap_settings["enabled"]:
+        print(
+            "[Eval] Computing autonomous Jacobian + Benettin Lyapunov "
+            "spectrum (external observation = 0; TF warmup discarded)..."
+        )
+        sys.stdout.flush()
+        lyap_batch = None
+        if int(lyap_settings["n_warmup"]) > 0:
+            try:
+                lyap_batch = next(iter(test_dataloader)).to(device)
+                if lyap_batch.ndim == 3:
+                    # Dataloader layout is (batch, seq, x); the latent
+                    # warmup expects (seq, batch, x).
+                    lyap_batch = lyap_batch.permute(1, 0, 2)
+                else:
+                    print(
+                        "[Eval] Warning: Lyapunov warmup batch has shape "
+                        f"{tuple(lyap_batch.shape)}; starting from z=0"
+                    )
+                    lyap_batch = None
+            except Exception as exc:
+                print(
+                    "[Eval] Warning: Lyapunov warmup batch unavailable "
+                    f"({exc}); starting from z=0"
+                )
+                lyap_batch = None
+        attach_lyapunov_metrics(
+            metrics,
+            dvae,
+            batch_data=lyap_batch,
+            enabled=True,
+            n_steps=lyap_settings["n_steps"],
+            n_transient=lyap_settings["n_transient"],
+            n_warmup=lyap_settings["n_warmup"],
+            k=lyap_settings["k"],
+        )
+        if "lyap_max" in metrics:
+            print(
+                "[Eval] Lyapunov max: "
+                f"{metrics['lyap_max']:.6f} | "
+                f"jac opnorm mean/max: "
+                f"{metrics['jac_opnorm_mean']:.6f}/"
+                f"{metrics['jac_opnorm_max']:.6f} | "
+                f"rho max: {metrics['jac_rho_max']:.6f} | "
+                f"map: {metrics.get('lyap_map')}"
+            )
+        elif "lyapunov_skip_reason" in metrics:
+            print(
+                "[Eval] Warning: Lyapunov/Jacobian skipped: "
+                f"{metrics['lyapunov_skip_reason']}"
+            )
+        sys.stdout.flush()
 
     print("[Eval] [CHECKPOINT] Saving final evaluation summary YAML...")
     sys.stdout.flush()

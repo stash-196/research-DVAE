@@ -86,6 +86,24 @@ _EXPORTS = {
         "dvae.eval.utils.batch_all_visuals",
         "render_summary_error_bars",
     ),
+    "attach_lyapunov_metrics": (
+        "dvae.eval.utils.jacobian_lyapunov",
+        "attach_lyapunov_metrics",
+    ),
+    "benettin_lyapunov_spectrum": (
+        "dvae.eval.utils.jacobian_lyapunov",
+        "benettin_lyapunov_spectrum",
+    ),
+    "jacobian_plrnn": ("dvae.eval.utils.jacobian_lyapunov", "jacobian_plrnn"),
+    "jacobian_shplrnn": ("dvae.eval.utils.jacobian_lyapunov", "jacobian_shplrnn"),
+    "resolve_lyapunov_settings": (
+        "dvae.eval.utils.jacobian_lyapunov",
+        "resolve_lyapunov_settings",
+    ),
+    "trajectory_jacobian_summaries": (
+        "dvae.eval.utils.jacobian_lyapunov",
+        "trajectory_jacobian_summaries",
+    ),
 }
 
 __all__ = list(_EXPORTS.keys())
