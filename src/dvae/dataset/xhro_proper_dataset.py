@@ -19,6 +19,31 @@ Comparison protocol (same recording):
 Time axis: prefers ``datetime_ns`` on the NPZ (UTC ns + ``tz``). If missing
 (old runs), reconstructs from ``config_snapshot.json`` / inventory ``t_start``
 plus relative ``t``.
+
+Session directory
+-----------------
+``data_dir`` (``path_to_data``) is the dataset root. The folder that
+*contains* session folders is chosen as follows. If neither ``data_root``
+nor ``corpus`` is set, the path is unchanged::
+
+    {data_dir}/xhro_packet_loss/grok_output/{dataset_label}_{variant}
+
+``variant`` comes from ``mask_label``: ``realtime`` or ``retrans``
+(``recovered`` aliases ``retrans``). That is ``corpus="packet_loss"``.
+
+``corpus="multi"`` is the suntory Multi tree. ``dataset_label`` **is** the
+session folder name (``xhro_01_XH015``). ``mask_label`` is ignored — do not
+append a ``_realtime`` / ``_retrans`` suffix::
+
+    {data_dir}/suntory/xhro_dataset_v2/grok_output/{dataset_label}
+
+``data_root`` replaces that parent. An absolute path is used as given; a
+relative path is joined onto ``data_dir``. Naming still follows ``corpus``
+(variant suffix for packet-loss, none for multi). Point a non-default Multi
+tree at its ``grok_output`` folder with ``data_root`` and ``corpus="multi"``.
+
+Optional ``[DataFrame]`` keys ``corpus`` and ``data_root`` (missing, blank,
+or ``None`` = unset). Other datasets ignore them.
 """
 
 from __future__ import annotations
@@ -81,13 +106,142 @@ def _split_process(name: str) -> tuple[str, str | None]:
     return name, None
 
 
-def _session_dir(path_to_data: str, recording_id: str, variant: str) -> Path:
-    return (
-        Path(path_to_data)
-        / "xhro_packet_loss"
-        / "grok_output"
-        / f"{recording_id}_{variant}"
+# Parent of session folders, relative to path_to_data (data_dir).
+# packet_loss is the historical default when neither data_root nor corpus is set.
+CORPUS_GROK_RELATIVE = {
+    "packet_loss": Path("xhro_packet_loss") / "grok_output",
+    "multi": Path("suntory") / "xhro_dataset_v2" / "grok_output",
+}
+CORPUS_ALIASES = {
+    "packet_loss": "packet_loss",
+    "packet-loss": "packet_loss",
+    "xhro_packet_loss": "packet_loss",
+    "multi": "multi",
+    "suntory": "multi",
+}
+
+
+def _is_unset(value) -> bool:
+    """Missing, blank, and the config sentinel ``None`` mean unset."""
+    if value is None:
+        return True
+    if isinstance(value, str) and value.strip() in ("", "None"):
+        return True
+    return False
+
+
+def optional_config_str(cfg, section: str, option: str) -> str | None:
+    """Read an optional ini string. Missing, blank, and ``None`` mean unset."""
+    if not cfg.has_section(section):
+        return None
+    raw = cfg.get(section, option, fallback=None)
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if text == "" or text.lower() == "none":
+        return None
+    return text
+
+
+def _normalize_corpus(corpus) -> str | None:
+    if _is_unset(corpus):
+        return None
+    key = str(corpus).strip().lower()
+    canonical = CORPUS_ALIASES.get(key)
+    if canonical is None:
+        known = ", ".join(sorted(CORPUS_GROK_RELATIVE))
+        raise ValueError(
+            f"Unknown XhroProper corpus {corpus!r}. "
+            f"Expected one of: {known} "
+            "(aliases: packet-loss→packet_loss, suntory→multi). "
+            "Or set data_root to the directory that contains session folders."
+        )
+    return canonical
+
+
+def _session_parent(path_to_data: str, data_root, corpus: str | None) -> Path:
+    """Directory that contains session folders.
+
+    An absolute ``data_root`` is used as-is. A relative ``data_root`` is
+    joined onto ``path_to_data`` (pathlib drops the left side when the right
+    side is absolute).
+    """
+    if not _is_unset(data_root):
+        return Path(path_to_data) / str(data_root).strip()
+    key = corpus or "packet_loss"
+    return Path(path_to_data) / CORPUS_GROK_RELATIVE[key]
+
+
+def _session_folder_name(
+    recording_id: str, variant: str | None, corpus: str | None
+) -> str:
+    if _is_unset(recording_id):
+        raise ValueError(
+            "XhroProper dataset_label is required: recording id for "
+            "packet_loss, or the session folder name for multi "
+            "(e.g. xhro_01_XH015)."
+        )
+    label = str(recording_id).strip()
+    # multi: dataset_label is the folder name. mask_label / variant is ignored.
+    if corpus == "multi":
+        return label
+    if _is_unset(variant):
+        raise ValueError(
+            "XhroProper packet_loss sessions need mask_label "
+            f"(realtime or retrans) to form '{label}_<variant>'."
+        )
+    return f"{label}_{variant}"
+
+
+def _session_dir(
+    path_to_data: str,
+    recording_id: str,
+    variant: str | None = None,
+    *,
+    data_root: str | None = None,
+    corpus: str | None = None,
+) -> Path:
+    """Resolve the grok session directory. Does not check that it exists.
+
+    Default (no ``data_root``, no ``corpus``)::
+
+        {path_to_data}/xhro_packet_loss/grok_output/{recording_id}_{variant}
+
+    ``corpus="multi"``::
+
+        {path_to_data}/suntory/xhro_dataset_v2/grok_output/{recording_id}
+    """
+    normalized = _normalize_corpus(corpus)
+    parent = _session_parent(path_to_data, data_root, normalized)
+    name = _session_folder_name(recording_id, variant, normalized)
+    return parent / name
+
+
+def _require_session_dir(
+    path_to_data: str,
+    recording_id: str,
+    variant: str | None = None,
+    *,
+    data_root: str | None = None,
+    corpus: str | None = None,
+) -> Path:
+    """Resolve the session directory and raise if that path is not a directory."""
+    path = _session_dir(
+        path_to_data,
+        recording_id,
+        variant,
+        data_root=data_root,
+        corpus=corpus,
     )
+    if not path.is_dir():
+        effective = _normalize_corpus(corpus) or "packet_loss"
+        shown_root = None if _is_unset(data_root) else str(data_root).strip()
+        raise FileNotFoundError(
+            "XhroProper session directory not found: "
+            f"{path} (corpus={effective!r}, data_root={shown_root!r}, "
+            f"dataset_label={recording_id!r})"
+        )
+    return path
 
 
 def _tz_name(raw) -> str:
@@ -308,9 +462,18 @@ def _columns_for_base(base: str) -> list[str]:
 class XhroProper(Xhro):
     """Grok-pipeline XHRO sequences with named banks and honest gaps.
 
-    Config mapping (same shape as XhroPacketLoss):
-      - dataset_label: recording id (e.g. XHRO3506_20260622T142410000+0900)
-      - mask_label: ``realtime`` or ``retrans`` (``recovered`` aliases retrans)
+    Config mapping:
+      - dataset_label: packet-loss recording id
+        (e.g. ``XHRO3506_20260622T142410000+0900``), or the Multi session
+        folder name (e.g. ``xhro_01_XH015``).
+      - mask_label: ``realtime`` or ``retrans`` (``recovered`` aliases
+        retrans) for packet-loss. Ignored when ``corpus`` is ``multi``.
+      - corpus: ``packet_loss`` (default) or ``multi``.
+      - data_root: folder that contains session directories. Overrides the
+        corpus default under ``data_dir``.
+
+    Omit both ``data_root`` and ``corpus`` to keep today's packet-loss path:
+    ``{data_dir}/xhro_packet_loss/grok_output/{dataset_label}_{variant}``.
     """
 
     def __init__(
@@ -329,12 +492,21 @@ class XhroProper(Xhro):
         overlap,
         shuffle=True,
         resample_hz=None,
+        data_root=None,
+        corpus=None,
         **kwargs,
     ):
         self.path_to_data = data_dir
         self.dataset_label = dataset_label
         self.mask_label = mask_label
-        self.variant = _resolve_variant(mask_label)
+        # None from config means the historical packet-loss tree.
+        self.corpus = _normalize_corpus(corpus) or "packet_loss"
+        self.data_root = None if _is_unset(data_root) else str(data_root).strip()
+        if self.corpus == "multi":
+            # Session folder is dataset_label. Do not invent a variant suffix.
+            self.variant = None
+        else:
+            self.variant = _resolve_variant(mask_label)
         self.x_dim = x_dim
         self.seq_len = seq_len
         self.split = split
@@ -347,8 +519,12 @@ class XhroProper(Xhro):
         self.device = device
         self.sampling_freq = None
         self.resample_hz = resample_hz
-        self.session_dir = _session_dir(
-            self.path_to_data, self.dataset_label, self.variant
+        self.session_dir = _require_session_dir(
+            self.path_to_data,
+            self.dataset_label,
+            self.variant,
+            data_root=self.data_root,
+            corpus=self.corpus,
         )
 
         base, _suffix = _split_process(self.observation_process)
@@ -371,8 +547,9 @@ class XhroProper(Xhro):
                 self.sampling_freq = (1.0 / med) if med > 0 else None
         if self.sampling_freq is None:
             self.sampling_freq = 250.0
+        log_tag = self.variant if self.variant is not None else self.corpus
         print(
-            f"[XhroProper][{self.variant}] {self.observation_process} "
+            f"[XhroProper][{log_tag}] {self.observation_process} "
             f"from {self.session_dir}  rows={len(the_sequence)}  "
             f"fs≈{self.sampling_freq:.4g} Hz"
         )

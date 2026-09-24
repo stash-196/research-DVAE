@@ -41,6 +41,7 @@ from dvae.visualizers import (
 )
 
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
+from dvae.dataset.xhro_proper_dataset import optional_config_str
 from dvae.model import (
     build_VRNN,
     build_RNN,
@@ -363,6 +364,8 @@ class LearningAlgorithm:
             device=self.device,
             dataset_label=self.dataset_label,
             mask_label=self.mask_label,
+            data_root=optional_config_str(self.cfg, "DataFrame", "data_root"),
+            corpus=optional_config_str(self.cfg, "DataFrame", "corpus"),
         )
 
         # Build data loaders (no need to pass sequence_len and device separately)

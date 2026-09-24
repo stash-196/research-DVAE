@@ -23,9 +23,12 @@ except ImportError:
 
 from dvae.dataset.xhro_proper_dataset import (  # noqa: E402
     XhroProper,
+    _require_session_dir,
     _resolve_variant,
+    _session_dir,
     datetime_from_npz,
     load_proper_frame,
+    optional_config_str,
 )
 
 
@@ -46,9 +49,7 @@ def _write_stage(path: Path, t, t_abs, **cols):
     )
 
 
-def _fake_session(root: Path, recording: str = "REC1", variant: str = "realtime") -> Path:
-    sid = f"{recording}_{variant}"
-    sess = root / "xhro_packet_loss" / "grok_output" / sid
+def _write_intermediates(sess: Path) -> Path:
     inter = sess / "intermediates"
     inter.mkdir(parents=True)
     n = 200
@@ -99,6 +100,29 @@ def _fake_session(root: Path, recording: str = "REC1", variant: str = "realtime"
     return sess
 
 
+def _fake_session(root: Path, recording: str = "REC1", variant: str = "realtime") -> Path:
+    sid = f"{recording}_{variant}"
+    sess = root / "xhro_packet_loss" / "grok_output" / sid
+    return _write_intermediates(sess)
+
+
+def _ctor_kwargs(**overrides):
+    params = dict(
+        split="train",
+        seq_len=16,
+        x_dim=1,
+        sample_rate=1,
+        skip_rate=1,
+        val_indices=0.25,
+        observation_process="raw_ch1",
+        device="cpu",
+        overlap=False,
+        shuffle=False,
+    )
+    params.update(overrides)
+    return params
+
+
 def test_registry():
     if not HAS_TORCH:
         pytest.skip("torch required to import dataset_builder")
@@ -110,6 +134,92 @@ def test_registry():
 def test_recovered_alias():
     assert _resolve_variant("recovered") == "retrans"
     assert _resolve_variant("retrans") == "retrans"
+
+
+def test_default_packet_loss_session_dir(tmp_path):
+    recording = "XHRO3506_20260622T142410000+0900"
+    expected = (
+        tmp_path / "xhro_packet_loss" / "grok_output" / f"{recording}_realtime"
+    )
+    assert _session_dir(str(tmp_path), recording, "realtime") == expected
+    assert (
+        _session_dir(str(tmp_path), recording, "retrans", corpus="packet_loss")
+        == tmp_path / "xhro_packet_loss" / "grok_output" / f"{recording}_retrans"
+    )
+    # Config sentinels must not change the historical path.
+    assert (
+        _session_dir(
+            str(tmp_path), recording, "realtime", data_root="None", corpus="None"
+        )
+        == expected
+    )
+
+
+def test_data_root_replaces_session_parent(tmp_path):
+    root = tmp_path / "custom" / "grok_output"
+    got = _session_dir(
+        str(tmp_path / "unused"),
+        "REC1",
+        "retrans",
+        data_root=str(root),
+    )
+    assert got == root / "REC1_retrans"
+    # Relative data_root is joined onto path_to_data. corpus still picks the name.
+    multi = _session_dir(
+        str(tmp_path),
+        "xhro_01_XH015",
+        "realtime",
+        data_root="custom/grok_output",
+        corpus="multi",
+    )
+    assert multi == tmp_path / "custom" / "grok_output" / "xhro_01_XH015"
+
+
+def test_corpus_multi_session_dir_has_no_variant_suffix(tmp_path):
+    label = "xhro_01_XH015"
+    expected = tmp_path / "suntory" / "xhro_dataset_v2" / "grok_output" / label
+    assert (
+        _session_dir(str(tmp_path), label, "realtime", corpus="multi") == expected
+    )
+    assert _session_dir(str(tmp_path), label, None, corpus="suntory") == expected
+    assert _session_dir(str(tmp_path), label, corpus="Multi") == expected
+
+
+def test_missing_session_dir_names_the_path_tried(tmp_path):
+    recording = "REC1"
+    expected = tmp_path / "xhro_packet_loss" / "grok_output" / "REC1_realtime"
+    with pytest.raises(FileNotFoundError) as exc:
+        _require_session_dir(str(tmp_path), recording, "realtime")
+    assert str(expected) in str(exc.value)
+
+    label = "xhro_01_XH015"
+    multi = tmp_path / "suntory" / "xhro_dataset_v2" / "grok_output" / label
+    with pytest.raises(FileNotFoundError) as exc:
+        _require_session_dir(str(tmp_path), label, "realtime", corpus="multi")
+    assert str(multi) in str(exc.value)
+
+
+def test_unknown_corpus_rejected(tmp_path):
+    with pytest.raises(ValueError, match="Unknown XhroProper corpus"):
+        _session_dir(str(tmp_path), "REC1", "realtime", corpus="nope")
+
+
+def test_optional_config_str():
+    import configparser
+
+    cfg = configparser.ConfigParser()
+    cfg.read_string(
+        """
+        [DataFrame]
+        corpus = multi
+        data_root = None
+        blank =
+        """
+    )
+    assert optional_config_str(cfg, "DataFrame", "corpus") == "multi"
+    assert optional_config_str(cfg, "DataFrame", "data_root") is None
+    assert optional_config_str(cfg, "DataFrame", "blank") is None
+    assert optional_config_str(cfg, "DataFrame", "missing") is None
 
 
 def test_load_frame_has_datetime(tmp_path):
@@ -163,6 +273,9 @@ def test_raw_ch1_dataset_shape(tmp_path):
     )
     item = np.asarray(ds[0])
     assert item.shape[-1] == 1 or item.ndim == 1
+    assert ds.session_dir == (
+        tmp_path / "xhro_packet_loss" / "grok_output" / "REC1_realtime"
+    )
 
 
 @pytest.mark.skipif(not HAS_TORCH, reason="torch not installed in this env")
@@ -184,3 +297,92 @@ def test_indicate_adds_mask_channel(tmp_path):
         shuffle=False,
     )
     assert np.asarray(ds[0]).shape[-1] == 2
+
+
+@pytest.mark.skipif(not HAS_TORCH, reason="torch not installed in this env")
+def test_data_root_init_uses_explicit_parent(tmp_path):
+    root = tmp_path / "sessions"
+    sess = _write_intermediates(root / "REC1_retrans")
+    ds = XhroProper(
+        data_dir=str(tmp_path / "unused"),
+        dataset_label="REC1",
+        mask_label="recovered",
+        data_root=str(root),
+        **_ctor_kwargs(),
+    )
+    assert ds.session_dir == sess
+    assert ds.variant == "retrans"
+    assert ds.corpus == "packet_loss"
+
+
+@pytest.mark.skipif(not HAS_TORCH, reason="torch not installed in this env")
+def test_corpus_multi_init_ignores_mask_label(tmp_path):
+    label = "xhro_01_XH015"
+    sess = _write_intermediates(
+        tmp_path / "suntory" / "xhro_dataset_v2" / "grok_output" / label
+    )
+    ds = XhroProper(
+        data_dir=str(tmp_path),
+        dataset_label=label,
+        mask_label="not-a-variant",
+        corpus="multi",
+        **_ctor_kwargs(),
+    )
+    assert ds.session_dir == sess
+    assert ds.variant is None
+    assert ds.corpus == "multi"
+
+
+@pytest.mark.skipif(not HAS_TORCH, reason="torch not installed in this env")
+def test_build_dataloader_passes_corpus_and_data_root(tmp_path):
+    from dvae.dataset.dataset_builder import DatasetConfig, build_dataloader
+
+    label = "xhro_01_XH015"
+    root = tmp_path / "multi_root"
+    sess = _write_intermediates(root / label)
+    cfg = DatasetConfig(
+        data_dir=str(tmp_path / "unused"),
+        x_dim=1,
+        batch_size=4,
+        shuffle=False,
+        num_workers=0,
+        sample_rate=1,
+        skip_rate=1,
+        val_indices=0.25,
+        observation_process="raw_ch1",
+        overlap=False,
+        with_nan=True,
+        seq_len=16,
+        device="cpu",
+        dataset_label=label,
+        mask_label="None",
+        data_root=str(root),
+        corpus="multi",
+    )
+    train_dl, _val_dl, n_train, _n_val = build_dataloader("XhroProper", cfg, "train")
+    assert n_train > 0
+    assert train_dl.dataset.session_dir == sess
+
+    # Default DatasetConfig fields keep the packet-loss path.
+    _fake_session(tmp_path)
+    default_cfg = DatasetConfig(
+        data_dir=str(tmp_path),
+        x_dim=1,
+        batch_size=4,
+        shuffle=False,
+        num_workers=0,
+        sample_rate=1,
+        skip_rate=1,
+        val_indices=0.25,
+        observation_process="raw_ch1",
+        overlap=False,
+        with_nan=True,
+        seq_len=16,
+        device="cpu",
+        dataset_label="REC1",
+        mask_label="realtime",
+    )
+    train_dl, _, _, _ = build_dataloader("XhroProper", default_cfg, "train")
+    assert train_dl.dataset.session_dir == (
+        tmp_path / "xhro_packet_loss" / "grok_output" / "REC1_realtime"
+    )
