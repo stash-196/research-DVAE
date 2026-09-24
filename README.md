@@ -65,6 +65,18 @@ Eval / aggregate after a pull: `scripts/slurm/evaluation/run_eval_multiple.sh`, 
 
 Paths for this machine vs Deigo live in `config/device_paths.yaml`. Studio `~/mounts/bucket/...` is a local cache, not a live cluster mount.
 
+## XhroProper session paths
+
+`XhroProper` reads `grok_output/<session>/intermediates/*.npz`. With neither `corpus` nor `data_root` set, the path stays the packet-loss tree:
+
+`{data_dir}/xhro_packet_loss/grok_output/{dataset_label}_{mask_label}`
+
+`mask_label` is `realtime` or `retrans` (`recovered` → `retrans`).
+
+Multi (suntory) sessions have no variant suffix. In `[DataFrame]` set `corpus = multi` and `dataset_label` to the session folder (`xhro_01_XH015`). The default parent is `{data_dir}/suntory/xhro_dataset_v2/grok_output`. `mask_label` is ignored.
+
+`data_root` replaces that parent: an absolute path is used as given, a relative path is joined onto `data_dir`. Pair it with `corpus = multi` when the Multi tree is not at the default relative path. Other datasets ignore both keys. `Xhro` and `XhroPacketLoss` keep their parquet loaders.
+
 
 # Dynamical Variational Autoencoders A Comprehensive Review
 

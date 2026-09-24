@@ -261,6 +261,13 @@ if __name__ == "__main__":
             "None",
         ]
 
+    # XhroProper session parent. Other datasets ignore these. "None" keeps
+    # {data_dir}/xhro_packet_loss/grok_output/{dataset_label}_{variant}.
+    # corpus "multi": {data_dir}/suntory/xhro_dataset_v2/grok_output/{dataset_label}
+    # (no variant suffix; mask_label ignored). data_root overrides that parent.
+    corpus = ["None"]
+    data_root = ["None"]
+
     s_dim = [1]
     shuffle = [True]
     batch_size = [128]
@@ -382,6 +389,12 @@ if __name__ == "__main__":
             "dataset_name": dataset_name,
             "dataset_label": dataset_label,
             "mask_label": mask_label,
+            # XhroProper only (other datasets ignore these). None keeps
+            # {data_dir}/xhro_packet_loss/grok_output/{dataset_label}_{variant}.
+            # "multi" → suntory/xhro_dataset_v2/grok_output/{dataset_label}
+            # with no variant suffix. data_root overrides that parent.
+            "corpus": corpus,
+            "data_root": data_root,
             "s_dim": s_dim,
             "shuffle": shuffle,
             "batch_size": batch_size,

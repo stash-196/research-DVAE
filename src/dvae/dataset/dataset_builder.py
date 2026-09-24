@@ -43,6 +43,10 @@ class DatasetConfig:
     data_dir: str
     dataset_label: str | None = None
     mask_label: str | None = None
+    # XhroProper session parent. Other datasets accept and ignore these.
+    # None keeps XhroProper's packet-loss grok_output path.
+    data_root: str | None = None
+    corpus: str | None = None
 
 
 def build_dataloader(

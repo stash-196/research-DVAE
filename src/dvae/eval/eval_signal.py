@@ -71,6 +71,7 @@ import configparser
 from typing import Any, Optional
 from dataclasses import replace
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
+from dvae.dataset.xhro_proper_dataset import optional_config_str
 from dvae.eval.maybe_alphas import alphas_to_metric_list, maybe_alphas_per_unit
 
 
@@ -467,6 +468,8 @@ if __name__ == "__main__":
         device=device,
         dataset_label=cfg.get("DataFrame", "dataset_label", fallback=None),
         mask_label=cfg.get("DataFrame", "mask_label", fallback=None),
+        data_root=optional_config_str(cfg, "DataFrame", "data_root"),
+        corpus=optional_config_str(cfg, "DataFrame", "corpus"),
     )
 
     # Build the test dataloader once
