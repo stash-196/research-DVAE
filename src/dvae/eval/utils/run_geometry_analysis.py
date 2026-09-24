@@ -1,5 +1,10 @@
 import numpy as np
 from dvae.eval.utils import compute_delay_embedding, state_space_kl
+from dvae.eval.utils.intrinsic_dim import (
+    ID_PER_CHANNEL_PREFIXES,
+    delay_dim_for_key,
+    id_metrics_for_clouds,
+)
 from dvae.visualizers import visualize_delay_embedding
 from dvae.visualizers.visualizers import visualize_errors_from_lst
 
@@ -27,12 +32,37 @@ def _embed_signal(sig, time_delay, delay_dims):
         return None
 
 
+def _nanmean(values):
+    arr = np.asarray(list(values), dtype=np.float64)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return float("nan")
+    return float(np.mean(arr))
+
+
+def _joint_embed(channels, field, time_delay, delay_dims):
+    """Stack per-channel delay clouds when every channel has the same rows."""
+    if len(channels) < 2:
+        return None
+    embs = []
+    for ch in channels:
+        emb = _embed_signal(ch[field], time_delay, delay_dims)
+        if emb is None:
+            return None
+        embs.append(emb)
+    n_rows = embs[0].shape[0]
+    if any(emb.shape[0] != n_rows for emb in embs):
+        return None
+    return np.hstack(embs)
+
+
 def run_geometry_analysis_from_benchmarks(
     channel_benchmarks, save_fig_dir, batch_idx=0, save_figures=True
 ):
     channels = channel_benchmarks["channels"]
     time_delay = channel_benchmarks["time_delay"]
     delay_dims = channel_benchmarks["delay_dims"]
+    by_channel = channel_benchmarks.get("delay_dims_by_channel")
 
     per_channel = {}
     tf_scores = []
@@ -47,12 +77,20 @@ def run_geometry_analysis_from_benchmarks(
     print("[Eval] KLD (State-Space via Delay Embedding, per channel):")
     for ch in channels:
         key = ch["key"]
-        gt_emb = _embed_signal(ch["gt_auto"], time_delay, delay_dims)
-        tf_emb = _embed_signal(ch["tf_auto"], time_delay, delay_dims)
-        auto_emb = _embed_signal(ch["auto_seg"], time_delay, delay_dims)
+        ch_dims = delay_dim_for_key(delay_dims, by_channel, key)
+        gt_emb = _embed_signal(ch["gt_auto"], time_delay, ch_dims)
+        tf_emb = _embed_signal(ch["tf_auto"], time_delay, ch_dims)
+        auto_emb = _embed_signal(ch["auto_seg"], time_delay, ch_dims)
+        # ID on the same clouds as DE→KLD (GT / TF / Auto share this channel's m*).
+        id_metrics = id_metrics_for_clouds(gt_emb, tf_emb, auto_emb)
 
         if gt_emb is None:
-            per_channel[key] = {"kld_tf": float("nan"), "kld_auto": float("nan")}
+            per_channel[key] = {
+                "kld_tf": float("nan"),
+                "kld_auto": float("nan"),
+                "delay_dims": int(ch_dims),
+                **id_metrics,
+            }
             continue
 
         safe_name = key.replace(" ", "_").lower()
@@ -61,7 +99,7 @@ def run_geometry_analysis_from_benchmarks(
             visualize_delay_embedding(
                 embedded=gt_emb,
                 save_dir=save_fig_dir,
-                variable_name=f"{safe_name}_gt_tau{time_delay}_d{delay_dims}",
+                variable_name=f"{safe_name}_gt_tau{time_delay}_d{ch_dims}",
                 explain=f"batch{batch_idx}_auto_segment",
                 base_color=base_color,
             )
@@ -86,7 +124,7 @@ def run_geometry_analysis_from_benchmarks(
                 visualize_delay_embedding(
                     embedded=tf_emb,
                     save_dir=save_fig_dir,
-                    variable_name=f"{safe_name}_tf_tau{time_delay}_d{delay_dims}",
+                    variable_name=f"{safe_name}_tf_tau{time_delay}_d{ch_dims}",
                     explain=f"batch{batch_idx}_teacher_forced",
                     base_color="Greens",
                 )
@@ -96,13 +134,25 @@ def run_geometry_analysis_from_benchmarks(
                 visualize_delay_embedding(
                     embedded=auto_emb,
                     save_dir=save_fig_dir,
-                    variable_name=f"{safe_name}_auto_tau{time_delay}_d{delay_dims}",
+                    variable_name=f"{safe_name}_auto_tau{time_delay}_d{ch_dims}",
                     explain=f"batch{batch_idx}_autonomous",
                     base_color="Reds",
                 )
 
-        per_channel[key] = {"kld_tf": kld_tf, "kld_auto": kld_auto}
-        print(f"  {key} KLD TF: {kld_tf:.4f}  Auto: {kld_auto:.4f}")
+        per_channel[key] = {
+            "kld_tf": kld_tf,
+            "kld_auto": kld_auto,
+            "delay_dims": int(ch_dims),
+            **id_metrics,
+        }
+        print(
+            f"  {key} KLD TF: {kld_tf:.4f}  Auto: {kld_auto:.4f}  "
+            f"(tau={time_delay}, m={ch_dims}, "
+            f"TwoNN GT/TF/Auto="
+            f"{id_metrics['id_twonn_gt']:.3f}/"
+            f"{id_metrics['id_twonn_tf']:.3f}/"
+            f"{id_metrics['id_twonn_auto']:.3f})"
+        )
 
         tf_scores.append(kld_tf)
         auto_scores.append(kld_auto)
@@ -139,6 +189,30 @@ def run_geometry_analysis_from_benchmarks(
             colors=comb_colors,
         )
 
+    id_means = {}
+    for prefix in ID_PER_CHANNEL_PREFIXES:
+        id_means[prefix] = _nanmean(v.get(prefix, float("nan")) for v in per_channel.values())
+
+    joint_m = channel_benchmarks.get("joint_delay_dims")
+    if joint_m is None:
+        joint_m = delay_dims
+    joint_metrics = {}
+    if len(channels) > 1:
+        joint_clouds = id_metrics_for_clouds(
+            _joint_embed(channels, "gt_auto", time_delay, int(joint_m)),
+            _joint_embed(channels, "tf_auto", time_delay, int(joint_m)),
+            _joint_embed(channels, "auto_seg", time_delay, int(joint_m)),
+        )
+        joint_metrics = {
+            "id_pr_joint_gt": joint_clouds["id_pr_gt"],
+            "id_pr_joint_tf": joint_clouds["id_pr_tf"],
+            "id_pr_joint_auto": joint_clouds["id_pr_auto"],
+            "id_twonn_joint_gt": joint_clouds["id_twonn_gt"],
+            "id_twonn_joint_tf": joint_clouds["id_twonn_tf"],
+            "id_twonn_joint_auto": joint_clouds["id_twonn_auto"],
+            "joint_delay_dims": int(joint_m),
+        }
+
     return {
         "per_channel": per_channel,
         "kld_tf_mean": kld_tf_mean,
@@ -149,6 +223,8 @@ def run_geometry_analysis_from_benchmarks(
         "signal_keys": tf_keys + auto_keys,
         "tf_keys": tf_keys,
         "auto_keys": auto_keys,
+        **id_means,
+        **joint_metrics,
     }
 
 

@@ -92,6 +92,38 @@ if [ "$#" -gt 0 ]; then
     experiments=("$@")
 fi
 
+# Optional delay-embedding flags for eval_signal.py. Unset = hardcoded tau/m
+# (delay_dim_method=fixed), so existing launches stay unchanged.
+#   DELAY_DIM_METHOD=twonn_scan   # or fixed
+#   DELAY_DIMS=3                  # fixed-mode m override
+#   TIME_DELAY=5                  # tau override (still fixed; no AMI)
+#   TWONN_M_MAX=10
+#   GT_DELAY_CACHE=/path/to/gt_delay_embed_params.yaml
+#   FORCE_GT_DELAY_RESCAN=1
+#   EVAL_EXTRA_ARGS="--no-viz"    # raw passthrough
+DELAY_DIM_FLAGS=""
+if [ -n "${DELAY_DIM_METHOD:-}" ]; then
+    DELAY_DIM_FLAGS="$DELAY_DIM_FLAGS --delay-dim-method ${DELAY_DIM_METHOD}"
+fi
+if [ -n "${DELAY_DIMS:-}" ]; then
+    DELAY_DIM_FLAGS="$DELAY_DIM_FLAGS --delay-dims ${DELAY_DIMS}"
+fi
+if [ -n "${TIME_DELAY:-}" ]; then
+    DELAY_DIM_FLAGS="$DELAY_DIM_FLAGS --time-delay ${TIME_DELAY}"
+fi
+if [ -n "${TWONN_M_MAX:-}" ]; then
+    DELAY_DIM_FLAGS="$DELAY_DIM_FLAGS --twonn-m-max ${TWONN_M_MAX}"
+fi
+if [ -n "${GT_DELAY_CACHE:-}" ]; then
+    DELAY_DIM_FLAGS="$DELAY_DIM_FLAGS --gt-delay-cache ${GT_DELAY_CACHE}"
+fi
+if [ "${FORCE_GT_DELAY_RESCAN:-0}" = "1" ]; then
+    DELAY_DIM_FLAGS="$DELAY_DIM_FLAGS --force-gt-delay-rescan"
+fi
+if [ -n "${EVAL_EXTRA_ARGS:-}" ]; then
+    DELAY_DIM_FLAGS="$DELAY_DIM_FLAGS ${EVAL_EXTRA_ARGS}"
+fi
+
 # Get the current date in YYYY-MM-DD format
 today=$(date +%Y-%m-%d)
 
@@ -243,7 +275,7 @@ singularity exec \\
   --bind \$DATA_HOST_PATH:/data \\
   --bind \$SAVED_HOST_PATH:/saved_model \\
   \$CONTAINER_PATH \\
-  bash -c "source /workspace/venv/bin/activate && python3 src/dvae/eval/eval_signal.py --saved_dict \$MODEL_CONTAINER_PATH --weights-source \$WEIGHTS_SOURCE --save-3d False \$NO_VIZ_FLAG"
+  bash -c "source /workspace/venv/bin/activate && python3 src/dvae/eval/eval_signal.py --saved_dict \$MODEL_CONTAINER_PATH --weights-source \$WEIGHTS_SOURCE --save-3d False \$NO_VIZ_FLAG $DELAY_DIM_FLAGS"
 
 # Check exit code
 EXIT_CODE=\$?

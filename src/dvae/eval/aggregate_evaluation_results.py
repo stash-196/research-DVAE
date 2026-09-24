@@ -1166,7 +1166,12 @@ def main():
             "spectrum_error_tf",
             "spectrum_error_auto",
         ],
-        help="Metrics to plot (default: common ones).",
+        help=(
+            "Metrics to plot (default: common ones). Scalar id_* keys from "
+            "evaluation_summary.yaml are included automatically when present, "
+            "including id_pr_{gt,tf,auto}, id_twonn_{gt,tf,auto}, joint "
+            "id_*_joint_*, and per-channel id_pr_gt_<channel>."
+        ),
     )
     parser.add_argument(
         "--output_dir",

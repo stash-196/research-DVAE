@@ -38,6 +38,18 @@ METRIC_DISPLAY_NAMES = {
     "spectrum_error_auto": "Spectrum Error Autonomous",
     "spectrum_error_tf_mean": "Spectrum Error TF (channel mean)",
     "spectrum_error_auto_mean": "Spectrum Error Auto (channel mean)",
+    "id_pr_gt": "PR intrinsic dim (GT)",
+    "id_pr_tf": "PR intrinsic dim (TF)",
+    "id_pr_auto": "PR intrinsic dim (Auto)",
+    "id_twonn_gt": "TwoNN intrinsic dim (GT)",
+    "id_twonn_tf": "TwoNN intrinsic dim (TF)",
+    "id_twonn_auto": "TwoNN intrinsic dim (Auto)",
+    "id_pr_joint_gt": "PR intrinsic dim joint (GT)",
+    "id_pr_joint_tf": "PR intrinsic dim joint (TF)",
+    "id_pr_joint_auto": "PR intrinsic dim joint (Auto)",
+    "id_twonn_joint_gt": "TwoNN intrinsic dim joint (GT)",
+    "id_twonn_joint_tf": "TwoNN intrinsic dim joint (TF)",
+    "id_twonn_joint_auto": "TwoNN intrinsic dim joint (Auto)",
 }
 
 

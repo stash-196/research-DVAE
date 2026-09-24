@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Sequence  # Sequence used by conca
 import numpy as np
 
 from dvae.eval.utils.delay_embedding import compute_delay_embedding
+from dvae.eval.utils.intrinsic_dim import delay_dim_for_key
 from dvae.eval.utils.durstewitz_eval_metrics import state_space_kl
 from dvae.eval.utils.frequency_analysis import _spectrum_pair_errors
 from dvae.visualizers import visualize_delay_embedding
@@ -86,7 +87,11 @@ def collect_batch_visual_record(
         "tf_auto": _as_1d(ch["tf_auto"]),
         "auto_seg": _as_1d(ch["auto_seg"]),
         "time_delay": channel_benchmarks.get("time_delay", 10),
-        "delay_dims": channel_benchmarks.get("delay_dims", 3),
+        "delay_dims": delay_dim_for_key(
+            channel_benchmarks.get("delay_dims", 3),
+            channel_benchmarks.get("delay_dims_by_channel"),
+            ch["key"],
+        ),
     }
 
 

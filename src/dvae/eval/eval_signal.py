@@ -72,6 +72,12 @@ from typing import Any, Optional
 from dataclasses import replace
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
 from dvae.eval.maybe_alphas import alphas_to_metric_list, maybe_alphas_per_unit
+from dvae.eval.utils.delay_dim_selection import (
+    collect_gt_auto_segments,
+    delay_choice_summary_fields,
+    make_gt_fingerprint,
+    resolve_delay_embedding,
+)
 
 
 class Options:
@@ -171,11 +177,79 @@ class Options:
                 "Still computes scalar metrics + evaluation_summary.yaml."
             ),
         )
+        self.parser.add_argument(
+            "--delay-dim-method",
+            dest="delay_dim_method",
+            type=str,
+            choices=["fixed", "twonn_scan"],
+            default="fixed",
+            help=(
+                "How to choose the delay-embedding dimension m. "
+                "'fixed' (default) uses _get_delay_params so existing evals "
+                "replicate. 'twonn_scan' picks m* from a TwoNN-vs-m scan on "
+                "GT only, cached at the experiment root."
+            ),
+        )
+        self.parser.add_argument(
+            "--auto-delay-dim",
+            dest="auto_delay_dim",
+            action="store_true",
+            default=False,
+            help="Shortcut for --delay-dim-method twonn_scan.",
+        )
+        self.parser.add_argument(
+            "--delay-dims",
+            dest="delay_dims",
+            type=int,
+            default=None,
+            help=(
+                "Override the hardcoded embedding dimension m when "
+                "--delay-dim-method=fixed. Ignored as the chosen m under "
+                "twonn_scan (still used if the scan cannot estimate m*)."
+            ),
+        )
+        self.parser.add_argument(
+            "--time-delay",
+            dest="time_delay",
+            type=int,
+            default=None,
+            help=(
+                "Override the hardcoded delay tau. Tau stays fixed (no AMI); "
+                "a GT-scan cache hit reuses the tau stored in that cache."
+            ),
+        )
+        self.parser.add_argument(
+            "--twonn-m-max",
+            dest="twonn_m_max",
+            type=int,
+            default=10,
+            help="Largest embedding dimension in the GT TwoNN-vs-m scan (default: 10).",
+        )
+        self.parser.add_argument(
+            "--gt-delay-cache",
+            dest="gt_delay_cache",
+            type=str,
+            default=None,
+            help=(
+                "Path to the GT delay-embed cache. Default: "
+                "gt_delay_embed_params.yaml on the experiment root "
+                "(parent of the run directory)."
+            ),
+        )
+        self.parser.add_argument(
+            "--force-gt-delay-rescan",
+            dest="force_gt_delay_rescan",
+            action="store_true",
+            default=False,
+            help="Ignore an existing GT delay cache and scan again.",
+        )
 
     def get_params(self):
         self._initial()
         self.opt = self.parser.parse_args()
         params = vars(self.opt)
+        if params.get("auto_delay_dim"):
+            params["delay_dim_method"] = "twonn_scan"
         if params["cfg"] is None:
             params["cfg"] = os.path.join(
                 os.path.dirname(params["saved_dict"]), "config.ini"
@@ -1005,6 +1079,47 @@ if __name__ == "__main__":
         spectrum_results_list = []
         metrics_save_fig_dir = os.path.join(save_fig_dir, "metrics_batches")
 
+        delay_choice = resolve_delay_embedding(
+            learning_algo.dataset_name,
+            method=params.get("delay_dim_method", "fixed"),
+            run_dir=save_dir,
+            time_delay_override=params.get("time_delay"),
+            delay_dims_override=params.get("delay_dims"),
+            m_max=int(params.get("twonn_m_max") or 10),
+            cache_path=params.get("gt_delay_cache"),
+            force_rescan=bool(params.get("force_gt_delay_rescan", False)),
+            fingerprint=make_gt_fingerprint(
+                dataset_name=learning_algo.dataset_name,
+                seq_len=int(new_seq_len),
+                n_windows=int(n_eval_windows),
+                auto_eval_mode=auto_eval_mode,
+                observation_process=observation_process,
+                auto_eval_block_len=auto_eval_block_len,
+                auto_eval_ratio=auto_eval_ratio,
+                auto_eval_flip_point=auto_eval_flip_point,
+            ),
+            gt_segments_loader=lambda: collect_gt_auto_segments(
+                metrics_dataloader,
+                dataset=metrics_dataloader.dataset,
+                dataset_name=learning_algo.dataset_name,
+                observation_process=observation_process or "",
+                auto_mode=auto_eval_mode,
+                max_windows=n_eval_windows,
+                block_len=auto_eval_block_len,
+                autonomous_ratio=auto_eval_ratio,
+                flip_point=auto_eval_flip_point,
+                device=device,
+            ),
+        )
+        metrics.update(delay_choice_summary_fields(delay_choice))
+        print(
+            f"[Eval] Delay embed method={delay_choice.method} "
+            f"tau={delay_choice.time_delay} m={delay_choice.delay_dims} "
+            f"source={delay_choice.source} "
+            f"by_channel={delay_choice.delay_dims_by_channel or '{}'}"
+        )
+        delay_benchmark_kwargs = delay_choice.as_benchmark_kwargs()
+
         print(
             f"[Eval] Quantitative metrics: up to {n_eval_windows} window(s) "
             f"(test_set={n_test_windows}, max_eval_batches={max_eval_batches}, "
@@ -1090,6 +1205,7 @@ if __name__ == "__main__":
                 mode_selector=mode_selector_auto,
                 block_len=auto_eval_block_len,
                 autonomous_ratio=auto_eval_ratio,
+                **delay_benchmark_kwargs,
             )
             print(
                 f"[Eval] Auto free-run steps={channel_benchmarks.get('n_auto_steps')} "
@@ -1267,6 +1383,8 @@ if __name__ == "__main__":
             metrics["auto_eval_ratio"] = auto_eval_ratio
             metrics["metrics_seq_len"] = new_seq_len
             metrics.update(merged)
+            # Keep the frozen delay choice ahead of any per-batch scalar with the same name.
+            metrics.update(delay_choice_summary_fields(delay_choice))
 
             metrics["mse_tf"] = merged.get("mse_tf", merged.get("mse_tf_mean"))
             metrics["mse_auto"] = merged.get("mse_auto", merged.get("mse_auto_mean"))
@@ -1354,6 +1472,17 @@ if __name__ == "__main__":
                 f"[Eval] KL stitched (batch_all geometry): "
                 f"TF={metrics['kld_tf']:.4f}  Auto={metrics['kld_auto']:.4f}"
             )
+            if "id_twonn_gt" in metrics:
+                print(
+                    "[Eval] ID TwoNN (channel mean) "
+                    f"GT={metrics.get('id_twonn_gt')} "
+                    f"TF={metrics.get('id_twonn_tf')} "
+                    f"Auto={metrics.get('id_twonn_auto')}  "
+                    "PR "
+                    f"GT={metrics.get('id_pr_gt')} "
+                    f"TF={metrics.get('id_pr_tf')} "
+                    f"Auto={metrics.get('id_pr_auto')}"
+                )
             print(
                 f"[Eval] KL per-window median [IQR]: "
                 f"TF={metrics['kld_tf_median']:.4f} "
