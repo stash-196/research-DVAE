@@ -212,27 +212,66 @@ def _linear_ticks_in_range(vmin, vmax):
     return [float(t) for t in locator.tick_values(vmin, vmax) if vmin <= t <= vmax]
 
 
+def choose_y_axis_scale(values) -> str:
+    """Return ``linear``, ``log``, or ``symlog`` for ``values``.
+
+    Plain log is only for a strictly positive wide range. Signed or
+    zero-crossing data uses symlog when the span is wide, and linear
+    otherwise. Empty or non-finite input is linear.
+    """
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return "linear"
+    vmin = float(np.min(arr))
+    vmax = float(np.max(arr))
+    if not _needs_wide_scale(vmin, vmax):
+        return "linear"
+    if vmin > 0.0:
+        return "log"
+    return "symlog"
+
+
+def error_band_edges(
+    mean: float, std: float, *, log_scale: bool
+) -> tuple[float, float]:
+    """Return ``(mean - std, mean + std)`` for a shaded std band.
+
+    Linear and symlog axes keep that interval, including a lower edge at or
+    below zero. A plain log axis cannot display non-positive coordinates, so
+    when ``log_scale`` is set and the mean is positive, a non-positive lower
+    edge is lifted to a small positive floor.
+    """
+    lo = float(mean) - float(std)
+    hi = float(mean) + float(std)
+    if log_scale and float(mean) > 0.0 and lo <= 0.0:
+        lo = max(float(np.nextafter(0.0, 1.0)), float(mean) * 1e-3)
+    return lo, hi
+
+
 def setup_plot_y_axis(ax, values):
     """Pick linear / log / symlog so tick labels always render.
 
     All-positive wide ranges use log (not symlog) so the unused negative
     decade branch does not appear. Symlog is reserved for signed data.
+    Mean±std bands should use ``error_band_edges`` with ``log_scale`` set
+    only when ``choose_y_axis_scale`` returns ``log``.
     """
     arr = np.asarray(values, dtype=float)
     arr = arr[np.isfinite(arr)]
     if arr.size == 0:
         return
-    vmin, vmax = float(np.min(arr)), float(np.max(arr))
-    y_min, y_max = _symlog_vmin_vmax(values)
+    scale = choose_y_axis_scale(arr)
+    if scale == "log":
+        y_min, y_max = _log_vmin_vmax(arr)
+        ax.set_yscale("log")
+        ax.set_ylim(y_min, y_max)
+        _configure_log_axis(ax.yaxis)
+        ax.set_autoscaley_on(False)
+        return
 
-    if _needs_wide_scale(vmin, vmax):
-        if vmin > 0:
-            y_min, y_max = _log_vmin_vmax(arr)
-            ax.set_yscale("log")
-            ax.set_ylim(y_min, y_max)
-            _configure_log_axis(ax.yaxis)
-            ax.set_autoscaley_on(False)
-            return
+    y_min, y_max = _symlog_vmin_vmax(values)
+    if scale == "symlog":
         ax.set_yscale("symlog", linthresh=SYMLOG_LINTHRESH)
         ax.set_ylim(y_min, y_max)
         _configure_symlog_axis(ax.yaxis)

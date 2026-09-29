@@ -55,6 +55,8 @@ import numpy as np
 
 from dvae.eval.aggregate_plot_style import (
     apply_paper_ready_line_style,
+    choose_y_axis_scale,
+    error_band_edges,
     get_display_name,
     get_metric_display_name,
     is_numeric,
@@ -635,10 +637,10 @@ def plot_metric_overlay(
     output_path: str,
 ) -> bool:
     """Draw one overlay curve per experiment. Return False if nothing to plot."""
-    plotted_y: List[float] = []
     config = apply_paper_ready_line_style()
     fig, ax = plt.subplots(figsize=(8.5, 6))
-    drew_any = False
+    prepared = []
+    probe_y: List[float] = []
 
     for experiment in experiments:
         series = filter_series_to_x(summaries.get(experiment.label, []), common_x)
@@ -648,40 +650,21 @@ def plot_metric_overlay(
                 f"on the shared {x_parameter} grid; skipping that curve."
             )
             continue
-        xs = [point["x"] for point in series]
-        means = [float(point["mean"]) for point in series]
-        stds = [point["std"] for point in series]
-        if all(is_numeric(x) for x in xs):
-            plot_x = [float(x) for x in xs]
-        else:
-            plot_x = list(range(len(xs)))
-            ax.set_xticks(plot_x)
-            ax.set_xticklabels([str(x) for x in xs], rotation=45)
-        (line,) = ax.plot(plot_x, means, "o-", label=experiment.label)
-        plotted_y.extend(means)
-        if any(std is not None for std in stds):
-            lower = []
-            upper = []
-            for mean, std in zip(means, stds):
-                if std is None:
-                    lower.append(mean)
-                    upper.append(mean)
-                else:
-                    lo = mean - float(std)
-                    hi = mean + float(std)
-                    # Keep error bands valid if the y-axis later becomes log.
-                    if mean > 0 and lo <= 0:
-                        lo = max(np.nextafter(0, 1), mean * 1e-3)
-                    lower.append(lo)
-                    upper.append(hi)
-                    plotted_y.extend([lo, hi])
-            ax.fill_between(plot_x, lower, upper, color=line.get_color(), alpha=0.2)
-        drew_any = True
+        prepared.append((experiment, series))
+        # Unclamped edges: log is chosen only when every value is already > 0.
+        probe_y.extend(_overlay_curve_y(series, log_scale=False))
 
-    if not drew_any:
+    if not prepared:
         plt.close(fig)
         print(f"No data to plot for {metric}. Skipping.")
         return False
+
+    log_scale = choose_y_axis_scale(probe_y) == "log"
+    plotted_y = []
+    for experiment, series in prepared:
+        _draw_overlay_curve(
+            ax, series, experiment.label, plotted_y, log_scale=log_scale
+        )
 
     setup_plot_y_axis(ax, plotted_y)
     ax.set_xlabel(get_display_name(x_parameter))
@@ -697,13 +680,49 @@ def plot_metric_overlay(
     return True
 
 
+def _std_band_arrays(means, stds, log_scale: bool):
+    """Lower/upper fill arrays plus the band edges appended to plotted y."""
+    lower: List[float] = []
+    upper: List[float] = []
+    edges: List[float] = []
+    for mean, std in zip(means, stds):
+        if std is None:
+            lower.append(mean)
+            upper.append(mean)
+            continue
+        lo, hi = error_band_edges(mean, float(std), log_scale=log_scale)
+        lower.append(lo)
+        upper.append(hi)
+        edges.extend((lo, hi))
+    return lower, upper, edges
+
+
+def _overlay_curve_y(
+    series: Sequence[Dict[str, object]], log_scale: bool
+) -> List[float]:
+    """Means plus std-band edges, matching ``_draw_overlay_curve``."""
+    means = [float(point["mean"]) for point in series]
+    stds = [point["std"] for point in series]
+    values = list(means)
+    if any(std is not None for std in stds):
+        _lower, _upper, edges = _std_band_arrays(means, stds, log_scale)
+        values.extend(edges)
+    return values
+
+
 def _draw_overlay_curve(
     ax,
     series: Sequence[Dict[str, object]],
     label: str,
     plotted_y: List[float],
+    log_scale: bool,
 ):
-    """Draw one experiment curve + optional std band. Mutates ``plotted_y``."""
+    """Draw one experiment curve and an optional mean±std band.
+
+    Mutates ``plotted_y`` with the values actually drawn. ``log_scale`` must
+    already match ``choose_y_axis_scale`` for the unclamped curves: only a
+    plain log axis lifts a non-positive lower edge.
+    """
     xs = [point["x"] for point in series]
     means = [float(point["mean"]) for point in series]
     stds = [point["std"] for point in series]
@@ -716,20 +735,8 @@ def _draw_overlay_curve(
     (line,) = ax.plot(plot_x, means, "o-", label=label)
     plotted_y.extend(means)
     if any(std is not None for std in stds):
-        lower = []
-        upper = []
-        for mean, std in zip(means, stds):
-            if std is None:
-                lower.append(mean)
-                upper.append(mean)
-            else:
-                lo = mean - float(std)
-                hi = mean + float(std)
-                if mean > 0 and lo <= 0:
-                    lo = max(np.nextafter(0, 1), mean * 1e-3)
-                lower.append(lo)
-                upper.append(hi)
-                plotted_y.extend([lo, hi])
+        lower, upper, edges = _std_band_arrays(means, stds, log_scale)
+        plotted_y.extend(edges)
         ax.fill_between(plot_x, lower, upper, color=line.get_color(), alpha=0.2)
     return True
 
@@ -765,10 +772,8 @@ def plot_metric_channel_panels(
     fig, axes = plt.subplots(
         n_rows, n_cols, figsize=(14.0, 5.2 * n_rows), squeeze=False
     )
-    plotted_y: List[float] = []
-    drew_any = False
-    legend_handles = None
-    legend_labels = None
+    pending = []
+    probe_y: List[float] = []
 
     for idx, channel in enumerate(channels):
         ax = axes[idx // n_cols][idx % n_cols]
@@ -801,21 +806,32 @@ def plot_metric_channel_panels(
             )
             if not series:
                 continue
-            _draw_overlay_curve(ax, series, experiment.label, plotted_y)
-            drew_any = True
+            pending.append((ax, series, experiment.label))
+            probe_y.extend(_overlay_curve_y(series, log_scale=False))
         ax.set_title(channel_display_name(channel))
         ax.set_xlabel(get_display_name(x_parameter))
         ax.set_ylabel(get_metric_display_name(metric))
-        if legend_handles is None:
-            legend_handles, legend_labels = ax.get_legend_handles_labels()
 
     for idx in range(n_channels, n_rows * n_cols):
         axes[idx // n_cols][idx % n_cols].axis("off")
 
-    if not drew_any:
+    if not pending:
         plt.close(fig)
         print(f"No data to plot for {metric}. Skipping.")
         return False
+
+    log_scale = choose_y_axis_scale(probe_y) == "log"
+    plotted_y: List[float] = []
+    legend_handles = None
+    legend_labels = None
+    curves_by_ax = {}
+    for ax, series, label in pending:
+        curves_by_ax.setdefault(ax, []).append((series, label))
+    for ax, items in curves_by_ax.items():
+        for series, label in items:
+            _draw_overlay_curve(ax, series, label, plotted_y, log_scale=log_scale)
+        if legend_handles is None:
+            legend_handles, legend_labels = ax.get_legend_handles_labels()
 
     if plotted_y:
         for idx, _channel in enumerate(channels):
