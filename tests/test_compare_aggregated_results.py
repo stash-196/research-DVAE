@@ -6,8 +6,15 @@ import csv
 import os
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+import dvae.eval.compare_aggregated_results as compare_mod
+from dvae.eval.aggregate_plot_style import (
+    choose_y_axis_scale,
+    error_band_edges,
+    save_figure,
+)
 from dvae.eval.compare_aggregated_results import (
     ExperimentAggregate,
     build_combined_rows,
@@ -17,6 +24,8 @@ from dvae.eval.compare_aggregated_results import (
     main,
     normalize_channel_label,
     parse_experiment_spec,
+    plot_metric_channel_panels,
+    plot_metric_overlay,
     resolve_aggregated_csv,
     run_compare,
     summarize_metric_by_x,
@@ -509,6 +518,174 @@ def test_channel_pair_joins_1d_long_and_4d_wide(tmp_path: Path):
     with (cli_out / "compare_aggregated_values.csv").open() as handle:
         cli_rows = list(csv.DictReader(handle))
     assert "channel" in cli_rows[0]
+
+
+def _fill_between_y(ax):
+    chunks = []
+    for coll in ax.collections:
+        for path in coll.get_paths():
+            verts = path.vertices
+            if len(verts):
+                chunks.append(verts[:, 1])
+    assert chunks, "expected a mean±std fill_between band"
+    return np.concatenate(chunks)
+
+
+def _capture_saved_axes(monkeypatch):
+    """Record y-scale and band vertices from figures passed to ``save_figure``."""
+    captured = []
+
+    def _save(fig, path, left_margin=None):
+        for ax in fig.axes:
+            if not ax.lines:
+                continue
+            captured.append(
+                {
+                    "yscale": ax.get_yscale(),
+                    "band_y": _fill_between_y(ax),
+                }
+            )
+        save_figure(fig, path, left_margin=left_margin)
+
+    monkeypatch.setattr(compare_mod, "save_figure", _save)
+    return captured
+
+
+def _overlay_experiment():
+    return ExperimentAggregate(
+        "A",
+        "/tmp/a.csv",
+        [{"sampling_ratio": "0.1", "kld_auto": "1.0"}],
+    )
+
+
+def test_error_band_edges_stay_true_off_log_and_positive_on_log():
+    lo, hi = error_band_edges(2.0, 5.0, log_scale=False)
+    assert lo == pytest.approx(-3.0)
+    assert lo <= 0
+    assert hi == pytest.approx(7.0)
+
+    lo, hi = error_band_edges(2.0, 5.0, log_scale=True)
+    assert lo > 0
+    assert lo == pytest.approx(max(float(np.nextafter(0.0, 1.0)), 2.0 * 1e-3))
+    assert hi == pytest.approx(7.0)
+
+    # Already-positive bands are unchanged on a log axis.
+    lo, hi = error_band_edges(5.0, 1.0, log_scale=True)
+    assert lo == pytest.approx(4.0)
+    assert hi == pytest.approx(6.0)
+
+
+def test_choose_y_axis_scale_log_only_when_strictly_positive():
+    assert choose_y_axis_scale([0.02, 0.019, 50.0, 51.0]) == "log"
+    assert choose_y_axis_scale([-150.0, 100.0, 350.0]) == "symlog"
+    assert choose_y_axis_scale([-1.0, 1.0, 3.0]) == "linear"
+    assert choose_y_axis_scale([]) == "linear"
+
+
+def test_overlay_std_wider_than_mean_keeps_lower_edge_on_linear(tmp_path, monkeypatch):
+    captured = _capture_saved_axes(monkeypatch)
+    series = [
+        {"x": 0.1, "mean": 1.0, "std": 2.0, "n": 2},
+        {"x": 0.5, "mean": 1.5, "std": 0.2, "n": 2},
+    ]
+    out = tmp_path / "linear.png"
+    assert plot_metric_overlay(
+        [_overlay_experiment()],
+        "kld_auto",
+        "sampling_ratio",
+        [0.1, 0.5],
+        {"A": series},
+        str(out),
+    )
+    assert out.is_file()
+    assert captured[0]["yscale"] == "linear"
+    assert captured[0]["band_y"].min() == pytest.approx(1.0 - 2.0)
+    assert captured[0]["band_y"].min() <= 0
+
+
+def test_overlay_std_wider_than_mean_keeps_lower_edge_on_symlog(tmp_path, monkeypatch):
+    captured = _capture_saved_axes(monkeypatch)
+    series = [
+        {"x": 0.1, "mean": 100.0, "std": 250.0, "n": 2},
+        {"x": 0.5, "mean": 80.0, "std": 10.0, "n": 2},
+    ]
+    out = tmp_path / "symlog.png"
+    assert plot_metric_overlay(
+        [_overlay_experiment()],
+        "kld_auto",
+        "sampling_ratio",
+        [0.1, 0.5],
+        {"A": series},
+        str(out),
+    )
+    assert captured[0]["yscale"] == "symlog"
+    assert captured[0]["band_y"].min() == pytest.approx(100.0 - 250.0)
+    assert captured[0]["band_y"].min() <= 0
+
+
+def test_overlay_log_axis_clamps_nonpositive_lower_edge(tmp_path, monkeypatch):
+    """When the chosen scale is log, a std wider than the mean stays above 0."""
+    captured = _capture_saved_axes(monkeypatch)
+    monkeypatch.setattr(compare_mod, "choose_y_axis_scale", lambda _values: "log")
+    series = [
+        {"x": 0.1, "mean": 2.0, "std": 5.0, "n": 2},
+        {"x": 0.5, "mean": 4.0, "std": 1.0, "n": 2},
+    ]
+    out = tmp_path / "log_clamp.png"
+    assert plot_metric_overlay(
+        [_overlay_experiment()],
+        "kld_auto",
+        "sampling_ratio",
+        [0.1, 0.5],
+        {"A": series},
+        str(out),
+    )
+    floor = max(float(np.nextafter(0.0, 1.0)), 2.0 * 1e-3)
+    assert captured[0]["yscale"] == "log"
+    assert captured[0]["band_y"].min() == pytest.approx(floor)
+    assert captured[0]["band_y"].min() > 0
+
+
+def test_overlay_log_axis_keeps_strictly_positive_band(tmp_path, monkeypatch):
+    captured = _capture_saved_axes(monkeypatch)
+    series = [
+        {"x": 0.1, "mean": 0.02, "std": 0.001, "n": 2},
+        {"x": 0.5, "mean": 50.0, "std": 1.0, "n": 2},
+    ]
+    out = tmp_path / "log.png"
+    assert plot_metric_overlay(
+        [_overlay_experiment()],
+        "kld_auto",
+        "sampling_ratio",
+        [0.1, 0.5],
+        {"A": series},
+        str(out),
+    )
+    assert captured[0]["yscale"] == "log"
+    assert captured[0]["band_y"].min() == pytest.approx(0.02 - 0.001)
+    assert captured[0]["band_y"].min() > 0
+
+
+def test_channel_panels_symlog_band_reaches_mean_minus_std(tmp_path, monkeypatch):
+    captured = _capture_saved_axes(monkeypatch)
+    series = [
+        {"x": 0.1, "mean": 100.0, "std": 250.0, "n": 2},
+        {"x": 0.5, "mean": 80.0, "std": 10.0, "n": 2},
+    ]
+    out = tmp_path / "panels.png"
+    summaries = {"A": {"ch1": series}}
+    assert plot_metric_channel_panels(
+        [_overlay_experiment()],
+        "kld_auto",
+        "sampling_ratio",
+        summaries,
+        str(out),
+    )
+    drawn = [item for item in captured if item["yscale"] == "symlog"]
+    assert len(drawn) == 1
+    assert drawn[0]["band_y"].min() == pytest.approx(100.0 - 250.0)
+    assert drawn[0]["band_y"].min() <= 0
 
 
 def test_channel_pair_missing_layout_returns_error(tmp_path: Path):
