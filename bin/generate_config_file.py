@@ -187,6 +187,9 @@ if __name__ == "__main__":
     val_indices = [0.2]
     observation_process = [
         "only_x",
+        # "only_xy",
+        # "only_xz",
+        # "all_xyz",
         # "raw_all",
         # "raw_ch4",
         # "ch4_relative_powers",
@@ -196,6 +199,20 @@ if __name__ == "__main__":
         # "all_ch_relative_powers",
         # "mixed_1d",        
     ]
+
+    # Lorenz column slices fix observed width (only_x stays 1). Keep in sync
+    # with LORENZ63_SLICE_CHANNELS in lorenz63_dataset.py.
+    _lorenz_slice_x_dim = {
+        "only_x": 1,
+        "only_xy": 2,
+        "only_xz": 2,
+        "all_xyz": 3,
+    }
+    if dataset_name[0] == "Lorenz63":
+        _width = _lorenz_slice_x_dim.get(observation_process[0])
+        if _width is not None and _width != x_dim[0]:
+            x_dim = [_width]
+            dense_x = [_width]
 
     model_params = {
         "RNN": {

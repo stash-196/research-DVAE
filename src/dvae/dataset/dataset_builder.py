@@ -3,7 +3,7 @@ from torch.utils.data import DataLoader
 from dataclasses import asdict
 
 # Import dataset classes
-from dvae.dataset.lorenz63_dataset import Lorenz63
+from dvae.dataset.lorenz63_dataset import Lorenz63, lorenz63_resolved_x_dim
 from dvae.dataset.sho_dataset import SimpleHarmonicOscillator
 from dvae.dataset.damped_sho_dataset import DampedSimpleHarmonicOscillator
 from dvae.dataset.xhro_dataset import Xhro
@@ -66,6 +66,11 @@ def build_dataloader(
     """
     if dataset_name not in DATASET_REGISTRY:
         raise ValueError(f"Unknown dataset: {dataset_name}")
+
+    if dataset_name == "Lorenz63":
+        dataset_config.x_dim = lorenz63_resolved_x_dim(
+            dataset_config.observation_process, dataset_config.x_dim
+        )
 
     dataset_class = DATASET_REGISTRY[dataset_name]
     dataset_params = asdict(dataset_config)  # Convert DatasetConfig to dict

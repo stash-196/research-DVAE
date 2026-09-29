@@ -8,6 +8,28 @@ import numpy as np
 from .utils import data_utils
 import pickle
 
+# Column slices of the simulated xyz state. ``only_x`` stays 1-D (shape (T,))
+# so callers may still window it with x_dim > 1. Multi-column names always
+# observe a fixed width and should be paired with that x_dim.
+LORENZ63_SLICE_CHANNELS = {
+    "only_x": ("x",),
+    "only_xy": ("x", "y"),
+    "only_xz": ("x", "z"),
+    "all_xyz": ("x", "y", "z"),
+}
+
+
+def lorenz63_resolved_x_dim(observation_process, x_dim):
+    """Observed width for multi-column Lorenz slices.
+
+    ``only_x`` (and any non-slice process) keeps the caller-supplied ``x_dim``.
+    ``only_xy`` / ``only_xz`` resolve to 2 and ``all_xyz`` resolves to 3.
+    """
+    channels = LORENZ63_SLICE_CHANNELS.get(observation_process)
+    if not channels or len(channels) == 1:
+        return x_dim
+    return len(channels)
+
 
 # define a class for Lorenz63 dataset in the same style as the above HumanPoseXYZ, dataset
 class Lorenz63(Dataset):
@@ -125,6 +147,10 @@ class Lorenz63(Dataset):
         # the_sequence should be squeezed before this takes place
         the_sequence = the_sequence.squeeze()
 
+        # Multi-column slices (only_xy, only_xz, all_xyz) fix the observed width.
+        # only_x stays caller-controlled so 1-D windowing with x_dim > 1 still works.
+        self.x_dim = lorenz63_resolved_x_dim(self.observation_process, self.x_dim)
+
         if self.x_dim is None:
             if the_sequence.ndim == 1:
                 self.x_dim = 1
@@ -198,6 +224,15 @@ class Lorenz63(Dataset):
         elif self.observation_process == "only_x":
             # observe only x out of xyz dimensions
             sequence = sequence[:, 0]
+        elif self.observation_process == "only_xy":
+            # columns [x, y] -> (T, 2)
+            sequence = sequence[:, [0, 1]]
+        elif self.observation_process == "only_xz":
+            # columns [x, z] -> (T, 2)
+            sequence = sequence[:, [0, 2]]
+        elif self.observation_process == "all_xyz":
+            # columns [x, y, z] -> (T, 3); alias-style slice beside only_x
+            sequence = sequence[:, :3]
         elif self.observation_process == "only_x_w_noise":
             sequence = sequence[:, 0] + np.random.normal(0, 5.7, sequence.shape[0])
         elif self.observation_process == "only_x_interpolate":

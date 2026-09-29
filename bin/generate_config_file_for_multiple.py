@@ -326,6 +326,9 @@ if __name__ == "__main__":
     elif dataset_name[0] == "Lorenz63":
         observation_process = [
             # "only_x",
+            # "only_xy",
+            # "only_xz",
+            # "all_xyz",
             # "only_x_interpolate",
             "only_x_indicate",
             # "only_x_w_noise",
@@ -342,6 +345,20 @@ if __name__ == "__main__":
             # "3_vars",
             # "alpha",
         ]
+
+    # Lorenz column slices fix observed width. only_x stays 1; indicate is
+    # handled below. Keep in sync with LORENZ63_SLICE_CHANNELS.
+    _lorenz_slice_x_dim = {
+        "only_x": 1,
+        "only_xy": 2,
+        "only_xz": 2,
+        "all_xyz": 3,
+    }
+    if dataset_name[0] == "Lorenz63":
+        _width = _lorenz_slice_x_dim.get(observation_process[0])
+        if _width is not None and _width != x_dim[0]:
+            x_dim = [_width]
+            dense_x = [_width]
 
     # Masked-var (indicate): one observation mask per signal channel → x_dim doubles.
     # (1d: [x, m] → 2; 4d raw_all_indicate: 8). Shared +1 mask is not used here.

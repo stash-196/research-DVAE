@@ -260,6 +260,8 @@ def resolve_reference_channel_spec(
                 if op == c or op.startswith(c) or f"_{c}" in op or f"{c}_" in op:
                     target = c
                     break
+            # XHRO targets only. Lorenz slices (only_xy, only_xz, all_xyz)
+            # are named in benchmark_signals, not as an XHRO channel.
             if "ch4" in op or op in (
                 "only_x",
                 "only_x_interpolate",
