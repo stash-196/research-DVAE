@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 from dvae.dataset.xhro_dataset import select_columns_for_obs_conditions
+from dvae.dataset.lorenz63_dataset import LORENZ63_SLICE_CHANNELS
 from dvae.dataset.physionet2012_dataset import PHYSINET_OBS_COLUMNS
 from dvae.eval.utils.delay_params import _get_delay_params
 from dvae.eval.utils.forward_modes import (
@@ -90,6 +91,11 @@ def resolve_channel_keys(
         return [(col, i) for i, col in enumerate(cols)]
 
     if dataset_name == "Lorenz63":
+        # only_x / only_xy / only_xz / all_xyz name the sliced xyz columns.
+        # only_x with x_dim > 1 is a 1-D window, not extra Lorenz channels.
+        names = LORENZ63_SLICE_CHANNELS.get(observation_process)
+        if names is not None and x_dim == len(names):
+            return [(name, i) for i, name in enumerate(names)]
         if x_dim == 1:
             return [("x", 0)]
         return [(f"dim{d}", d) for d in range(x_dim)]
