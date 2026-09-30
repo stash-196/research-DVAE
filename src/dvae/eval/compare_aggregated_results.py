@@ -13,16 +13,25 @@ interpolate vs indicate style overlays).
 (``observation_process=raw_chK``, score in the base metric column) with
 joint-4d wide-form columns (``{metric}_chK``) on ``(sampling_ratio, channel)``.
 
-Example (default overlays)::
+Example (default overlays; dynamical scalars are included by default and
+skipped when a CSV has no such column)::
 
     python src/dvae/eval/compare_aggregated_results.py \\
         --experiments \\
             "OTF|/saved_model/2026-07-01/.../20260701-XHRO_..." \\
             "interpolate|/saved_model/2026-09-04/..._interpolate" \\
             "indicate|/saved_model/2026-09-04/..._indicate_x8_..." \\
-        --metrics kld_auto spectrum_error_auto kld_tf spectrum_error_tf \\
+        --metrics kld_auto spectrum_error_auto lyap_max \\
+            jac_opnorm_mean jac_opnorm_max jac_rho_max jac_rho_gt1_frac \\
+            local_drift_avg_d_norm local_drift_avg_cross_term \\
+            local_drift_avg_delta_mse \\
         --x-parameter sampling_ratio \\
         --output_dir /saved_model/compare_aggregates/otf_vs_interp_vs_indicate
+
+Intrinsic-dimension columns are not in the default list. Pass them
+explicitly, for example ``id_pr_gt id_pr_tf id_pr_auto id_twonn_auto
+id_pr_joint_gt id_pr_gt_ch1``. ``lyap_spectrum`` is a list and is not
+an overlay column.
 
 Example (1d-sep vs joint-4d per channel)::
 
@@ -54,6 +63,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from dvae.eval.aggregate_plot_style import (
+    DEFAULT_COMPARE_METRICS,
     apply_paper_ready_line_style,
     choose_y_axis_scale,
     error_band_edges,
@@ -1029,8 +1039,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--metrics",
         nargs="+",
-        default=["kld_auto", "spectrum_error_auto"],
-        help="Metric columns to overlay (default: kld_auto spectrum_error_auto).",
+        default=list(DEFAULT_COMPARE_METRICS),
+        help=(
+            "Metric columns to overlay. Defaults: kld_auto, "
+            "spectrum_error_auto, lyap_max, jac_opnorm_mean, "
+            "jac_opnorm_max, jac_rho_max, jac_rho_gt1_frac, "
+            "local_drift_avg_d_norm, local_drift_avg_cross_term, "
+            "local_drift_avg_delta_mse. A column missing from a CSV is "
+            "skipped (the other metrics still plot). Intrinsic-dimension "
+            "columns (id_pr_*, id_twonn_*, joint and per-channel such as "
+            "id_pr_gt_ch1) are not in the default list; pass them here "
+            "to overlay. lyap_spectrum is a list and is not an overlay."
+        ),
     )
     parser.add_argument(
         "--x-parameter",

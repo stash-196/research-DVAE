@@ -11,12 +11,15 @@ import pytest
 
 import dvae.eval.compare_aggregated_results as compare_mod
 from dvae.eval.aggregate_plot_style import (
+    DEFAULT_COMPARE_METRICS,
     choose_y_axis_scale,
     error_band_edges,
+    get_metric_display_name,
     save_figure,
 )
 from dvae.eval.compare_aggregated_results import (
     ExperimentAggregate,
+    build_arg_parser,
     build_combined_rows,
     expand_rows_to_channel_long,
     intersect_x_values,
@@ -686,6 +689,121 @@ def test_channel_panels_symlog_band_reaches_mean_minus_std(tmp_path, monkeypatch
     assert len(drawn) == 1
     assert drawn[0]["band_y"].min() == pytest.approx(100.0 - 250.0)
     assert drawn[0]["band_y"].min() <= 0
+
+
+def _dynamical_compare_rows(scale):
+    """sampling_ratio rows with the scalar dynamical scores (no spectrum list)."""
+    rows = []
+    for ratio, lyap, jac_mean, cross in (
+        (0.0, 0.40, 1.6, -0.30),
+        (0.4, 0.15, 1.1, -0.05),
+        (0.7, -0.05, 0.8, 0.10),
+    ):
+        rows.append(
+            {
+                "sampling_ratio": str(ratio),
+                "kld_auto": str(10.0 * scale * (1.0 - ratio)),
+                "spectrum_error_auto": str(0.4 * scale * (1.0 - 0.5 * ratio)),
+                "lyap_max": str(lyap * scale),
+                "jac_opnorm_mean": str(jac_mean),
+                "jac_opnorm_max": str(jac_mean + 0.4),
+                "jac_rho_max": str(jac_mean - 0.2),
+                "jac_rho_gt1_frac": str(0.2 + 0.3 * ratio),
+                "local_drift_avg_d_norm": str(0.05 * scale * (1.0 + ratio)),
+                "local_drift_avg_cross_term": str(cross),
+                "local_drift_avg_delta_mse": str(cross + 0.02),
+                "id_pr_auto": str(2.0 + ratio),
+            }
+        )
+    return rows
+
+
+def test_compare_defaults_include_dynamical_scalars():
+    defaults = build_arg_parser().get_default("metrics")
+    for key in (
+        "kld_auto",
+        "spectrum_error_auto",
+        "lyap_max",
+        "jac_opnorm_mean",
+        "jac_opnorm_max",
+        "jac_rho_max",
+        "jac_rho_gt1_frac",
+        "local_drift_avg_d_norm",
+        "local_drift_avg_cross_term",
+        "local_drift_avg_delta_mse",
+    ):
+        assert key in defaults
+    assert defaults == list(DEFAULT_COMPARE_METRICS)
+    assert "lyap_spectrum" not in defaults
+    assert "id_pr_auto" not in defaults
+    help_text = build_arg_parser().format_help()
+    assert "id_pr_" in help_text
+    assert "lyap_spectrum" in help_text
+    assert get_metric_display_name("lyap_max") == "Max Lyapunov exponent"
+
+
+def test_compare_overlay_writes_dynamical_metric_pngs(tmp_path: Path):
+    otf_csv = (
+        tmp_path / "otf" / "aggregate_eval_plots_sampling_ratio" / "aggregated_values.csv"
+    )
+    interp_csv = (
+        tmp_path
+        / "interpolate"
+        / "aggregate_eval_plots_sampling_ratio"
+        / "aggregated_values.csv"
+    )
+    _write_csv(otf_csv, _dynamical_compare_rows(1.0))
+    _write_csv(interp_csv, _dynamical_compare_rows(1.4))
+    out_dir = tmp_path / "compare_dyn"
+    metrics = [
+        "lyap_max",
+        "jac_opnorm_mean",
+        "jac_opnorm_max",
+        "local_drift_avg_d_norm",
+        "local_drift_avg_cross_term",
+        "local_drift_avg_delta_mse",
+        "id_pr_auto",
+    ]
+    result = run_compare(
+        experiment_specs=[
+            f"OTF|{tmp_path / 'otf'}",
+            f"interpolate|{tmp_path / 'interpolate'}",
+        ],
+        metrics=metrics,
+        x_parameter="sampling_ratio",
+        output_dir=str(out_dir),
+    )
+    names = {os.path.basename(path) for path in result["plot_paths"]}
+    for metric in metrics:
+        png = out_dir / f"compare_{metric}_vs_sampling_ratio.png"
+        assert png.is_file() and png.stat().st_size > 0
+        assert png.name in names
+
+
+def test_compare_defaults_skip_missing_dynamical_columns(tmp_path: Path):
+    """Older aggregates that only have KLD / spectrum still overlay those."""
+    rows = [
+        {"sampling_ratio": "0.0", "kld_auto": "10.0", "spectrum_error_auto": "0.40"},
+        {"sampling_ratio": "0.4", "kld_auto": "4.0", "spectrum_error_auto": "0.20"},
+    ]
+    csv_path = (
+        tmp_path / "old" / "aggregate_eval_plots_sampling_ratio" / "aggregated_values.csv"
+    )
+    _write_csv(csv_path, rows)
+    out_dir = tmp_path / "old_compare"
+    result = run_compare(
+        experiment_specs=[f"old|{tmp_path / 'old'}"],
+        metrics=list(DEFAULT_COMPARE_METRICS),
+        x_parameter="sampling_ratio",
+        output_dir=str(out_dir),
+    )
+    names = {os.path.basename(path) for path in result["plot_paths"]}
+    assert names == {
+        "compare_kld_auto_vs_sampling_ratio.png",
+        "compare_spectrum_error_auto_vs_sampling_ratio.png",
+    }
+    assert not (out_dir / "compare_lyap_max_vs_sampling_ratio.png").exists()
+    assert (out_dir / "compare_kld_auto_vs_sampling_ratio.png").stat().st_size > 0
 
 
 def test_channel_pair_missing_layout_returns_error(tmp_path: Path):

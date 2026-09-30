@@ -50,7 +50,62 @@ METRIC_DISPLAY_NAMES = {
     "id_twonn_joint_gt": "TwoNN intrinsic dim joint (GT)",
     "id_twonn_joint_tf": "TwoNN intrinsic dim joint (TF)",
     "id_twonn_joint_auto": "TwoNN intrinsic dim joint (Auto)",
+    "lyap_max": "Max Lyapunov exponent",
+    "jac_opnorm_mean": "Jacobian operator norm (mean)",
+    "jac_opnorm_max": "Jacobian operator norm (max)",
+    "jac_rho_max": "Jacobian spectral radius (max)",
+    "jac_rho_gt1_frac": "Fraction of steps with rho(J) > 1",
+    "local_drift_avg_d_norm": "Local drift mean ||d||^2",
+    "local_drift_avg_cross_term": "Local drift mean d^T e",
+    "local_drift_avg_delta_mse": "Local drift mean delta MSE",
 }
+
+# Top-level scalar scores stamped by eval_signal / jacobian_lyapunov.
+# ``lyap_spectrum`` is a list and is not a line or heatmap metric.
+PRIMARY_DYNAMICAL_SCALAR_METRICS = (
+    "lyap_max",
+    "jac_opnorm_mean",
+    "jac_opnorm_max",
+    "jac_rho_max",
+    "jac_rho_gt1_frac",
+    "local_drift_avg_d_norm",
+    "local_drift_avg_cross_term",
+    "local_drift_avg_delta_mse",
+)
+
+DEFAULT_AGGREGATE_METRICS = (
+    "kld_tf",
+    "kld_auto",
+    "spectrum_error_gt",
+    "spectrum_error_tf",
+    "spectrum_error_auto",
+) + PRIMARY_DYNAMICAL_SCALAR_METRICS
+
+# Compare overlays default to the autonomous KLD/spectrum pair plus the
+# same dynamical scalars. Intrinsic-dimension columns are opt-in.
+DEFAULT_COMPARE_METRICS = (
+    "kld_auto",
+    "spectrum_error_auto",
+) + PRIMARY_DYNAMICAL_SCALAR_METRICS
+
+# Fixed heatmap color limits so colorbars are comparable across images.
+# Spectrum: Hellinger distance is in [0, 1]. KLD: shared symlog scale.
+# jac_rho_gt1_frac is a fraction in [0, 1]. Intrinsic dimension uses a
+# shared non-negative linear scale (std companions stay data-driven).
+# Lyapunov exponents, Jacobian norms, and local-drift scores are unbounded
+# or signed, so their heatmaps keep the data-driven linear/log/symlog path.
+HEATMAP_COLOR_LIMITS = {
+    "spectrum": {"vmin": 0.0, "vmax": 1.0, "scale": "linear"},
+    "kld": {"vmin": -10.0, "vmax": 1e3, "scale": "symlog"},
+    "unit_interval": {"vmin": 0.0, "vmax": 1.0, "scale": "linear"},
+    "intrinsic_dim": {"vmin": 0.0, "vmax": 20.0, "scale": "linear"},
+}
+
+_STD_DISPLAY_SUFFIXES = (
+    ("_std_across_batches", " (std across batches)"),
+    ("_std_across_windows", " (std across windows)"),
+    ("_std", " (std)"),
+)
 
 
 def is_numeric(val):
@@ -75,8 +130,51 @@ def get_display_name(param):
 
 
 def get_metric_display_name(metric):
-    """Get display name for metric, default to metric if not found."""
-    return METRIC_DISPLAY_NAMES.get(metric, metric)
+    """Get display name for metric, default to metric if not found.
+
+    Known bases also cover a trailing channel token (``id_pr_gt_ch1``)
+    and ``_std`` / ``_std_across_batches`` companions.
+    """
+    if metric in METRIC_DISPLAY_NAMES:
+        return METRIC_DISPLAY_NAMES[metric]
+    for suffix, label in _STD_DISPLAY_SUFFIXES:
+        if metric.endswith(suffix) and len(metric) > len(suffix):
+            base = metric[: -len(suffix)]
+            base_name = METRIC_DISPLAY_NAMES.get(base)
+            if base_name is None:
+                derived = get_metric_display_name(base)
+                if derived == base:
+                    return metric
+                base_name = derived
+            return f"{base_name}{label}"
+    head, sep, tail = metric.rpartition("_")
+    if sep and head in METRIC_DISPLAY_NAMES and tail:
+        return f"{METRIC_DISPLAY_NAMES[head]} ({tail})"
+    return metric
+
+
+def _heatmap_limit_triple(name):
+    cfg = HEATMAP_COLOR_LIMITS[name]
+    return cfg["vmin"], cfg["vmax"], cfg["scale"]
+
+
+def resolve_heatmap_limits(metric):
+    """Return fixed ``(vmin, vmax, scale)`` for known metrics, else None."""
+    if not isinstance(metric, str) or not metric:
+        return None
+    if metric.startswith("spectrum_error_"):
+        return _heatmap_limit_triple("spectrum")
+    if metric.startswith("kld_"):
+        return _heatmap_limit_triple("kld")
+    if "_std" not in metric and (
+        metric == "jac_rho_gt1_frac" or metric.startswith("jac_rho_gt1_frac_")
+    ):
+        return _heatmap_limit_triple("unit_interval")
+    if "_std" in metric:
+        return None
+    if metric.startswith("id_pr_") or metric.startswith("id_twonn_"):
+        return _heatmap_limit_triple("intrinsic_dim")
+    return None
 
 
 def apply_paper_ready_line_style():
