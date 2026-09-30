@@ -2,10 +2,15 @@
 
 MT_RNN / MT_VRNN historically drew this from ``loss_model.pckl``
 ``sigmas_history`` inside spectrum analysis, converting logits with a
-natural sigmoid. That call was dropped when spectrum analysis was
-rewritten. This module restores it with those same arguments, and draws
-the same figure for PLRNN / shPLRNN from ``A_sigmas`` (diagonal A via
-the cell's base-10 sigmoid).
+natural sigmoid. The call was gated on the MT model name, the spectrum
+panel title was hardcoded to Lorenz63, and the spectra themselves came
+from a dataset if/elif (Lorenz63, SHO, DampedSHO, Xhro) that did not
+include XhroProper or XhroPacketLoss. After the benchmark rewrite the
+call sat below a ``return`` and was then deleted, so no dataset wrote
+the figure. This module draws it for whatever dataset produced the
+channel benchmarks, including XHRO, whenever a timescale history exists.
+PLRNN / shPLRNN use ``A_sigmas`` (diagonal A via the cell's base-10
+sigmoid).
 """
 
 import os
