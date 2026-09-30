@@ -50,6 +50,10 @@ METRIC_DISPLAY_NAMES = {
     "id_twonn_joint_gt": "TwoNN intrinsic dim joint (GT)",
     "id_twonn_joint_tf": "TwoNN intrinsic dim joint (TF)",
     "id_twonn_joint_auto": "TwoNN intrinsic dim joint (Auto)",
+    "id_pr_hidden_joint_tf": "PR intrinsic dim hidden joint (TF)",
+    "id_pr_hidden_joint_auto": "PR intrinsic dim hidden joint (Auto)",
+    "id_twonn_hidden_joint_tf": "TwoNN intrinsic dim hidden joint (TF)",
+    "id_twonn_hidden_joint_auto": "TwoNN intrinsic dim hidden joint (Auto)",
     "lyap_max": "Max Lyapunov exponent",
     "jac_opnorm_mean": "Jacobian operator norm (mean)",
     "jac_opnorm_max": "Jacobian operator norm (max)",
@@ -73,25 +77,35 @@ PRIMARY_DYNAMICAL_SCALAR_METRICS = (
     "local_drift_avg_delta_mse",
 )
 
+# Joint hidden-state ID. No GT key: observations have no ground-truth latent.
+# Observation-space id_*_joint_* stays a separate family and is auto-discovered.
+HIDDEN_JOINT_ID_METRICS = (
+    "id_pr_hidden_joint_tf",
+    "id_pr_hidden_joint_auto",
+    "id_twonn_hidden_joint_tf",
+    "id_twonn_hidden_joint_auto",
+)
+
 DEFAULT_AGGREGATE_METRICS = (
     "kld_tf",
     "kld_auto",
     "spectrum_error_gt",
     "spectrum_error_tf",
     "spectrum_error_auto",
-) + PRIMARY_DYNAMICAL_SCALAR_METRICS
+) + PRIMARY_DYNAMICAL_SCALAR_METRICS + HIDDEN_JOINT_ID_METRICS
 
-# Compare overlays default to the autonomous KLD/spectrum pair plus the
-# same dynamical scalars. Intrinsic-dimension columns are opt-in.
+# Compare overlays default to the autonomous KLD/spectrum pair, the dynamical
+# scalars, and hidden-joint ID. Observation-space id_* columns stay opt-in.
 DEFAULT_COMPARE_METRICS = (
     "kld_auto",
     "spectrum_error_auto",
-) + PRIMARY_DYNAMICAL_SCALAR_METRICS
+) + PRIMARY_DYNAMICAL_SCALAR_METRICS + HIDDEN_JOINT_ID_METRICS
 
 # Fixed heatmap color limits so colorbars are comparable across images.
 # Spectrum: Hellinger distance is in [0, 1]. KLD: shared symlog scale.
-# jac_rho_gt1_frac is a fraction in [0, 1]. Intrinsic dimension uses a
-# shared non-negative linear scale (std companions stay data-driven).
+# jac_rho_gt1_frac is a fraction in [0, 1]. Observation-space intrinsic
+# dimension uses a shared non-negative linear scale (std companions and
+# hidden-joint ID stay data-driven: hidden PR can exceed the delay-embed cap).
 # Lyapunov exponents, Jacobian norms, and local-drift scores are unbounded
 # or signed, so their heatmaps keep the data-driven linear/log/symlog path.
 HEATMAP_COLOR_LIMITS = {
@@ -171,6 +185,9 @@ def resolve_heatmap_limits(metric):
     ):
         return _heatmap_limit_triple("unit_interval")
     if "_std" in metric:
+        return None
+    # Hidden-state PR can be much larger than a delay-embedding dimension.
+    if "hidden_joint" in metric:
         return None
     if metric.startswith("id_pr_") or metric.startswith("id_twonn_"):
         return _heatmap_limit_triple("intrinsic_dim")

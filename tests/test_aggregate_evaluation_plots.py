@@ -81,6 +81,10 @@ def _score_block(scale):
         "id_pr_gt_ch2": 2.6,
         "id_twonn_auto_ch1": 1.7,
         "id_pr_gt_std_across_batches": 0.15,
+        "id_pr_hidden_joint_tf": 3.2 * scale,
+        "id_pr_hidden_joint_auto": 4.1 * scale,
+        "id_twonn_hidden_joint_tf": 2.8 * scale,
+        "id_twonn_hidden_joint_auto": 3.6 * scale,
     }
 
 
@@ -239,6 +243,12 @@ def test_display_names_and_heatmap_limits():
     assert get_metric_display_name("id_twonn_joint_auto") == (
         "TwoNN intrinsic dim joint (Auto)"
     )
+    assert get_metric_display_name("id_pr_hidden_joint_tf") == (
+        "PR intrinsic dim hidden joint (TF)"
+    )
+    assert get_metric_display_name("id_twonn_hidden_joint_auto") == (
+        "TwoNN intrinsic dim hidden joint (Auto)"
+    )
     assert get_metric_display_name("id_pr_gt_std_across_batches") == (
         "PR intrinsic dim (GT) (std across batches)"
     )
@@ -249,6 +259,8 @@ def test_display_names_and_heatmap_limits():
     assert resolve_heatmap_limits("id_pr_auto") == (0.0, 20.0, "linear")
     assert resolve_heatmap_limits("id_pr_gt_ch2") == (0.0, 20.0, "linear")
     assert resolve_heatmap_limits("id_twonn_joint_gt") == (0.0, 20.0, "linear")
+    assert resolve_heatmap_limits("id_pr_hidden_joint_tf") is None
+    assert resolve_heatmap_limits("id_twonn_hidden_joint_auto") is None
     assert resolve_heatmap_limits("id_pr_gt_std_across_batches") is None
     assert resolve_heatmap_limits("lyap_max") is None
     assert resolve_heatmap_limits("jac_opnorm_mean") is None
@@ -281,6 +293,10 @@ def test_plot_path_writes_heatmaps_and_graphs(tmp_path: Path):
         "id_twonn_gt",
         "id_pr_joint_gt",
         "id_pr_gt_ch1",
+        "id_pr_hidden_joint_tf",
+        "id_pr_hidden_joint_auto",
+        "id_twonn_hidden_joint_tf",
+        "id_twonn_hidden_joint_auto",
         "kld_auto",
         "spectrum_error_auto",
     ]

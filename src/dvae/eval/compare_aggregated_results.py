@@ -28,10 +28,12 @@ skipped when a CSV has no such column)::
         --x-parameter sampling_ratio \\
         --output_dir /saved_model/compare_aggregates/otf_vs_interp_vs_indicate
 
-Intrinsic-dimension columns are not in the default list. Pass them
-explicitly, for example ``id_pr_gt id_pr_tf id_pr_auto id_twonn_auto
-id_pr_joint_gt id_pr_gt_ch1``. ``lyap_spectrum`` is a list and is not
-an overlay column.
+Hidden-joint ID (``id_pr_hidden_joint_{tf,auto}``,
+``id_twonn_hidden_joint_{tf,auto}``) is in the default list. There is
+no GT hidden key. Observation-space intrinsic dimension is not in the
+default list; pass it explicitly, for example ``id_pr_gt id_pr_tf
+id_pr_auto id_twonn_auto id_pr_joint_gt id_pr_gt_ch1``.
+``lyap_spectrum`` is a list and is not an overlay column.
 
 Example (1d-sep vs joint-4d per channel)::
 
@@ -1045,11 +1047,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "spectrum_error_auto, lyap_max, jac_opnorm_mean, "
             "jac_opnorm_max, jac_rho_max, jac_rho_gt1_frac, "
             "local_drift_avg_d_norm, local_drift_avg_cross_term, "
-            "local_drift_avg_delta_mse. A column missing from a CSV is "
-            "skipped (the other metrics still plot). Intrinsic-dimension "
-            "columns (id_pr_*, id_twonn_*, joint and per-channel such as "
-            "id_pr_gt_ch1) are not in the default list; pass them here "
-            "to overlay. lyap_spectrum is a list and is not an overlay."
+            "local_drift_avg_delta_mse, id_pr_hidden_joint_tf, "
+            "id_pr_hidden_joint_auto, id_twonn_hidden_joint_tf, "
+            "id_twonn_hidden_joint_auto. A column missing from a CSV is "
+            "skipped (the other metrics still plot). Observation-space "
+            "intrinsic-dimension columns (id_pr_{gt,tf,auto}, id_twonn_*, "
+            "id_*_joint_*, per-channel id_pr_gt_ch1) are not in the default "
+            "list; pass them here to overlay. Hidden-joint ID has no GT key. "
+            "lyap_spectrum is a list and is not an overlay."
         ),
     )
     parser.add_argument(

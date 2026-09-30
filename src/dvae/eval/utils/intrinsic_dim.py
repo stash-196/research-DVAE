@@ -1,7 +1,9 @@
-"""Intrinsic-dimension estimators for delay-embedded evaluation clouds.
+"""Intrinsic-dimension estimators for evaluation clouds.
 
 Participation ratio (PR) and the Facco et al. (2017) TwoNN estimator.
 Both operate on arrays shaped (N, D) after rows that contain NaN are dropped.
+Observation-space clouds are delay embeddings. Hidden-state joint ID uses the
+model trajectory ``h`` directly (one point per time, all units together).
 No new dependencies beyond numpy / scipy.
 """
 
@@ -41,6 +43,19 @@ ID_SUMMARY_KEYS: Tuple[str, ...] = (
     "id_twonn_joint_gt",
     "id_twonn_joint_tf",
     "id_twonn_joint_auto",
+    # Joint hidden state. No GT key: observations have no ground-truth latent.
+    "id_pr_hidden_joint_tf",
+    "id_pr_hidden_joint_auto",
+    "id_twonn_hidden_joint_tf",
+    "id_twonn_hidden_joint_auto",
+)
+# Stamped beside the scalars so evaluation_summary records why GT is absent.
+ID_HIDDEN_JOINT_GT_NOTE = (
+    "GT omitted: observations have no ground-truth latent. "
+    "id_pr_hidden_joint_{tf,auto} and id_twonn_hidden_joint_{tf,auto} are "
+    "PR and TwoNN on the model hidden state h (time, hidden units), batch 0, "
+    "restricted to autonomous timesteps. TF is the all_0 teacher-forced pass; "
+    "Auto is the free-run pass. LSTM cell state c is not included."
 )
 ID_PER_CHANNEL_PREFIXES: Tuple[str, ...] = (
     "id_pr_gt",
@@ -266,6 +281,100 @@ def id_metrics_for_clouds(
         "id_twonn_tf": tw_tf,
         "id_twonn_auto": tw_auto,
     }
+
+
+def snapshot_hidden_state(model) -> Optional[np.ndarray]:
+    """Copy ``model.h`` to a NumPy array.
+
+    Returns None when the model has no hidden trajectory. Accepts a tensor
+    (``detach`` / ``cpu`` / ``numpy``) or an array. Shape is left as stored,
+    typically ``(time, batch, hidden)``.
+    """
+    h = getattr(model, "h", None)
+    if h is None:
+        return None
+    if hasattr(h, "detach"):
+        h = h.detach()
+    if hasattr(h, "cpu"):
+        h = h.cpu()
+    if hasattr(h, "numpy"):
+        h = h.numpy()
+    arr = np.asarray(h)
+    if arr.ndim not in (2, 3) or arr.size == 0:
+        return None
+    # Copy so a later forward that reuses the buffer cannot change the snapshot.
+    return np.array(arr, dtype=np.float64, copy=True)
+
+
+def hidden_state_cloud(
+    h: Optional[np.ndarray],
+    time_mask: Optional[np.ndarray] = None,
+) -> Optional[np.ndarray]:
+    """Joint hidden cloud ``(N, H)`` for one trajectory.
+
+    ``h`` may be ``(time, hidden)`` or ``(time, batch, hidden)``. The batch
+    axis uses index 0, matching the hidden-state figures. ``time_mask``
+    selects the same timesteps as the observation-space auto segment.
+    """
+    if h is None:
+        return None
+    arr = np.asarray(h, dtype=np.float64)
+    if arr.ndim == 3:
+        arr = arr[:, 0, :]
+    elif arr.ndim == 1:
+        arr = arr.reshape(-1, 1)
+    if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] == 0:
+        return None
+    if time_mask is not None:
+        mask = np.asarray(time_mask, dtype=bool).reshape(-1)
+        if mask.shape[0] != arr.shape[0] or not np.any(mask):
+            return None
+        arr = arr[mask]
+    if arr.shape[0] < 2:
+        return None
+    return arr
+
+
+def id_metrics_for_hidden_joint(
+    h_tf: Optional[np.ndarray],
+    h_auto: Optional[np.ndarray],
+) -> dict:
+    """PR and TwoNN on joint hidden trajectories.
+
+    Each argument is already a ``(N, H)`` cloud (see ``hidden_state_cloud``).
+    Ground truth is omitted: there is no comparable latent on the data side.
+    Observation-space ``id_*_joint_*`` is a different family (delay embeddings).
+    """
+    metrics = id_metrics_for_clouds(None, h_tf, h_auto)
+    return {
+        "id_pr_hidden_joint_tf": metrics["id_pr_tf"],
+        "id_pr_hidden_joint_auto": metrics["id_pr_auto"],
+        "id_twonn_hidden_joint_tf": metrics["id_twonn_tf"],
+        "id_twonn_hidden_joint_auto": metrics["id_twonn_auto"],
+    }
+
+
+def hidden_joint_id_from_benchmarks(channel_benchmarks: Optional[dict]) -> dict:
+    """Hidden-joint ID from optional ``hidden_tf`` / ``hidden_auto`` arrays.
+
+    Both clouds are masked with ``auto_mask`` when that mask is present, so
+    TF and Auto are scored on the free-run timesteps. Returns an empty dict
+    when neither trajectory was recorded. Includes ``id_hidden_joint_gt_note``
+    (a string; numeric aggregators skip it).
+    """
+    if not channel_benchmarks:
+        return {}
+    h_tf = channel_benchmarks.get("hidden_tf")
+    h_auto = channel_benchmarks.get("hidden_auto")
+    if h_tf is None and h_auto is None:
+        return {}
+    mask = channel_benchmarks.get("auto_mask")
+    metrics = id_metrics_for_hidden_joint(
+        hidden_state_cloud(h_tf, mask),
+        hidden_state_cloud(h_auto, mask),
+    )
+    metrics["id_hidden_joint_gt_note"] = ID_HIDDEN_JOINT_GT_NOTE
+    return metrics
 
 
 def primary_channel_key(keys: Sequence[str]) -> str:

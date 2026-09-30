@@ -736,6 +736,14 @@ def test_compare_defaults_include_dynamical_scalars():
     assert defaults == list(DEFAULT_COMPARE_METRICS)
     assert "lyap_spectrum" not in defaults
     assert "id_pr_auto" not in defaults
+    assert "id_pr_joint_gt" not in defaults
+    for key in (
+        "id_pr_hidden_joint_tf",
+        "id_pr_hidden_joint_auto",
+        "id_twonn_hidden_joint_tf",
+        "id_twonn_hidden_joint_auto",
+    ):
+        assert key in defaults
     help_text = build_arg_parser().format_help()
     assert "id_pr_" in help_text
     assert "lyap_spectrum" in help_text

@@ -48,7 +48,7 @@ EXPERIMENTS=(
     "OTF-4d|/flash/DoyaU/stash/research-DVAE/saved_model/2026-07-01/deigo_cluster/20260701-XHRO_ep20000_ptf0-8_MTRNN9d_clip10_Subj70_chAll_4d_hdim200_eStop500"
 )
 
-METRICS="${METRICS:-kld_auto spectrum_error_auto kld_tf spectrum_error_tf lyap_max jac_opnorm_mean jac_opnorm_max jac_rho_max jac_rho_gt1_frac local_drift_avg_d_norm local_drift_avg_cross_term local_drift_avg_delta_mse}"
+METRICS="${METRICS:-kld_auto spectrum_error_auto kld_tf spectrum_error_tf lyap_max jac_opnorm_mean jac_opnorm_max jac_rho_max jac_rho_gt1_frac local_drift_avg_d_norm local_drift_avg_cross_term local_drift_avg_delta_mse id_pr_hidden_joint_tf id_pr_hidden_joint_auto id_twonn_hidden_joint_tf id_twonn_hidden_joint_auto}"
 X_PARAMETER="${X_PARAMETER:-sampling_ratio}"
 COMPARE_NAME="${COMPARE_NAME:-otf_interpolate_indicate}"
 
