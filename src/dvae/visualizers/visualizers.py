@@ -1198,6 +1198,10 @@ def visualize_alpha_history_and_spectrums(
     kl_warm_epochs=None,
     explain="",
     true_alphas=[],
+    *,
+    alpha_from_sigma=None,
+    max_curves=None,
+    spectrum_title="Lorenz63\nPower Spectrum",
 ):
     plt.clf()
     periods = 1 / frequencies
@@ -1212,7 +1216,14 @@ def visualize_alpha_history_and_spectrums(
 
     alphas_from_periods = dt / periods
     periods_max, periods_min = np.max(periods), np.min(periods)
-    alpha_range_min = 1 / (1 + np.exp(-np.max(sigmas_history))) / 10
+    # Default range matches the historical MT figure: natural sigmoid of the
+    # largest stored sigma, divided by 10. A custom transform (PLRNN diagonal A)
+    # uses that same rule on the transformed values.
+    if alpha_from_sigma is None:
+        alpha_range_min = 1 / (1 + np.exp(-np.max(sigmas_history))) / 10
+    else:
+        transformed_max = float(np.max(alpha_from_sigma(sigmas_history)))
+        alpha_range_min = max(transformed_max, 1e-8) / 10
     alpha_range_max = 1.1
     ylim_max = max(dt / alpha_range_min, periods_max)
     ylim_min = min(dt / alpha_range_max, periods_min)
@@ -1249,12 +1260,22 @@ def visualize_alpha_history_and_spectrums(
         )
 
     num_alphas = sigmas_history.shape[0]
-    # Ensure we don't exceed the number of predefined colors
-    for i in range(min(num_alphas, len(alpha_colors))):
-        alphas = 1 / (1 + np.exp(-sigmas_history[i]))
+    # Default draws at most one curve per predefined color, same as before.
+    if max_curves is None:
+        n_plot = min(num_alphas, len(alpha_colors))
+    else:
+        n_plot = min(num_alphas, int(max_curves))
+    annotate = n_plot <= len(alpha_colors)
+    for i in range(n_plot):
+        if alpha_from_sigma is None:
+            alphas = 1 / (1 + np.exp(-sigmas_history[i]))
+        else:
+            alphas = np.asarray(alpha_from_sigma(sigmas_history[i]), dtype=np.float64)
         periods_from_alpha = dt / alphas
-        curve_color = alpha_colors[i]  # Get color for this curve
+        curve_color = alpha_colors[i % len(alpha_colors)]
         ax1.plot(periods_from_alpha, label=f"α {i+1}", color=curve_color)
+        if not annotate:
+            continue
         # Annotate the last alpha value
         last_alpha_period = periods_from_alpha[-1]
         ax1.text(
@@ -1300,7 +1321,7 @@ def visualize_alpha_history_and_spectrums(
     ):
         ax2.loglog(power_spectrum, frequencies, color=color, alpha=0.5, label=label)
 
-    ax2.set_title("Lorenz63\nPower Spectrum", fontsize=18)
+    ax2.set_title(spectrum_title, fontsize=18)
     ax2.legend(fontsize=16, loc="upper right")
     ax2.set_xlabel("Amplitude", fontsize=16)
     ax2.set_ylabel("Frequency (Hz)", fontsize=16)

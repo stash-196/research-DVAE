@@ -72,6 +72,7 @@ from typing import Any, Optional
 from dataclasses import replace
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
 from dvae.dataset.xhro_proper_dataset import optional_config_str
+from dvae.eval.alpha_vs_spectrum import save_alpha_vs_spectrum_figures
 from dvae.eval.maybe_alphas import alphas_to_metric_list, maybe_alphas_per_unit
 from dvae.eval.utils.delay_dim_selection import (
     collect_gt_auto_segments,
@@ -642,6 +643,7 @@ if __name__ == "__main__":
     )
 
     # Check if the loss_model.pckl file exists
+    loaded_data = None
     if os.path.isfile(loss_file):
         print(f"[Eval] Loading loss data from {loss_file}")
         with open(loss_file, "rb") as f:
@@ -1380,6 +1382,23 @@ if __name__ == "__main__":
                 channel_benchmarks=channel_benchmarks,
                 save_figures=save_metric_figures,
             )
+            if save_metric_figures and i == 0:
+                try:
+                    alpha_paths = save_alpha_vs_spectrum_figures(
+                        loaded_data=loaded_data,
+                        model_name=learning_algo.model_name,
+                        channel_benchmarks=channel_benchmarks,
+                        dataset=metrics_dataloader.dataset,
+                        save_dir=save_fig_dir,
+                        visualize_alpha_history_and_spectrums=(
+                            visualize_alpha_history_and_spectrums
+                        ),
+                        dataset_name=learning_algo.dataset_name,
+                    )
+                    for alpha_path in alpha_paths:
+                        print(f"[Eval] Alpha vs spectrum figure: {alpha_path}")
+                except Exception as exc:
+                    print(f"[Eval] alpha-vs-spectrum figure skipped: {exc}")
             mse_results = run_mse_analysis(
                 test_dataloader=test_dataloader,
                 recon_data_long=None,
