@@ -3,6 +3,7 @@ from dvae.eval.utils import compute_delay_embedding, state_space_kl
 from dvae.eval.utils.intrinsic_dim import (
     ID_PER_CHANNEL_PREFIXES,
     delay_dim_for_key,
+    hidden_joint_id_from_benchmarks,
     id_metrics_for_clouds,
 )
 from dvae.visualizers import visualize_delay_embedding
@@ -213,7 +214,7 @@ def run_geometry_analysis_from_benchmarks(
             "joint_delay_dims": int(joint_m),
         }
 
-    return {
+    result = {
         "per_channel": per_channel,
         "kld_tf_mean": kld_tf_mean,
         "kld_auto_mean": kld_auto_mean,
@@ -226,6 +227,9 @@ def run_geometry_analysis_from_benchmarks(
         **id_means,
         **joint_metrics,
     }
+    # Distinct from id_*_joint_* (observation delay embeddings).
+    result.update(hidden_joint_id_from_benchmarks(channel_benchmarks))
+    return result
 
 
 def run_geometry_analysis(

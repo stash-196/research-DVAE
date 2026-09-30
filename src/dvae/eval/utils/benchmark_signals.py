@@ -210,6 +210,8 @@ def get_channel_benchmarks(
     delay_dims: Optional[int] = None,
     delay_dims_by_channel: Optional[Dict[str, int]] = None,
     joint_delay_dims: Optional[int] = None,
+    hidden_tf: Optional[np.ndarray] = None,
+    hidden_auto: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     """
     Build per-channel GT / TF / Auto signals for metric computation.
@@ -220,6 +222,9 @@ def get_channel_benchmarks(
     - half_half / flip_at_index: contiguous tail after flip_point
     - alternating_blocks / even_bursts: mask-gathered free-run blocks (paper-style
       fixed blocks or legacy ratio bursts), re-anchored by intervening TF
+
+    ``hidden_tf`` / ``hidden_auto`` are optional ``dvae.h`` snapshots. They are
+    stored for hidden-joint intrinsic dimension and are not observation channels.
     """
     seq_len = batch_data_long.shape[0]
     x_dim = batch_data_long.shape[2]
@@ -332,6 +337,10 @@ def get_channel_benchmarks(
         "joint_delay_dims": (
             None if joint_delay_dims is None else int(joint_delay_dims)
         ),
+        # Model hidden trajectories, if the caller snapshotted dvae.h.
+        # Not observation channels. Geometry turns these into id_*_hidden_joint_*.
+        "hidden_tf": None if hidden_tf is None else np.asarray(hidden_tf),
+        "hidden_auto": None if hidden_auto is None else np.asarray(hidden_auto),
         "is_multidim": len(channels) > 1,
         "dataset_name": dataset_name,
         "observation_process": observation_process,

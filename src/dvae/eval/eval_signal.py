@@ -79,6 +79,11 @@ from dvae.eval.utils.delay_dim_selection import (
     make_gt_fingerprint,
     resolve_delay_embedding,
 )
+from dvae.eval.utils.intrinsic_dim import (
+    ID_HIDDEN_JOINT_GT_NOTE,
+    hidden_joint_id_from_benchmarks,
+    snapshot_hidden_state,
+)
 from dvae.eval.utils.jacobian_lyapunov import (
     attach_lyapunov_metrics,
     resolve_lyapunov_settings,
@@ -1243,6 +1248,8 @@ if __name__ == "__main__":
                 mode="all_0",
                 observation_process=observation_process,
             )
+            # Snapshot before the free-run pass overwrites dvae.h.
+            hidden_tf = snapshot_hidden_state(dvae)
             recon_auto_warmed, mode_selector_auto = run_forward_with_mode(
                 dvae,
                 batch_data_long,
@@ -1252,6 +1259,7 @@ if __name__ == "__main__":
                 block_len=auto_eval_block_len,
                 autonomous_ratio=auto_eval_ratio,
             )
+            hidden_auto = snapshot_hidden_state(dvae)
 
             channel_benchmarks = get_channel_benchmarks(
                 batch_data_long=batch_data_long,
@@ -1266,6 +1274,8 @@ if __name__ == "__main__":
                 mode_selector=mode_selector_auto,
                 block_len=auto_eval_block_len,
                 autonomous_ratio=auto_eval_ratio,
+                hidden_tf=hidden_tf,
+                hidden_auto=hidden_auto,
                 **delay_benchmark_kwargs,
             )
             print(
@@ -1409,6 +1419,9 @@ if __name__ == "__main__":
                     "tf_keys": [],
                     "auto_keys": [],
                 }
+                geom_results.update(
+                    hidden_joint_id_from_benchmarks(channel_benchmarks)
+                )
 
             batch_metric_dicts.append(
                 flatten_analysis_to_batch_metrics(
@@ -1533,6 +1546,15 @@ if __name__ == "__main__":
                 f"[Eval] KL stitched (batch_all geometry): "
                 f"TF={metrics['kld_tf']:.4f}  Auto={metrics['kld_auto']:.4f}"
             )
+            if "id_pr_hidden_joint_tf" in metrics or "id_pr_hidden_joint_auto" in metrics:
+                metrics["id_hidden_joint_gt_note"] = ID_HIDDEN_JOINT_GT_NOTE
+                print(
+                    "[Eval] Hidden joint ID (GT omitted: no ground-truth latent) "
+                    f"PR TF={metrics.get('id_pr_hidden_joint_tf')} "
+                    f"Auto={metrics.get('id_pr_hidden_joint_auto')}  "
+                    f"TwoNN TF={metrics.get('id_twonn_hidden_joint_tf')} "
+                    f"Auto={metrics.get('id_twonn_hidden_joint_auto')}"
+                )
             if "id_twonn_gt" in metrics:
                 print(
                     "[Eval] ID TwoNN (channel mean) "

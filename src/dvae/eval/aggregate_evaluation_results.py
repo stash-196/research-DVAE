@@ -20,6 +20,7 @@ import csv
 import shutil
 from PIL import Image
 from dvae.eval.aggregate_plot_style import (
+    DEFAULT_AGGREGATE_METRICS,
     SYMLOG_LINTHRESH,
     _linear_ticks_in_range,
     _log_vmin_vmax,
@@ -27,12 +28,13 @@ from dvae.eval.aggregate_plot_style import (
     _save_figure,
     _setup_plot_y_axis,
     _symlog_vmin_vmax,
+    apply_paper_ready_line_style,
     get_display_name,
     get_metric_display_name,
     is_numeric,
+    resolve_heatmap_limits,
     sort_key,
 )
-from dvae.visualizers.visualizers import get_plot_config
 from matplotlib.colors import LogNorm, Normalize, SymLogNorm
 from matplotlib.ticker import (
     LogFormatterSciNotation,
@@ -41,13 +43,39 @@ from matplotlib.ticker import (
     SymmetricalLogLocator,
 )
 
-# Fixed heatmap color limits so colorbars are comparable across images.
-# Spectrum: Hellinger distance is in [0, 1]. KLD: shared symlog scale for tf + auto.
-HEATMAP_COLOR_LIMITS = {
-    "spectrum": {"vmin": 0.0, "vmax": 1.0, "scale": "linear"},
-    "kld": {"vmin": -10.0, "vmax": 1e3, "scale": "symlog"},
-}
+# Unit-interval colorbars (spectrum error, rho(J)>1 fraction) share these ticks.
 SPECTRUM_HEATMAP_TICKS = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+
+# Settings and bookkeeping stamped next to the dynamical scores. Not plotted.
+_NON_SCORE_KEYS = frozenset(
+    {
+        "lyap_n_steps",
+        "lyap_n_transient",
+        "lyap_n_warmup",
+        "lyap_k",
+        "lyap_map",
+        "lyap_autonomous_input",
+        "lyapunov_skip_reason",
+        "lyap_spectrum",
+        "local_drift_flip_point",
+        "local_drift_auto_len",
+        "local_drift_n_batches",
+    }
+)
+# Lists in evaluation_summary.yaml. flatten_scalar_fields stores them as
+# YAML strings; they are not heatmap columns. lyap_spectrum in particular.
+_SERIES_PREFIXES = (
+    "local_drift_per_step_",
+    "lyap_spectrum",
+)
+# Families auto-added when a top-level finite scalar is present.
+_AUTO_METRIC_PREFIXES = (
+    "lyap_",
+    "jac_",
+    "local_drift_avg_",
+    "id_pr_",
+    "id_twonn_",
+)
 
 # Dictionary for value display names (map raw labels to nicer labels)
 VALUE_DISPLAY_NAMES = {
@@ -135,15 +163,105 @@ def find_delay_embedding_gifs_by_channel(yaml_dir, mode):
     return {}
 
 
-def resolve_heatmap_limits(metric):
-    """Return fixed (vmin, vmax, scale) for known metrics, else None."""
-    if metric.startswith("spectrum_error_"):
-        cfg = HEATMAP_COLOR_LIMITS["spectrum"]
-        return cfg["vmin"], cfg["vmax"], cfg["scale"]
-    if metric.startswith("kld_"):
-        cfg = HEATMAP_COLOR_LIMITS["kld"]
-        return cfg["vmin"], cfg["vmax"], cfg["scale"]
-    return None
+def _paper_plot_config():
+    """Publication rcParams for montage figures (torch-backed visualizers)."""
+    from dvae.visualizers.visualizers import get_plot_config
+
+    return get_plot_config(paper_ready=True)
+
+
+def finite_float(value):
+    """Return a finite float, or None for non-numeric values and non-finite numbers."""
+    if isinstance(value, (bool, list, tuple, dict)):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(number):
+        return None
+    return number
+
+
+def is_auto_plot_metric_key(key):
+    """True for scalar dynamical / intrinsic-dim keys that should auto-plot.
+
+    ``lyap_spectrum`` and ``local_drift_per_step_*`` are lists. Run settings
+    (``lyap_n_steps``, ``lyap_map``, drift window lengths) and
+    ``*_std_across_*`` companions are not score heatmaps. Nested blocks are
+    not matched: ``flatten_scalar_fields`` would prefix them
+    (``lyapunov_lyap_max``), and the eval summary writes these scores at
+    the top level.
+    """
+    if not isinstance(key, str):
+        return False
+    if key in _NON_SCORE_KEYS or "_std_across_" in key:
+        return False
+    if any(key.startswith(prefix) for prefix in _SERIES_PREFIXES):
+        return False
+    return any(key.startswith(prefix) for prefix in _AUTO_METRIC_PREFIXES)
+
+
+def discover_scalar_metrics(data):
+    """Top-level family keys that have at least one finite scalar value.
+
+    A list or dict under a family name (the Lyapunov spectrum) is rejected
+    for every row. Missing families are simply absent from the result.
+    """
+    found = set()
+    rejected = set()
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        for key, value in row.items():
+            if key in {"params", "config", "yaml_file"}:
+                continue
+            if key in found or key in rejected:
+                continue
+            if not is_auto_plot_metric_key(key):
+                continue
+            if isinstance(value, (list, tuple, dict)):
+                rejected.add(key)
+                continue
+            if finite_float(value) is None:
+                continue
+            found.add(key)
+    return sorted(found)
+
+
+def metric_has_finite_value(data, metric):
+    """True when ``resolve_metric`` yields a finite number in any row."""
+    for row in data:
+        if finite_float(resolve_metric(row, metric)) is not None:
+            return True
+    return False
+
+
+def resolve_metrics_to_plot(requested, data):
+    """Requested metrics plus present family scalars, dropping empty ones.
+
+    Older summaries that lack Lyapunov / drift / Jacobian / ID columns
+    produce no plot files for those keys.
+    """
+    extras = [
+        key for key in discover_scalar_metrics(data) if key not in requested
+    ]
+    ordered = []
+    seen = set()
+    missing = []
+    for key in list(requested) + extras:
+        if key in seen:
+            continue
+        seen.add(key)
+        if metric_has_finite_value(data, key):
+            ordered.append(key)
+        else:
+            missing.append(key)
+    if missing:
+        print(
+            "Skipping metrics with no numeric values: " + ", ".join(missing)
+        )
+    return ordered
 
 
 def _nice_positive_ticks(vmin, vmax, n=6):
@@ -510,7 +628,7 @@ def aggregate_image_tiles(
         print(f"Not enough varying data for {output_basename}. Skipping.")
         return
 
-    get_plot_config(paper_ready=True)
+    _paper_plot_config()
 
     fig, axs = plt.subplots(rows, cols, figsize=montage_figsize(rows, cols, layout_mode))
     axs = np.atleast_2d(axs).reshape(rows, cols)
@@ -757,8 +875,8 @@ def plot_1d(data, param, metric, output_dir):
         p_val = get_param_value(d, param)
         if p_val is None:
             continue
-        # Get metric value
-        metric_value = resolve_metric(d, metric)
+        # Get metric value. Lists (lyap_spectrum) and non-finite entries skip.
+        metric_value = finite_float(resolve_metric(d, metric))
         if metric_value is not None:
             param_values.append(p_val)
             metric_values.append(metric_value)
@@ -776,7 +894,7 @@ def plot_1d(data, param, metric, output_dir):
 
     has_dups = len(set(sorted_p)) < len(sorted_p)
 
-    config = get_plot_config(paper_ready=True)
+    config = apply_paper_ready_line_style()
     fig, ax = plt.subplots(figsize=(8.5, 6))
 
     # If x-values are categorical (non-numeric), plot against indices and set tick labels
@@ -831,7 +949,7 @@ def plot_2d(data, param1, metric, output_dir, param2=None):
     for d in data:
         # Get param values
         p1_val = get_param_value(d, param1)
-        metric_value = resolve_metric(d, metric)
+        metric_value = finite_float(resolve_metric(d, metric))
         if p1_val is None or metric_value is None:
             continue
 
@@ -851,7 +969,7 @@ def plot_2d(data, param1, metric, output_dir, param2=None):
         print(f"No valid data points for 2D plot of {metric}. Skipping.")
         return
 
-    config = get_plot_config(paper_ready=True)
+    config = apply_paper_ready_line_style()
     fig, ax = plt.subplots(figsize=(8, 6))
     finite = grid.ravel()[np.isfinite(grid.ravel())]
     data_vmin, data_vmax = float(np.min(finite)), float(np.max(finite))
@@ -932,6 +1050,40 @@ def plot_2d(data, param1, metric, output_dir, param2=None):
     plt.close(fig)
 
 
+def plot_parameter_metrics(data, parameters, metrics, output_dir, verbose=False):
+    """1D line/scatter and 2D heatmap for each metric.
+
+    Axis labels, y scales, and heatmap color limits come from
+    ``aggregate_plot_style``. One parameter draws a single-row heatmap;
+    two parameters draw the usual grid.
+    """
+    for metric in metrics:
+        for param in parameters:
+            if verbose:
+                print(f"Plotting 1D: {metric} vs {param}")
+            plot_1d(data, param, metric, output_dir)
+
+        if len(parameters) == 1:
+            if verbose:
+                print(
+                    f"Plotting 2D: {metric} single-row heatmap for {parameters[0]}"
+                )
+            plot_2d(data, parameters[0], metric, output_dir, param2=None)
+        else:
+            if verbose:
+                print(
+                    f"Plotting 2D: {metric} heatmap for "
+                    f"{parameters[0]} vs {parameters[1]}"
+                )
+            plot_2d(
+                data,
+                parameters[0],
+                metric,
+                output_dir,
+                param2=parameters[1],
+            )
+
+
 def _load_delay_embed_frame(gif_path):
     """Load frame 0 of a delay-embedding GIF, auto-cropped to content."""
     with Image.open(gif_path) as im:
@@ -989,7 +1141,7 @@ def aggregate_delay_embeddings(data, args, output_dir):
         print("Not enough varying data for delay embeddings. Skipping.")
         return
 
-    get_plot_config(paper_ready=True)
+    _paper_plot_config()
 
     # Discover channel labels across runs (union). Prefer explicit chN keys.
     channels_seen = set()
@@ -1159,18 +1311,21 @@ def main():
     parser.add_argument(
         "--metrics",
         nargs="*",
-        default=[
-            "kld_tf",
-            "kld_auto",
-            "spectrum_error_gt",
-            "spectrum_error_tf",
-            "spectrum_error_auto",
-        ],
+        default=list(DEFAULT_AGGREGATE_METRICS),
         help=(
-            "Metrics to plot (default: common ones). Scalar id_* keys from "
-            "evaluation_summary.yaml are included automatically when present, "
-            "including id_pr_{gt,tf,auto}, id_twonn_{gt,tf,auto}, joint "
-            "id_*_joint_*, and per-channel id_pr_gt_<channel>."
+            "Metrics to plot. Defaults: kld_tf, kld_auto, "
+            "spectrum_error_{gt,tf,auto}, lyap_max, jac_opnorm_mean, "
+            "jac_opnorm_max, jac_rho_max, jac_rho_gt1_frac, "
+            "local_drift_avg_d_norm, local_drift_avg_cross_term, "
+            "local_drift_avg_delta_mse, id_pr_hidden_joint_{tf,auto}, "
+            "id_twonn_hidden_joint_{tf,auto}. "
+            "Present top-level scalar keys in the families id_pr_*, "
+            "id_twonn_* (observation joint and per-channel, e.g. id_pr_gt_ch1 "
+            "and id_pr_joint_gt; hidden-joint keys are already in the default), "
+            "jac_*, lyap_* (not the lyap_spectrum list), and "
+            "local_drift_avg_* (including _std companions) are added "
+            "when they have numeric values. Columns with no numeric "
+            "values are skipped."
         ),
     )
     parser.add_argument(
@@ -1434,37 +1589,25 @@ def main():
     if args.verbose:
         print(f"Saved parameter values to {csv_file}")
 
-    # Plot
+    # Drop empty columns and append present id_* / extra jac_* / drift stds.
+    args.metrics = resolve_metrics_to_plot(args.metrics, data)
     if args.verbose:
         print(
-            f"Generating plots for parameters: {args.parameters}, metrics: {args.metrics}"
+            f"Generating plots for parameters: {args.parameters}, "
+            f"metrics: {args.metrics}"
         )
-    for metric in args.metrics:
-        # Plot 1D for ALL parameters, individually
-        for param in args.parameters:
-            if args.verbose:
-                print(f"Plotting 1D: {metric} vs {param}")
-            plot_1d(data, param, metric, args.output_dir)
-
-        # Plot 2D (heatmap style coverage)
-        if len(args.parameters) == 1:
-            if args.verbose:
-                print(
-                    f"Plotting 2D: {metric} single-row heatmap for {args.parameters[0]}"
-                )
-            plot_2d(data, args.parameters[0], metric, args.output_dir, param2=None)
-        else:
-            if args.verbose:
-                print(
-                    f"Plotting 2D: {metric} heatmap for {args.parameters[0]} vs {args.parameters[1]}"
-                )
-            plot_2d(
-                data,
-                args.parameters[0],
-                metric,
-                args.output_dir,
-                param2=args.parameters[1],
-            )
+    else:
+        print(
+            "Plotting metrics: "
+            + (", ".join(args.metrics) if args.metrics else "(none)")
+        )
+    plot_parameter_metrics(
+        data,
+        args.parameters,
+        args.metrics,
+        args.output_dir,
+        verbose=args.verbose,
+    )
 
     print(f"Plots saved to {args.output_dir}")
 
