@@ -244,19 +244,27 @@ def visualize_combined_metrics(
     plt.close(fig)
 
 
-def visualize_sigma_history(
-    sigmas_history,
+def mt_alpha_from_sigma(sigmas):
+    """Map stored MT sigmas to the values drawn in the alpha-history figure.
+
+    This is the historical natural sigmoid used by MT_RNN plots and logs.
+    The model itself mixes hidden states with a base-10 sigmoid. Do not
+    change this default: existing MT figures depend on it.
+    """
+    return 1 / (1 + np.exp(-sigmas))
+
+
+def _history_figure_tag(tag, file_tag):
+    return tag if file_tag is None else file_tag
+
+
+def _draw_warmup_markers(
     model_name,
-    save_figures_dir,
-    tag,
-    kl_warm_epochs=None,
-    auto_warm_epochs=None,
-    noise_warm_epochs=None,
-    sequence_len_epochs=None,
+    kl_warm_epochs,
+    auto_warm_epochs,
+    noise_warm_epochs,
+    sequence_len_epochs,
 ):
-    plt.clf()
-    fig = plt.figure(figsize=(8, 6))
-    plt.rcParams["font.size"] = 12
     if model_name in ["VRNN", "MT_VRNN"] and kl_warm_epochs is not None:
         for kl_warm_epoch in kl_warm_epochs:
             plt.axvline(x=kl_warm_epoch, color="c", linestyle="--")
@@ -270,14 +278,42 @@ def visualize_sigma_history(
         for sequence_len_epoch in sequence_len_epochs:
             plt.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
 
+
+def visualize_sigma_history(
+    sigmas_history,
+    model_name,
+    save_figures_dir,
+    tag,
+    kl_warm_epochs=None,
+    auto_warm_epochs=None,
+    noise_warm_epochs=None,
+    sequence_len_epochs=None,
+    *,
+    file_tag=None,
+    series_name="Sigma",
+    legend_title="Sigma values",
+    ylabel="sigma",
+):
+    plt.clf()
+    fig = plt.figure(figsize=(8, 6))
+    plt.rcParams["font.size"] = 12
+    _draw_warmup_markers(
+        model_name,
+        kl_warm_epochs,
+        auto_warm_epochs,
+        noise_warm_epochs,
+        sequence_len_epochs,
+    )
+
     for i in range(sigmas_history.shape[0]):
-        plt.plot(sigmas_history[i], label=f"Sigma {i+1}")
-    plt.legend(fontsize=16, title="Sigma values", title_fontsize=20)
+        plt.plot(sigmas_history[i], label=f"{series_name} {i+1}")
+    plt.legend(fontsize=16, title=legend_title, title_fontsize=20)
     plt.xlabel("epochs", fontdict={"size": 16})
-    plt.ylabel("sigma", fontdict={"size": 16})
+    plt.ylabel(ylabel, fontdict={"size": 16})
     plt.grid(True)
     fig_file = os.path.join(
-        save_figures_dir, f"vis_training_history_of_sigma_{tag}.png"
+        save_figures_dir,
+        f"vis_training_history_of_sigma_{_history_figure_tag(tag, file_tag)}.png",
     )
     plt.savefig(fig_file)
     plt.close(fig)
@@ -292,34 +328,37 @@ def visualize_alpha_history(
     auto_warm_epochs=None,
     noise_warm_epochs=None,
     sequence_len_epochs=None,
+    *,
+    file_tag=None,
+    alpha_from_sigma=None,
+    series_name="Alpha",
+    legend_title="Alpha values",
+    ylabel="alpha",
 ):
     plt.clf()
     fig = plt.figure(figsize=(8, 6))
     plt.rcParams["font.size"] = 12
-    if model_name in ["VRNN", "MT_VRNN"] and kl_warm_epochs is not None:
-        for kl_warm_epoch in kl_warm_epochs:
-            plt.axvline(x=kl_warm_epoch, color="c", linestyle="--")
-    if auto_warm_epochs is not None:
-        for auto_warm_epoch in auto_warm_epochs:
-            plt.axvline(x=auto_warm_epoch, color="r", linestyle=":")
-    if noise_warm_epochs is not None:
-        for noise_warm_epoch in noise_warm_epochs:
-            plt.axvline(x=noise_warm_epoch, color="g", linestyle="-.")
-    if sequence_len_epochs is not None:
-        for sequence_len_epoch in sequence_len_epochs:
-            plt.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
+    _draw_warmup_markers(
+        model_name,
+        kl_warm_epochs,
+        auto_warm_epochs,
+        noise_warm_epochs,
+        sequence_len_epochs,
+    )
 
+    transform = mt_alpha_from_sigma if alpha_from_sigma is None else alpha_from_sigma
     for i in range(sigmas_history.shape[0]):
-        alphas = 1 / (1 + np.exp(-sigmas_history[i]))
-        plt.plot(alphas, label=f"Alpha {i+1}")
-    plt.legend(fontsize=16, title="Alpha values", title_fontsize=20)
+        alphas = transform(sigmas_history[i])
+        plt.plot(alphas, label=f"{series_name} {i+1}")
+    plt.legend(fontsize=16, title=legend_title, title_fontsize=20)
     plt.xlabel("epochs", fontdict={"size": 16})
-    plt.ylabel("alpha", fontdict={"size": 16})
+    plt.ylabel(ylabel, fontdict={"size": 16})
     plt.grid(True)
     plt.yscale("log")
     plt.ylim(1e-2, 1e1)
     fig_file = os.path.join(
-        save_figures_dir, f"vis_training_history_of_alpha_{tag}.png"
+        save_figures_dir,
+        f"vis_training_history_of_alpha_{_history_figure_tag(tag, file_tag)}.png",
     )
     plt.savefig(fig_file)
     plt.close(fig)

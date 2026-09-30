@@ -48,6 +48,13 @@ from dvae.model import (
     build_MT_RNN,
     build_MT_VRNN,
 )
+from dvae.timescale_history import (
+    attach_timescale_history,
+    init_A_sigmas_history,
+    log_plrnn_timescales,
+    save_plrnn_timescale_figures,
+    update_A_sigmas_history,
+)
 import subprocess
 
 
@@ -475,6 +482,9 @@ class LearningAlgorithm:
                 # set initial values of sigmas_history with alphas_init
                 sigmas_history[:, 0] = sigmoid_reverse_10(alphas_init)
 
+        # PLRNN / shPLRNN diagonal A. Independent of MT mixing sigmas.
+        a_sigmas_history = init_A_sigmas_history(self.model, epochs)
+
         current_auto_warm = (
             self.auto_warm_start
             if self.enable_autonomous_warmup
@@ -841,6 +851,7 @@ class LearningAlgorithm:
                 train_kl[epoch] += loss_kl_avg.item() * bs
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
                     sigmas_history[:, epoch] = self.model.sigmas.detach().cpu().numpy()
+                update_A_sigmas_history(a_sigmas_history, self.model, epoch)
 
             # Validation
             for _, batch_data in enumerate(val_dataloader):
@@ -1407,6 +1418,30 @@ class LearningAlgorithm:
                         sequence_len_epochs,
                     )
 
+                # Same sigma/alpha history figures for PLRNN / shPLRNN diagonal A.
+                save_plrnn_timescale_figures(
+                    None
+                    if a_sigmas_history is None
+                    else a_sigmas_history[:, : epoch + 1],
+                    self.model_name,
+                    save_figures_dir,
+                    tag,
+                    kl_warm_epochs,
+                    (
+                        auto_warm_epochs
+                        if self.autonomous_sampling_method in ["ss", "sm"]
+                        else None
+                    ),
+                    (
+                        noise_warm_epochs
+                        if self.noise_sampling_method in ["ss", "sm"]
+                        else None
+                    ),
+                    sequence_len_epochs,
+                    visualize_sigma_history=visualize_sigma_history,
+                    visualize_alpha_history=visualize_alpha_history,
+                )
+
                 # Visualize model parameters
                 visualize_combined_parameters(
                     name_values=current_named_params,
@@ -1669,6 +1704,12 @@ class LearningAlgorithm:
                     logger.info(
                         "alphas: {}".format([f"{alpha:.5f}" for alpha in alphas])
                     )
+                log_plrnn_timescales(
+                    logger,
+                    a_sigmas_history,
+                    epoch,
+                    alongside_mt=self.model_name in ("MT_RNN", "MT_VRNN"),
+                )
 
         # Save the final weights of network with the best validation loss
         save_file = os.path.join(
@@ -1685,6 +1726,8 @@ class LearningAlgorithm:
         val_kl = val_kl[: epoch + 1]
         if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
             sigmas_history = sigmas_history[:, : epoch + 1]
+        if a_sigmas_history is not None:
+            a_sigmas_history = a_sigmas_history[:, : epoch + 1]
         loss_file = os.path.join(save_dir, "loss_model.pckl")
 
         # create dictionary to save(pickle) the loss
@@ -1697,8 +1740,15 @@ class LearningAlgorithm:
             "val_kl": val_kl,
             "kl_warm_epochs": kl_warm_epochs,
         }
-        if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
-            pickle_dict["sigmas_history"] = sigmas_history
+        attach_timescale_history(
+            pickle_dict,
+            sigmas_history=(
+                sigmas_history
+                if self.model_name in ("MT_RNN", "MT_VRNN")
+                else None
+            ),
+            a_sigmas_history=a_sigmas_history,
+        )
 
         with open(loss_file, "wb") as f:
             pickle.dump(pickle_dict, f)
@@ -1708,6 +1758,13 @@ class LearningAlgorithm:
         if self.model_name in ["MT_RNN", "MT_VRNN"]:
             alphas = 1 / (1 + np.exp(-sigmas_history[:, -1]))
             logger.info("Final alphas: {}".format([f"{alpha:.5f}" for alpha in alphas]))
+        log_plrnn_timescales(
+            logger,
+            a_sigmas_history,
+            -1,
+            final=True,
+            alongside_mt=self.model_name in ("MT_RNN", "MT_VRNN"),
+        )
 
         # run evaluation script
         eval_file = os.path.join(project_root, "src", "dvae", "eval", "eval_signal.py")
