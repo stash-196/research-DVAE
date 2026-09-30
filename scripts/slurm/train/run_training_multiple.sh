@@ -96,15 +96,9 @@ echo "[slurm] Running on host: \$(hostname)"
 echo "[slurm] Under SLURM JobID: \$SLURM_JOBID"
 echo "[slurm] Log file: \${LOG_DIR}/%j_training_\${CONFIG_BASENAME}.log"
 
-# Create directories under SAVED_HOST_PATH and copy params_being_compared.txt
-OUTPUT_EXPERIMENT_DIR="\${SAVED_HOST_PATH}/\${today}/\${experiment}"
-echo "[slurm] OUTPUT_EXPERIMENT_DIR: \$OUTPUT_EXPERIMENT_DIR"
-mkdir -p "\$OUTPUT_EXPERIMENT_DIR"
-if [ -f "\${CONFIG_DIR}/params_being_compared.txt" ]; then
-  cp "\${CONFIG_DIR}/params_being_compared.txt" "\$OUTPUT_EXPERIMENT_DIR/"
-else
-  echo "[slurm] Warning: params_being_compared.txt missing; continuing"
-fi
+# Experiment outputs go under deigo_cluster via train_model.py / device_paths.
+# LOG_DIR above already mkdir -p .../deigo_cluster/$experiment/logs.
+# Do not mkdir ${today}/${experiment} (empty sibling of deigo_cluster).
 
 # Validate paths
 for PATH_VAR in "\$CONTAINER_PATH" "\$PROJECT_PATH" "\$VENV_PATH" "\$DATA_HOST_PATH" "\$SAVED_HOST_PATH"; do
