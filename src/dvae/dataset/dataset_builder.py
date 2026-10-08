@@ -47,6 +47,11 @@ class DatasetConfig:
     # None keeps XhroProper's packet-loss grok_output path.
     data_root: str | None = None
     corpus: str | None = None
+    # XhroProper coarse modes. None keeps usable_tail and artifact mask off.
+    coarse_test_split: str | None = None
+    coarse_eeg_artifact_mask: str | None = None
+    coarse_eeg_artifact_k: float | None = None
+    coarse_eeg_max_rel_delta: float | None = None
 
 
 def build_dataloader(

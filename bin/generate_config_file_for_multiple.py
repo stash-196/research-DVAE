@@ -48,6 +48,35 @@ def get_configurations_for_model(params):
     return [dict(zip(param_names, values)) for values in combinations]
 
 
+def xhro_proper_coarse_example():
+    """Example overrides for a stage-15 coarse XhroProper run.
+
+    Not part of the default grid. Copy these lists over the matching
+    entries above when emitting coarse configs. ``dataset_label`` may be
+    a comma-separated list of session folder names. ``x_dim`` is the base
+    width (``_indicate`` is doubled later in this file). Column counts must
+    match ``COARSE_OBS_COLUMNS`` in ``xhro_proper_dataset.py``.
+
+    Artifact mask is off unless ``coarse_eeg_artifact_mask`` is
+    ``log_total_power_robust`` (then set ``coarse_eeg_artifact_k``) and/or
+    ``coarse_eeg_max_rel_delta`` is a float.
+    """
+    return {
+        "dataset_name": ["XhroProper"],
+        "dataset_label": ["xhro_04_XH058,xhro_01_XH032"],
+        "mask_label": ["None"],
+        "corpus": ["multi"],
+        "data_root": ["None"],
+        "observation_process": ["coarse_eeg_hr_acc_tod"],
+        "x_dim": [8],
+        "sequence_len": [64],
+        "coarse_test_split": ["usable_tail"],
+        "coarse_eeg_artifact_mask": ["none"],
+        "coarse_eeg_artifact_k": ["None"],
+        "coarse_eeg_max_rel_delta": ["None"],
+    }
+
+
 if __name__ == "__main__":
 
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
@@ -267,6 +296,12 @@ if __name__ == "__main__":
     # (no variant suffix; mask_label ignored). data_root overrides that parent.
     corpus = ["None"]
     data_root = ["None"]
+    # Coarse XhroProper only (other datasets ignore these). Single values so
+    # the existing grid does not grow. See xhro_proper_coarse_example().
+    coarse_test_split = ["usable_tail"]
+    coarse_eeg_artifact_mask = ["none"]
+    coarse_eeg_artifact_k = ["None"]
+    coarse_eeg_max_rel_delta = ["None"]
 
     s_dim = [1]
     shuffle = [True]
@@ -314,6 +349,12 @@ if __name__ == "__main__":
             # "ppg_primary",
             # "acc_xyz",
             # "acc_motion",
+            # Stage-15 coarse modes (see xhro_proper_coarse_example()):
+            # "coarse_eeg",
+            # "coarse_eeg_hr",
+            # "coarse_eeg_hr_acc",
+            # "coarse_eeg_hr_acc_tod",
+            # "coarse_full",
         ]
     elif dataset_name[0] == "PhysioNet2012":
         observation_process = [
@@ -356,6 +397,27 @@ if __name__ == "__main__":
     }
     if dataset_name[0] == "Lorenz63":
         _width = _lorenz_slice_x_dim.get(observation_process[0])
+        if _width is not None and _width != x_dim[0]:
+            x_dim = [_width]
+            dense_x = [_width]
+
+    # Keep in sync with COARSE_OBS_COLUMNS in xhro_proper_dataset.py.
+    # Indicate doubling below still applies. Default raw_all does not match.
+    _xhro_proper_coarse_x_dim = {
+        "coarse_eeg": 4,
+        "coarse_eeg_hr": 5,
+        "coarse_eeg_hr_acc": 6,
+        "coarse_eeg_hr_acc_tod": 8,
+        "coarse_full": 15,
+    }
+    if dataset_name[0] == "XhroProper":
+        _obs = observation_process[0]
+        _base = _obs
+        for _suf in ("_interpolate", "_indicate"):
+            if _base.endswith(_suf):
+                _base = _base[: -len(_suf)]
+                break
+        _width = _xhro_proper_coarse_x_dim.get(_base)
         if _width is not None and _width != x_dim[0]:
             x_dim = [_width]
             dense_x = [_width]
@@ -412,6 +474,10 @@ if __name__ == "__main__":
             # with no variant suffix. data_root overrides that parent.
             "corpus": corpus,
             "data_root": data_root,
+            "coarse_test_split": coarse_test_split,
+            "coarse_eeg_artifact_mask": coarse_eeg_artifact_mask,
+            "coarse_eeg_artifact_k": coarse_eeg_artifact_k,
+            "coarse_eeg_max_rel_delta": coarse_eeg_max_rel_delta,
             "s_dim": s_dim,
             "shuffle": shuffle,
             "batch_size": batch_size,
