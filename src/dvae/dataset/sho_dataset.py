@@ -258,7 +258,8 @@ class SimpleHarmonicOscillator(Dataset):
         """
         # only shuffle when self.shuffle is True
         if self.shuffle:
-            np.random.shuffle(indices)
+            # Fixed local RNG: same split as the old global seed 1234567890, without touching np.random.
+            np.random.RandomState(1234567890).shuffle(indices)
         split_point = int(len(indices) * (1 - val_indices))
         return indices[:split_point], indices[split_point:]
 

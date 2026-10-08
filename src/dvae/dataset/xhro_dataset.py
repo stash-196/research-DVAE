@@ -400,7 +400,8 @@ class Xhro(Dataset):
         Splits the dataset indices into training and validation sets.
         """
         if self.shuffle:
-            np.random.shuffle(indices)
+            # Fixed local RNG: same split as the old global seed 1234567890, without touching np.random.
+            np.random.RandomState(1234567890).shuffle(indices)
         split_point = int(len(indices) * (1 - val_ratio))
         return indices[:split_point], indices[split_point:]
 

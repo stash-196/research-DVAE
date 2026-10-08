@@ -210,7 +210,8 @@ def find_indices_srnn(frame_num1, frame_num2, seq_len, input_n=10):
 def find_indices(num_frames, seq_len, num_indices):
 
     SEED = 1234567890
-    np.random.seed(SEED)
+    # Local RNG: never reseed NumPy's global generator (it drives the PTF masks).
+    rng = np.random.RandomState(SEED)
 
     T = num_frames - seq_len + 1
     n = int(T / num_indices)
@@ -223,7 +224,7 @@ def find_indices(num_frames, seq_len, num_indices):
         list2 = np.setdiff1d(list0, list1)
         vis = True
         if not vis:
-            np.random.shuffle(list2)
+            rng.shuffle(list2)
         list2 = list2[:t]
         listf = np.concatenate((list1, list2))
     return listf

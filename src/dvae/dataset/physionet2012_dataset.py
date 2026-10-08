@@ -403,7 +403,8 @@ class PhysioNet2012(Dataset):
 
     def split_dataset(self, indices, val_ratio):
         if self.shuffle:
-            np.random.shuffle(indices)
+            # Fixed local RNG so train and valid instances get the same split (was unseeded -> overlapping sets).
+            np.random.RandomState(1234567890).shuffle(indices)
         split_point = int(len(indices) * (1 - val_ratio))
         return indices[:split_point], indices[split_point:]
 
