@@ -251,6 +251,9 @@ def test_rel_alpha_mask_clears_eeg_and_ignores_epoch_eeg_good():
 @pytest.mark.parametrize(
     "process,width",
     [
+        ("coarse_hr", 1),
+        ("coarse_hr_acc", 2),
+        ("coarse_hr_acc_tod", 4),
         ("coarse_eeg", 4),
         ("coarse_eeg_hr", 5),
         ("coarse_eeg_hr_acc", 6),
@@ -364,6 +367,58 @@ def test_std_guard_sets_constant_column_to_nan(tmp_path, _torch_required):
     assert np.isnan(hr).all()
     assert np.isfinite(_seq(ds)[:, _col("coarse_eeg_hr", "rel_alpha")]).any()
     assert "hr_mean_bpm" in ds.coarse_reports[0]["std_guarded"]
+
+
+def test_no_eeg_modes_ignore_eeg_and_keep_usable_tail(tmp_path, _torch_required, capsys):
+    epochs, hrv = make_frames(100, "subj_a", seed=11)
+    epochs.loc[70:, "rel_alpha"] = np.nan
+    epochs.loc[10:12, "abs_total_0.5-30"] = 1e12
+    epochs.loc[5, "rel_delta"] = 0.99
+    write_session(tmp_path, "subj_a", epochs, hrv)
+    dropped = epochs.drop(
+        columns=[c for c in epochs.columns if c in {
+            "rel_delta", "rel_theta", "rel_alpha", "rel_beta",
+            "abs_delta", "abs_theta", "abs_alpha", "abs_beta",
+            "abs_total_0.5-30", "iaf_hz", "eeg_rms_mad", "eeg_median", "eeg_iqr",
+        }]
+    )
+    write_session(tmp_path, "subj_b", dropped, hrv)
+
+    plain = _load(tmp_path, "subj_a", "coarse_hr_acc_tod", seq_len=8)
+    ruled = _load(
+        tmp_path,
+        "subj_a",
+        "coarse_hr_acc_tod",
+        seq_len=8,
+        coarse_eeg_artifact_mask="log_total_power_robust",
+        coarse_eeg_artifact_k=3.0,
+        coarse_eeg_max_rel_delta=0.4,
+    )
+    assert plain.coarse_reports[0]["test_cut"] == 80
+    assert plain.coarse_reports[0]["n_test_usable"] == 20
+    assert ruled.coarse_reports[0]["test_cut"] == 80
+    assert ruled.coarse_reports[0]["artifact"] == {}
+    assert ruled.coarse_reports[0]["eeg_columns"] is False
+    np.testing.assert_allclose(_seq(plain), _seq(ruled))
+    logged = capsys.readouterr().out
+    assert "artifact rules not applied (no EEG columns)" in logged
+
+    eeg = _load(tmp_path, "subj_a", "coarse_eeg", seq_len=8)
+    assert eeg.coarse_reports[0]["test_cut"] == 56
+
+    hr = _load(tmp_path, "subj_a", "coarse_hr", seq_len=8)
+    hr_no_cols = _load(tmp_path, "subj_b", "coarse_hr", seq_len=8)
+    assert hr.coarse_reports[0]["test_cut"] == 80
+    assert hr_no_cols.coarse_reports[0]["test_cut"] == 80
+    np.testing.assert_allclose(_seq(hr), _seq(hr_no_cols))
+
+    indicated = _load(tmp_path, "subj_a", "coarse_hr_indicate", seq_len=8)
+    assert _seq(indicated).shape[1] == 2
+    assert indicated.feature_columns == ["hr_mean_bpm"]
+    interpolated = _load(tmp_path, "subj_a", "coarse_hr_acc_interpolate", seq_len=8)
+    assert _seq(interpolated).shape[1] == 2
+    tod = _load(tmp_path, "subj_a", "coarse_hr_acc_tod_indicate", seq_len=8)
+    assert _seq(tod).shape[1] == 8
 
 
 def test_usable_tail_versus_last20_rows(tmp_path, _torch_required):

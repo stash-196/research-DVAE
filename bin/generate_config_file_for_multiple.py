@@ -59,7 +59,9 @@ def xhro_proper_coarse_example():
 
     Artifact mask is off unless ``coarse_eeg_artifact_mask`` is
     ``log_total_power_robust`` (then set ``coarse_eeg_artifact_k``) and/or
-    ``coarse_eeg_max_rel_delta`` is a float.
+    ``coarse_eeg_max_rel_delta`` is a float. ``coarse_hr``, ``coarse_hr_acc``,
+    and ``coarse_hr_acc_tod`` select no EEG columns, so those rules do not run.
+    On the cluster, set ``data_root`` to the grok_output folder.
     """
     return {
         "dataset_name": ["XhroProper"],
@@ -350,11 +352,15 @@ if __name__ == "__main__":
             # "acc_xyz",
             # "acc_motion",
             # Stage-15 coarse modes (see xhro_proper_coarse_example()):
+            # "coarse_hr",
+            # "coarse_hr_acc",
+            # "coarse_hr_acc_tod",
             # "coarse_eeg",
             # "coarse_eeg_hr",
             # "coarse_eeg_hr_acc",
             # "coarse_eeg_hr_acc_tod",
             # "coarse_full",
+            # "ecg_removed_eeg",
         ]
     elif dataset_name[0] == "PhysioNet2012":
         observation_process = [
@@ -404,6 +410,9 @@ if __name__ == "__main__":
     # Keep in sync with COARSE_OBS_COLUMNS in xhro_proper_dataset.py.
     # Indicate doubling below still applies. Default raw_all does not match.
     _xhro_proper_coarse_x_dim = {
+        "coarse_hr": 1,
+        "coarse_hr_acc": 2,
+        "coarse_hr_acc_tod": 4,
         "coarse_eeg": 4,
         "coarse_eeg_hr": 5,
         "coarse_eeg_hr_acc": 6,

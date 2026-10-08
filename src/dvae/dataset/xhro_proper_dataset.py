@@ -42,6 +42,10 @@ relative path is joined onto ``data_dir``. Naming still follows ``corpus``
 (variant suffix for packet-loss, none for multi). Point a non-default Multi
 tree at its ``grok_output`` folder with ``data_root`` and ``corpus="multi"``.
 
+On the cluster, ``corpus="multi"`` still resolves under the repo's ``data/``
+unless ``data_root`` points at the ``grok_output`` folder that contains the
+session directories. A missing session directory reports ``data_root``.
+
 Optional ``[DataFrame]`` keys ``corpus`` and ``data_root`` (missing, blank,
 or ``None`` = unset). Other datasets ignore them.
 
@@ -97,6 +101,12 @@ the masks and transforms. ``last20_rows`` is the waveform rule. Clip and
 z-score statistics use that final non-test part. The power-rule fit is the
 exception above (provisional last-20% rows).
 
+No-EEG modes ``coarse_hr``, ``coarse_hr_acc``, and ``coarse_hr_acc_tod``
+(each also ``_interpolate`` / ``_indicate``) select only HR, motion, and
+time-of-day columns. The rel_alpha mask and the artifact rules are not
+applied. Jointly usable epochs are those whose selected columns are all
+finite, so missing EEG does not move the test cut.
+
 ``_interpolate`` fills NaNs inside the subject slice only, after z-scoring
 (linear fill commutes with that affine map) and does not cross subjects or
 the test cut. ``_indicate`` interleaves ``[x0, m0, x1, m1, ...]`` so
@@ -109,6 +119,17 @@ RNG. The test split keeps every intra-subject window in the tail.
 ``window_subject`` / ``window_subject_id`` record the subject of each
 window. ``missing_mask`` is the pre-suffix NaN mask of the selected
 columns, indexed by the same flat ``data_idx`` as ``seq``.
+
+ECG-removed EEG (stage 09b)
+---------------------------
+``ecg_removed_eeg`` (plus ``_interpolate`` / ``_indicate``) reads
+``{session_dir}/intermediates/stage09b_ecg_remove.npz`` key
+``eeg_clean_template``, on the same 250 Hz time axis as
+``stage06_eeg_filtered.npz`` key ``eeg``. ``load_proper_frame`` builds that
+frame the same way ``bipolar_eeg`` builds stage 06, and the suffixes follow
+that grok-extra path (indicate appends one shared is_observed column). The
+file exists for only some sessions; a missing file raises
+``FileNotFoundError`` naming the path.
 """
 
 from __future__ import annotations
@@ -137,6 +158,7 @@ PARITY_PROCESSES = set(select_columns_for_obs_conditions["original"].keys())
 GROK_EXTRA_COLUMNS = {
     "bipolar_ecg": ["ecg"],
     "bipolar_eeg": ["eeg"],
+    "ecg_removed_eeg": ["eeg_clean_template"],
     "bipolar_both": ["ecg", "eeg"],
     "ppg_ch1": ["ppg_ch1"],
     "ppg_ch2": ["ppg_ch2"],
@@ -302,10 +324,16 @@ def _require_session_dir(
     if not path.is_dir():
         effective = _normalize_corpus(corpus) or "packet_loss"
         shown_root = None if _is_unset(data_root) else str(data_root).strip()
+        hint = ""
+        if effective == "multi" and shown_root is None:
+            hint = (
+                " For corpus='multi' on the cluster, set data_root to the "
+                "grok_output folder; otherwise this path is under the repo's data/."
+            )
         raise FileNotFoundError(
             "XhroProper session directory not found: "
             f"{path} (corpus={effective!r}, data_root={shown_root!r}, "
-            f"dataset_label={recording_id!r})"
+            f"dataset_label={recording_id!r}).{hint}"
         )
     return path
 
@@ -504,6 +532,31 @@ def load_proper_frame(
         df = frames[0] if len(frames) == 1 else _align_on_datetime(frames[0], frames[1])
         return _maybe_resample(df, resample_hz)
 
+    if base_process == "ecg_removed_eeg":
+        path = inter / "stage09b_ecg_remove.npz"
+        if not path.exists():
+            raise FileNotFoundError(
+                "Missing ECG-removed EEG intermediate: "
+                f"{path}. ecg_removed_eeg reads key 'eeg_clean_template' "
+                "(present for only some sessions)."
+            )
+        z = np.load(path, allow_pickle=False)
+        if "eeg_clean_template" not in z.files:
+            raise KeyError(
+                f"{path} has no 'eeg_clean_template' array "
+                f"(found {sorted(z.files)})."
+            )
+        df = _df_from_npz(
+            z,
+            {
+                "eeg_clean_template": np.asarray(
+                    z["eeg_clean_template"], dtype=np.float64
+                )
+            },
+            t0=t0,
+        )
+        return _maybe_resample(df, resample_hz)
+
     if base_process.startswith("ppg_"):
         z = load_stage("stage07_ppg_filtered.npz")
         df = _df_from_npz(z, _series_from_stage07(z), t0=t0)
@@ -527,7 +580,16 @@ def _columns_for_base(base: str) -> list[str]:
 
 # One map from observation_process (without suffix) to model columns.
 # ``coarse_full`` adds log10 absolute band powers, IAF, and log10 EEG RMS.
+# ``coarse_hr*`` modes select no EEG columns.
 COARSE_OBS_COLUMNS = {
+    "coarse_hr": ["hr_mean_bpm"],
+    "coarse_hr_acc": ["hr_mean_bpm", "acc_motion_rms"],
+    "coarse_hr_acc_tod": [
+        "hr_mean_bpm",
+        "acc_motion_rms",
+        "tod_sin",
+        "tod_cos",
+    ],
     "coarse_eeg": ["rel_delta", "rel_theta", "rel_alpha", "rel_beta"],
     "coarse_eeg_hr": [
         "rel_delta",
@@ -574,6 +636,7 @@ COARSE_OBS_COLUMNS = {
 }
 
 # Blanked wherever rel_alpha is non-finite, and by the optional artifact rules.
+# Modes whose selected columns miss this set skip both rules.
 EEG_DERIVED_COLUMNS = (
     "rel_delta",
     "rel_theta",
@@ -590,6 +653,11 @@ EEG_DERIVED_COLUMNS = (
     "eeg_iqr",
 )
 ABS_TOTAL_COLUMN = "abs_total_0.5-30"
+
+
+def _columns_use_eeg(columns: list[str]) -> bool:
+    eeg = set(EEG_DERIVED_COLUMNS)
+    return any(col in eeg for col in columns)
 COARSE_LOG10_COLUMNS = (
     "abs_delta",
     "abs_theta",
@@ -1104,7 +1172,10 @@ def build_coarse_subject(
 ) -> dict:
     """Load, mask, transform, and z-score one subject. Rows are not sliced."""
     epochs, hrv = load_coarse_parquets(session_dir)
-    needed = ["t_start", "t_end", "rel_alpha"]
+    uses_eeg = _columns_use_eeg(columns)
+    needed = ["t_start", "t_end"]
+    if uses_eeg:
+        needed.append("rel_alpha")
     for col in columns:
         if col != "hr_mean_bpm" and col not in needed:
             needed.append(col)
@@ -1120,14 +1191,19 @@ def build_coarse_subject(
         raise ValueError(f"{subject_label}: coarse t_start has non-finite values")
     joined = join_hr_mean_onto_epochs(epochs, hrv)
     joined = joined.sort_values("t_start", kind="mergesort").reset_index(drop=True)
-    joined = apply_rel_alpha_eeg_mask(joined)
-    art_rows, art_report = eeg_artifact_row_mask(
-        joined,
-        mask_name=artifact_mask,
-        k=artifact_k,
-        max_rel_delta=max_rel_delta,
-    )
-    joined = _blank_eeg_rows(joined, art_rows)
+    if uses_eeg:
+        joined = apply_rel_alpha_eeg_mask(joined)
+        art_rows, art_report = eeg_artifact_row_mask(
+            joined,
+            mask_name=artifact_mask,
+            k=artifact_k,
+            max_rel_delta=max_rel_delta,
+        )
+        joined = _blank_eeg_rows(joined, art_rows)
+    else:
+        # No selected EEG column: rel_alpha / artifact rules must not run,
+        # and jointly-usable below is only the selected columns.
+        art_report = {}
     stacked = [
         _transform_feature(col, joined[col].to_numpy(dtype=np.float64))
         for col in columns
@@ -1166,6 +1242,7 @@ def build_coarse_subject(
         "hr_n_windows": n_win,
         "hr_window_ok_frac": hr_frac,
         "artifact": art_report,
+        "eeg_columns": uses_eeg,
         "columns": list(columns),
         "norm_mean": norm_mean,
         "norm_std": norm_std,
@@ -1200,6 +1277,12 @@ def _log_coarse_subject(report: dict) -> None:
         f"({hr_frac_s}) test_cut={report['test_cut']} "
         f"mode={report['test_split_mode']} n_test_usable={report['n_test_usable']}"
     )
+    if not report.get("eeg_columns", True):
+        print(
+            f"[XhroProper][coarse][{label}] artifact rules not applied "
+            "(no EEG columns)"
+        )
+        return
     artifact = report["artifact"]
     if not artifact:
         print(f"[XhroProper][coarse][{label}] artifact rules off")
@@ -1234,7 +1317,9 @@ class XhroProper(Xhro):
         retrans) for packet-loss. Ignored when ``corpus`` is ``multi``.
       - corpus: ``packet_loss`` (default) or ``multi``.
       - data_root: folder that contains session directories. Overrides the
-        corpus default under ``data_dir``.
+        corpus default under ``data_dir``. For ``corpus="multi"`` on the
+        cluster this must be the grok_output folder; otherwise paths resolve
+        under the repo's ``data/``.
       - coarse_test_split: ``usable_tail`` (default) or ``last20_rows``.
         Coarse modes only.
       - coarse_eeg_artifact_mask: ``none`` (default) or

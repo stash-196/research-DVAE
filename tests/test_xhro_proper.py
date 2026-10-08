@@ -191,12 +191,16 @@ def test_missing_session_dir_names_the_path_tried(tmp_path):
     with pytest.raises(FileNotFoundError) as exc:
         _require_session_dir(str(tmp_path), recording, "realtime")
     assert str(expected) in str(exc.value)
+    assert "data_root" in str(exc.value)
 
     label = "xhro_01_XH015"
     multi = tmp_path / "suntory" / "xhro_dataset_v2" / "grok_output" / label
     with pytest.raises(FileNotFoundError) as exc:
         _require_session_dir(str(tmp_path), label, "realtime", corpus="multi")
-    assert str(multi) in str(exc.value)
+    message = str(exc.value)
+    assert str(multi) in message
+    assert "data_root" in message
+    assert "grok_output" in message
 
 
 def test_unknown_corpus_rejected(tmp_path):
@@ -229,6 +233,83 @@ def test_load_frame_has_datetime(tmp_path):
     assert "ch1" in df.columns
     assert df["ch1"].isna().sum() == 5
     assert df["datetime"].dt.tz is not None
+
+
+def test_ecg_removed_eeg_loads_stage09b(tmp_path):
+    sess = _fake_session(tmp_path)
+    inter = sess / "intermediates"
+    n = 200
+    t = np.arange(n, dtype=np.float64) * 0.004
+    t_abs = pd.date_range("2026-06-22 14:00:00", periods=n, freq="4ms", tz="Asia/Tokyo")
+    clean = np.linspace(-1.0, 1.0, n)
+    clean[3] = np.nan
+    _write_stage(
+        inter / "stage09b_ecg_remove.npz",
+        t,
+        t_abs,
+        eeg_clean_template=clean,
+    )
+    frame = load_proper_frame(sess, "ecg_removed_eeg")
+    stage06 = load_proper_frame(sess, "bipolar_eeg")
+    assert list(frame.columns) == ["datetime", "eeg_clean_template"]
+    assert frame["datetime"].equals(stage06["datetime"])
+    assert frame["eeg_clean_template"].iloc[0] == pytest.approx(-1.0)
+    assert int(frame["eeg_clean_template"].isna().sum()) == 1
+
+    bare = tmp_path / "no_stage09b"
+    bare.mkdir()
+    missing = bare / "intermediates" / "stage09b_ecg_remove.npz"
+    with pytest.raises(FileNotFoundError) as exc:
+        load_proper_frame(bare, "ecg_removed_eeg")
+    assert str(missing) in str(exc.value)
+
+
+@pytest.mark.skipif(not HAS_TORCH, reason="torch not installed in this env")
+def test_ecg_removed_eeg_dataset_suffixes(tmp_path):
+    sess = _fake_session(tmp_path)
+    inter = sess / "intermediates"
+    n = 200
+    t = np.arange(n, dtype=np.float64) * 0.004
+    t_abs = pd.Timestamp("2026-06-22 14:00:00", tz="Asia/Tokyo") + pd.to_timedelta(
+        t, unit="s"
+    )
+    clean = np.sin(np.arange(n, dtype=np.float64) / 8.0)
+    clean[3] = np.nan
+    _write_stage(
+        inter / "stage09b_ecg_remove.npz",
+        t,
+        t_abs,
+        eeg_clean_template=clean,
+    )
+    common = dict(
+        data_dir=str(tmp_path),
+        dataset_label="REC1",
+        mask_label="realtime",
+        split="train",
+        seq_len=16,
+        sample_rate=1,
+        skip_rate=1,
+        val_indices=0.0,
+        device="cpu",
+        overlap=False,
+        shuffle=False,
+    )
+    plain = XhroProper(**common, x_dim=1, observation_process="ecg_removed_eeg")
+    assert plain.sampling_freq == pytest.approx(250.0)
+    assert np.asarray(plain.seq).shape[1] == 1
+    interpolated = XhroProper(
+        **common, x_dim=1, observation_process="ecg_removed_eeg_interpolate"
+    )
+    assert np.asarray(interpolated.seq).shape[1] == 1
+    assert np.isfinite(np.asarray(interpolated.seq)).all()
+    indicated = XhroProper(
+        **common, x_dim=2, observation_process="ecg_removed_eeg_indicate"
+    )
+    ind = np.asarray(indicated.seq)
+    assert ind.shape[1] == 2
+    # Shared is_observed column: the NaN sample in the train head is unobserved.
+    assert ind[:, 1].min() == pytest.approx(0.0)
+    assert ind[:, 1].max() == pytest.approx(1.0)
 
 
 def test_bipolar_and_ppg_acc_frames(tmp_path):
