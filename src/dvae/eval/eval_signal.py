@@ -92,6 +92,10 @@ from dvae.eval.utils.jacobian_lyapunov import (
     attach_lyapunov_metrics,
     resolve_lyapunov_settings,
 )
+from dvae.eval.utils.free_run_metrics import (
+    free_run_window_metrics,
+    resolve_free_run_metric_settings,
+)
 
 
 class Options:
@@ -1191,6 +1195,8 @@ if __name__ == "__main__":
             f"by_channel={delay_choice.delay_dims_by_channel or '{}'}"
         )
         delay_benchmark_kwargs = delay_choice.as_benchmark_kwargs()
+        free_run_settings = resolve_free_run_metric_settings(cfg)
+        free_run_book: dict[str, Any] = {}
 
         print(
             f"[Eval] Quantitative metrics: up to {n_eval_windows} window(s) "
@@ -1446,11 +1452,19 @@ if __name__ == "__main__":
                     hidden_joint_id_from_benchmarks(channel_benchmarks)
                 )
 
-            batch_metric_dicts.append(
-                flatten_analysis_to_batch_metrics(
-                    mse_results, geom_results, spectrum_results
-                )
+            batch_scalars = flatten_analysis_to_batch_metrics(
+                mse_results, geom_results, spectrum_results
             )
+            try:
+                free_scalars, free_run_book = free_run_window_metrics(
+                    channel_benchmarks, free_run_settings
+                )
+                batch_scalars.update(free_scalars)
+            except Exception as free_exc:
+                print(
+                    f"[Eval] EMD / Rosenstein LLE skipped (batch={i}): {free_exc}"
+                )
+            batch_metric_dicts.append(batch_scalars)
             mse_results_list.append(mse_results)
             geom_results_list.append(geom_results)
             spectrum_results_list.append(spectrum_results)
@@ -1482,6 +1496,8 @@ if __name__ == "__main__":
             metrics.update(merged)
             # Keep the frozen delay choice ahead of any per-batch scalar with the same name.
             metrics.update(delay_choice_summary_fields(delay_choice))
+            # Caps and Rosenstein embedding choices are not window means.
+            metrics.update(free_run_book)
 
             metrics["mse_tf"] = merged.get("mse_tf", merged.get("mse_tf_mean"))
             metrics["mse_auto"] = merged.get("mse_auto", merged.get("mse_auto_mean"))
@@ -1588,6 +1604,27 @@ if __name__ == "__main__":
                     f"GT={metrics.get('id_pr_gt')} "
                     f"TF={metrics.get('id_pr_tf')} "
                     f"Auto={metrics.get('id_pr_auto')}"
+                )
+            if "emd_w1_auto" in metrics or "lle_rosenstein_auto" in metrics:
+                print(
+                    "[Eval] EMD W1 "
+                    f"TF={metrics.get('emd_w1_tf')} "
+                    f"Auto={metrics.get('emd_w1_auto')}  "
+                    "sliced "
+                    f"TF={metrics.get('emd_sliced_tf')} "
+                    f"Auto={metrics.get('emd_sliced_auto')}  "
+                    "exact "
+                    f"TF={metrics.get('emd_exact_tf')} "
+                    f"Auto={metrics.get('emd_exact_auto')}"
+                )
+                print(
+                    "[Eval] Rosenstein LLE "
+                    f"GT={metrics.get('lle_rosenstein_gt')} "
+                    f"Auto={metrics.get('lle_rosenstein_auto')} "
+                    f"diff={metrics.get('lle_rosenstein_diff')} "
+                    f"(m={metrics.get('lle_rosenstein_embed_dim')}, "
+                    f"tau={metrics.get('lle_rosenstein_tau')}, "
+                    f"theiler={metrics.get('lle_rosenstein_theiler')})"
                 )
             print(
                 f"[Eval] KL per-window median [IQR]: "
