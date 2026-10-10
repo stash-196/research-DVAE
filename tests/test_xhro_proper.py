@@ -467,3 +467,86 @@ def test_build_dataloader_passes_corpus_and_data_root(tmp_path):
     assert train_dl.dataset.session_dir == (
         tmp_path / "xhro_packet_loss" / "grok_output" / "REC1_realtime"
     )
+
+
+def _rewrite_ecg(sess: Path, ecg: np.ndarray, ch1: np.ndarray | None = None) -> None:
+    n = len(ecg)
+    t = np.arange(n, dtype=np.float64) * 0.004
+    t_abs = pd.date_range("2026-06-22 14:00:00", periods=n, freq="4ms", tz="Asia/Tokyo")
+    rng = np.random.default_rng(1)
+    _write_stage(
+        sess / "intermediates" / "stage05_ecg_filtered.npz",
+        t,
+        t_abs,
+        ch1=rng.normal(size=n) if ch1 is None else ch1,
+        ch2=rng.normal(size=n),
+        ecg=ecg,
+    )
+
+
+@pytest.mark.skipif(not HAS_TORCH, reason="torch not installed in this env")
+def test_crop_seconds_from_session_start_before_test_split(tmp_path):
+    sess = _fake_session(tmp_path)
+    common = dict(
+        data_dir=str(tmp_path),
+        dataset_label="REC1",
+        mask_label="realtime",
+        **_ctor_kwargs(observation_process="raw_ch1", x_dim=1, seq_len=16),
+    )
+    plain = XhroProper(**common)
+    frame = load_proper_frame(sess, "raw_ch1")
+    elapsed = (frame["datetime"] - frame["datetime"].min()).dt.total_seconds()
+    # Inclusive sample bounds, measured on the frame's own clock.
+    start = float(elapsed.iloc[25])
+    end = float(elapsed.iloc[100])
+    kept = frame.loc[(elapsed.to_numpy() >= start) & (elapsed.to_numpy() <= end)]
+    n_kept = len(kept)
+    assert n_kept == 76
+    cropped = XhroProper(**common, crop_start_sec=start, crop_end_sec=end)
+    # Same ceil tail as ``iloc[: -n // 5]``.
+    train_n = n_kept + ((-n_kept) // 5)
+    assert len(cropped.full_sequence) == train_n
+    assert len(np.asarray(cropped.seq)) == train_n
+    assert len(cropped.missing_mask) == train_n
+    pd.testing.assert_series_equal(
+        cropped.full_sequence["datetime"].reset_index(drop=True),
+        kept["datetime"].iloc[:train_n].reset_index(drop=True),
+        check_names=False,
+    )
+    assert len(np.asarray(plain.seq)) == 160
+    same = XhroProper(**common, crop_start_sec=None, crop_end_sec=None)
+    assert len(np.asarray(same.seq)) == len(np.asarray(plain.seq))
+
+
+@pytest.mark.skipif(not HAS_TORCH, reason="torch not installed in this env")
+def test_missing_mask_follows_rows_apply_keeps(tmp_path):
+    sess = _fake_session(tmp_path)
+    n = 200
+    rng = np.random.default_rng(2)
+    ecg = rng.normal(size=n)
+    ecg[:3] = np.nan
+    ch1 = rng.normal(size=n)
+    ch1[:3] = np.nan
+    _rewrite_ecg(sess, ecg, ch1=ch1)
+    common = dict(
+        data_dir=str(tmp_path),
+        dataset_label="REC1",
+        mask_label="realtime",
+        **_ctor_kwargs(seq_len=16, observation_process="raw_ch1", x_dim=1),
+    )
+    # Datetime is valid, so parity keeps the leading NaN rows (training unchanged).
+    parity = XhroProper(**common)
+    parity_seq = np.asarray(parity.seq)
+    assert len(parity.missing_mask) == len(parity_seq) == 160
+    assert parity.missing_mask[:3].all()
+
+    # Grok extras trim the value frame. The mask must drop the same prefix.
+    grok = XhroProper(**{**common, "observation_process": "bipolar_ecg", "x_dim": 1})
+    grok_seq = np.asarray(grok.seq)
+    assert len(grok.missing_mask) == len(grok_seq) == 157
+    assert not grok.missing_mask[0].any()
+
+    indicated = XhroProper(
+        **{**common, "observation_process": "bipolar_ecg_indicate", "x_dim": 2}
+    )
+    assert indicated.missing_mask.shape[0] == np.asarray(indicated.seq).shape[0] == 157

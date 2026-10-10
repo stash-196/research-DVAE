@@ -52,6 +52,9 @@ class DatasetConfig:
     coarse_eeg_artifact_mask: str | None = None
     coarse_eeg_artifact_k: float | None = None
     coarse_eeg_max_rel_delta: float | None = None
+    # XhroProper waveform crop, seconds from the first timestamp. None = off.
+    crop_start_sec: float | None = None
+    crop_end_sec: float | None = None
 
 
 def build_dataloader(

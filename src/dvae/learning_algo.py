@@ -43,7 +43,18 @@ from dvae.visualizers import (
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
 from dvae.dataset.xhro_proper_dataset import (
     coarse_dataframe_kwargs,
+    optional_config_float,
     optional_config_str,
+)
+from dvae.eval.utils.spectrum_validation import (
+    capture_fixed_spectrum_windows,
+    score_spectrum_windows,
+)
+from dvae.eval.window_length import cap_eval_seq_len
+from dvae.run_options import (
+    parse_checkpoint_every_n_epochs,
+    parse_optional_int,
+    parse_val_criterion,
 )
 from dvae.model import (
     build_VRNN,
@@ -266,6 +277,25 @@ class LearningAlgorithm:
             return True
         return False
 
+    def _score_spectrum_validation(self) -> float:
+        """Score the fixed free-run windows. Does not resize the live loader."""
+        was_training = self.model.training
+        self.model.eval()
+        try:
+            with torch.no_grad():
+                return float(
+                    score_spectrum_windows(
+                        self.model,
+                        self._spectrum_windows,
+                        tf_steps=self._spectrum_tf_steps,
+                        observation_process=self._spectrum_observation,
+                        device=self.device,
+                    )
+                )
+        finally:
+            if was_training:
+                self.model.train()
+
     def train(self, profiler=None):
         # Build model
         self.build_model()
@@ -376,6 +406,8 @@ class LearningAlgorithm:
             mask_label=self.mask_label,
             data_root=optional_config_str(self.cfg, "DataFrame", "data_root"),
             corpus=optional_config_str(self.cfg, "DataFrame", "corpus"),
+            crop_start_sec=optional_config_float(self.cfg, "DataFrame", "crop_start_sec"),
+            crop_end_sec=optional_config_float(self.cfg, "DataFrame", "crop_end_sec"),
             **coarse_dataframe_kwargs(self.cfg),
         )
 
@@ -390,6 +422,52 @@ class LearningAlgorithm:
 
         logger.info("Training samples: {}".format(train_num))
         logger.info("Validation samples: {}".format(val_num))
+
+        # Default recon: best-model and early stopping stay on val_loss.
+        # spectrum scores fixed free-run windows and does not resize them.
+        self._val_criterion = parse_val_criterion(
+            self.cfg.get("Training", "val_criterion", fallback="recon")
+        )
+        self._checkpoint_every = parse_checkpoint_every_n_epochs(
+            self.cfg.get("Training", "checkpoint_every_n_epochs", fallback="0")
+        )
+        self._spectrum_windows = None
+        self._spectrum_tf_steps = None
+        self._spectrum_observation = dataset_config.observation_process
+        if self._val_criterion == "spectrum":
+            n_windows = parse_optional_int(
+                self.cfg.get("Training", "val_spectrum_n_windows", fallback=None),
+                10,
+                "val_spectrum_n_windows",
+            )
+            window_len = parse_optional_int(
+                self.cfg.get("Training", "val_spectrum_window_len", fallback=None),
+                2000,
+                "val_spectrum_window_len",
+            )
+            tf_steps = parse_optional_int(
+                self.cfg.get("Training", "val_spectrum_tf_steps", fallback=None),
+                1000,
+                "val_spectrum_tf_steps",
+            )
+            if tf_steps < 0 or tf_steps >= window_len:
+                raise ValueError(
+                    "val_spectrum_tf_steps must be in [0, val_spectrum_window_len), "
+                    f"got tf_steps={tf_steps}, window_len={window_len}."
+                )
+            self._spectrum_tf_steps = tf_steps
+            self._spectrum_windows = capture_fixed_spectrum_windows(
+                val_dataloader.dataset,
+                n_windows=n_windows,
+                window_len=window_len,
+            )
+            logger.info(
+                "Spectrum validation: {} fixed window(s) of length {}, "
+                "teacher-forced {}, free-run the rest. "
+                "These copies are not passed to update_sequence_length.".format(
+                    len(self._spectrum_windows), window_len, tf_steps
+                )
+            )
 
         ######################
         ### Batch Training ###
@@ -526,6 +604,7 @@ class LearningAlgorithm:
         auto_delta_threshold = 1e-4
         delta_threshold = 1e-4
         warm_up_happened = False
+        val_spectrum = np.zeros((epochs,))
 
         self.model.to(self.device)
 
@@ -1085,17 +1164,35 @@ class LearningAlgorithm:
                 )
             )
 
+            if self._val_criterion == "spectrum":
+                val_spectrum[epoch] = self._score_spectrum_validation()
+                logger.info(
+                    "Val spectrum error (free-run half): {:.6f}".format(
+                        val_spectrum[epoch]
+                    )
+                )
+                selection_value = val_spectrum[epoch]
+            else:
+                selection_value = val_loss[epoch]
+
             # Save the best model
             if warm_up_happened:
                 logger.info("Warm-up happened, saving the best model")
                 warm_up_happened = False
-                best_val_loss = val_loss[epoch]
+                if self._val_criterion == "spectrum":
+                    best_val_loss = selection_value
+                else:
+                    best_val_loss = val_loss[epoch]
                 best_state_dict = self.model.state_dict()
                 best_optim_dict = optimizer.state_dict()
                 cur_best_epoch = epoch
 
             # identify the delta between current val_loss and best_val_loss
-            delta = val_loss[epoch] - best_val_loss
+            # recon keeps the historical comparison exactly.
+            if self._val_criterion == "spectrum":
+                delta = selection_value - best_val_loss
+            else:
+                delta = val_loss[epoch] - best_val_loss
             delta_per_epoch[epoch] = delta
             # calculate the rolling average of delta if the window size is reached
             if epoch >= delta_rolling_window_size:
@@ -1108,7 +1205,10 @@ class LearningAlgorithm:
             # Save the best model, update patience and best_val_loss
             if delta < -delta_threshold:
                 cpt_patience = 0
-                best_val_loss = val_loss[epoch]
+                if self._val_criterion == "spectrum":
+                    best_val_loss = selection_value
+                else:
+                    best_val_loss = val_loss[epoch]
                 best_state_dict = self.model.state_dict()
                 best_optim_dict = optimizer.state_dict()
                 cur_best_epoch = epoch
@@ -1247,6 +1347,9 @@ class LearningAlgorithm:
                     "val_recon": val_recon[: cur_best_epoch + 1],
                     "val_kl": val_kl[: cur_best_epoch + 1],
                 }
+                if self._val_criterion == "spectrum":
+                    loss_log["val_spectrum"] = val_spectrum[: cur_best_epoch + 1]
+                    loss_log["val_criterion"] = "spectrum"
                 save_file = os.path.join(save_dir, self.model_name + "_checkpoint.pt")
                 torch.save(
                     {
@@ -1494,214 +1597,241 @@ class LearningAlgorithm:
                         showing_gradient=True,
                         gradient_clip_value=self.gradient_clip,
                     )
-                # Test with longer sequence length (1000)
-                # Update dataset sequence length to 1000 temporarily
-                train_dataloader.dataset.update_sequence_length(
-                    1000, minimum_nan_ratio=0.3
-                )
-                first_batch = next(iter(train_dataloader))
-                temp_batch_data = first_batch.permute(1, 0, 2).to(self.device)
-
-                # Extract missing mask for this batch
-                temp_missing_mask = None
-                observation_process = getattr(
-                    dataset_config, "observation_process", None
-                )
-
-                if (
-                    self._is_indicate_observation(observation_process)
-                    and temp_batch_data.size(2) >= 2
-                ):
-                    # Interleaved [x,m,...]: odd dims are is_observed → per-signal missing
-                    is_observed = temp_batch_data[:, :, 1::2]
-                    temp_missing_mask = (is_observed < 0.5).float()
-
-                elif hasattr(train_dataloader.dataset, "missing_mask"):
-                    # Fallback for other observation processes
-                    seq_len_temp, batch_size_temp, x_dim_temp = temp_batch_data.shape
-                    batch_start_idx = (
-                        train_dataloader.dataset.data_idx[0]
-                        if len(train_dataloader.dataset.data_idx) > 0
-                        else 0
+                # Longer training figure. Cap to the longest in-subject
+                # span so an empty window set does not crash next(iter).
+                _viz_len = cap_eval_seq_len(train_dataloader.dataset, 1000)
+                _viz_ready = False
+                if _viz_len < 1:
+                    logger.info(
+                        "Skipping long-sequence training visualization: "
+                        "no subject can supply a window"
                     )
-                    batch_end_idx = min(
-                        batch_start_idx + seq_len_temp,
-                        len(train_dataloader.dataset.missing_mask),
+                else:
+                    try:
+                        train_dataloader.dataset.update_sequence_length(
+                            _viz_len, minimum_nan_ratio=0.3
+                        )
+                        _viz_ready = len(train_dataloader.dataset.data_idx) > 0
+                        if not _viz_ready:
+                            logger.info(
+                                "Skipping long-sequence training visualization: "
+                                "no window of length {}".format(_viz_len)
+                            )
+                    except ValueError as _viz_exc:
+                        logger.info(
+                            "Skipping long-sequence training visualization: {}".format(
+                                _viz_exc
+                            )
+                        )
+                        _viz_ready = False
+                if not _viz_ready and _viz_len >= 1:
+                    train_dataloader.dataset.update_sequence_length(
+                        current_sequence_len
                     )
-                    missing_mask_slice = train_dataloader.dataset.missing_mask[
-                        batch_start_idx:batch_end_idx
-                    ]
+                if _viz_ready:
+                    first_batch = next(iter(train_dataloader))
+                    temp_batch_data = first_batch.permute(1, 0, 2).to(self.device)
 
-                    # Convert to tensor and expand to batch size
-                    if isinstance(missing_mask_slice, np.ndarray):
-                        temp_missing_mask = (
-                            torch.from_numpy(missing_mask_slice)
-                            .float()
-                            .unsqueeze(1)
-                            .expand(-1, batch_size_temp, -1)
+                    # Extract missing mask for this batch
+                    temp_missing_mask = None
+                    observation_process = getattr(
+                        dataset_config, "observation_process", None
+                    )
+
+                    if (
+                        self._is_indicate_observation(observation_process)
+                        and temp_batch_data.size(2) >= 2
+                    ):
+                        # Interleaved [x,m,...]: odd dims are is_observed → per-signal missing
+                        is_observed = temp_batch_data[:, :, 1::2]
+                        temp_missing_mask = (is_observed < 0.5).float()
+
+                    elif hasattr(train_dataloader.dataset, "missing_mask"):
+                        # Fallback for other observation processes
+                        seq_len_temp, batch_size_temp, x_dim_temp = temp_batch_data.shape
+                        batch_start_idx = (
+                            train_dataloader.dataset.data_idx[0]
+                            if len(train_dataloader.dataset.data_idx) > 0
+                            else 0
                         )
-                    else:
-                        temp_missing_mask = missing_mask_slice.unsqueeze(1).expand(
-                            -1, batch_size_temp, -1
+                        batch_end_idx = min(
+                            batch_start_idx + seq_len_temp,
+                            len(train_dataloader.dataset.missing_mask),
                         )
+                        missing_mask_slice = train_dataloader.dataset.missing_mask[
+                            batch_start_idx:batch_end_idx
+                        ]
 
-                # Reset sequence length back to current_sequence_len
-                train_dataloader.dataset.update_sequence_length(current_sequence_len)
+                        # Convert to tensor and expand to batch size
+                        if isinstance(missing_mask_slice, np.ndarray):
+                            temp_missing_mask = (
+                                torch.from_numpy(missing_mask_slice)
+                                .float()
+                                .unsqueeze(1)
+                                .expand(-1, batch_size_temp, -1)
+                            )
+                        else:
+                            temp_missing_mask = missing_mask_slice.unsqueeze(1).expand(
+                                -1, batch_size_temp, -1
+                            )
 
-                # SART: Compute autonomous mode selector for visualization #################
-                model_mode_selector = create_autonomous_mode_selector(
-                    temp_batch_data.size(0),
-                    mode=autonomous_config["mode"],
-                    autonomous_ratio=autonomous_config["autonomous_ratio"](),
-                    batch_size=temp_batch_data.size(1),
-                    x_dim=dataset_config.x_dim,
-                    device=self.device,
-                )
-                # replace where nan is present with 1 to fill with autonomous mode
-                model_mode_selector = torch.where(
-                    temp_batch_data.isnan().detach(),
-                    torch.tensor(1.0, device=self.device),
-                    model_mode_selector,
-                )
-                # END: Compute autonomous mode selector for visualization #################
+                    # Reset sequence length back to current_sequence_len
+                    train_dataloader.dataset.update_sequence_length(current_sequence_len)
 
-                # START: Compute noise-mixing #####################
-                noise_config = noise_configs.get(self.noise_sampling_method)
-                noise_selector = None
-                if noise_config is not None:
-                    noise_selector = create_autonomous_mode_selector(
+                    # SART: Compute autonomous mode selector for visualization #################
+                    model_mode_selector = create_autonomous_mode_selector(
                         temp_batch_data.size(0),
-                        mode=noise_config["mode"],
-                        autonomous_ratio=noise_config["ratio_fn"](),
+                        mode=autonomous_config["mode"],
+                        autonomous_ratio=autonomous_config["autonomous_ratio"](),
                         batch_size=temp_batch_data.size(1),
                         x_dim=dataset_config.x_dim,
                         device=self.device,
                     )
-                    if self.noise_target == "tf_only":
-                        noise_selector *= 1 - model_mode_selector
-                    elif self.noise_target in ["ar_only", "hybrid_ar"]:
-                        noise_selector *= model_mode_selector
-                # END: Compute noise-mixing #####################
+                    # replace where nan is present with 1 to fill with autonomous mode
+                    model_mode_selector = torch.where(
+                        temp_batch_data.isnan().detach(),
+                        torch.tensor(1.0, device=self.device),
+                        model_mode_selector,
+                    )
+                    # END: Compute autonomous mode selector for visualization #################
 
-                # Visualize teacher forcing and autonomous mode
-                visualize_teacherforcing_2_autonomous(
-                    temp_batch_data,
-                    self.model,
-                    auto_mode_selector=model_mode_selector,
-                    noise_selector=noise_selector,
-                    save_path=os.path.join(
-                        save_figures_dir, "sequence_reconstruction", "training_mode"
-                    ),
-                    explain=f"training_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
-                    inference_mode=True,
-                    missing_mask=temp_missing_mask,
-                    hide_mask_output=(
-                        self._is_indicate_observation(
-                            getattr(dataset_config, "observation_process", None)
+                    # START: Compute noise-mixing #####################
+                    noise_config = noise_configs.get(self.noise_sampling_method)
+                    noise_selector = None
+                    if noise_config is not None:
+                        noise_selector = create_autonomous_mode_selector(
+                            temp_batch_data.size(0),
+                            mode=noise_config["mode"],
+                            autonomous_ratio=noise_config["ratio_fn"](),
+                            batch_size=temp_batch_data.size(1),
+                            x_dim=dataset_config.x_dim,
+                            device=self.device,
                         )
-                    ),
-                )
+                        if self.noise_target == "tf_only":
+                            noise_selector *= 1 - model_mode_selector
+                        elif self.noise_target in ["ar_only", "hybrid_ar"]:
+                            noise_selector *= model_mode_selector
+                    # END: Compute noise-mixing #####################
 
-                # START: Compute autonomous mode selector for Even Bursts visualization #################
-                model_mode_selector_flip_test = create_autonomous_mode_selector(
-                    temp_batch_data.size(0),
-                    mode="even_bursts",
-                    autonomous_ratio=0.1,
-                    device=self.device,
-                    batch_size=temp_batch_data.size(1),
-                    x_dim=dataset_config.x_dim,
-                )
-                model_mode_selector = torch.where(
-                    temp_batch_data.isnan().detach(),
-                    torch.tensor(1.0, device=self.device),
-                    model_mode_selector,
-                )
-                # END: Compute autonomous mode selector for Even Bursts visualization #################
-                # START: Compute noise-mixing #####################
-                noise_config = noise_configs.get(self.noise_sampling_method)
-                noise_selector = None
-                if noise_config is not None:
-                    noise_selector = create_autonomous_mode_selector(
+                    # Visualize teacher forcing and autonomous mode
+                    visualize_teacherforcing_2_autonomous(
+                        temp_batch_data,
+                        self.model,
+                        auto_mode_selector=model_mode_selector,
+                        noise_selector=noise_selector,
+                        save_path=os.path.join(
+                            save_figures_dir, "sequence_reconstruction", "training_mode"
+                        ),
+                        explain=f"training_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
+                        inference_mode=True,
+                        missing_mask=temp_missing_mask,
+                        hide_mask_output=(
+                            self._is_indicate_observation(
+                                getattr(dataset_config, "observation_process", None)
+                            )
+                        ),
+                    )
+
+                    # START: Compute autonomous mode selector for Even Bursts visualization #################
+                    model_mode_selector_flip_test = create_autonomous_mode_selector(
                         temp_batch_data.size(0),
-                        mode=noise_config["mode"],
-                        autonomous_ratio=noise_config["ratio_fn"](),
+                        mode="even_bursts",
+                        autonomous_ratio=0.1,
+                        device=self.device,
                         batch_size=temp_batch_data.size(1),
                         x_dim=dataset_config.x_dim,
-                        device=self.device,
                     )
-                    if self.noise_target == "tf_only":
-                        noise_selector *= 1 - model_mode_selector
-                    elif self.noise_target in ["ar_only", "hybrid_ar"]:
-                        noise_selector *= model_mode_selector
-                # END: Compute noise-mixing #####################
-
-                visualize_teacherforcing_2_autonomous(
-                    temp_batch_data,
-                    self.model,
-                    auto_mode_selector=model_mode_selector_flip_test,
-                    noise_selector=noise_selector,
-                    save_path=os.path.join(
-                        save_figures_dir, "sequence_reconstruction", "even_bursts"
-                    ),
-                    explain=f"even_bursts_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
-                    inference_mode=True,
-                    missing_mask=temp_missing_mask,
-                    hide_mask_output=(
-                        self._is_indicate_observation(
-                            getattr(dataset_config, "observation_process", None)
+                    model_mode_selector = torch.where(
+                        temp_batch_data.isnan().detach(),
+                        torch.tensor(1.0, device=self.device),
+                        model_mode_selector,
+                    )
+                    # END: Compute autonomous mode selector for Even Bursts visualization #################
+                    # START: Compute noise-mixing #####################
+                    noise_config = noise_configs.get(self.noise_sampling_method)
+                    noise_selector = None
+                    if noise_config is not None:
+                        noise_selector = create_autonomous_mode_selector(
+                            temp_batch_data.size(0),
+                            mode=noise_config["mode"],
+                            autonomous_ratio=noise_config["ratio_fn"](),
+                            batch_size=temp_batch_data.size(1),
+                            x_dim=dataset_config.x_dim,
+                            device=self.device,
                         )
-                    ),
-                )
+                        if self.noise_target == "tf_only":
+                            noise_selector *= 1 - model_mode_selector
+                        elif self.noise_target in ["ar_only", "hybrid_ar"]:
+                            noise_selector *= model_mode_selector
+                    # END: Compute noise-mixing #####################
 
-                # START: Compute autonomous mode selector for Half-Half visualization #################
-                model_mode_selector_flip_test = create_autonomous_mode_selector(
-                    temp_batch_data.size(0),
-                    mode="half_half",
-                    device=self.device,
-                    batch_size=temp_batch_data.size(1),
-                    x_dim=dataset_config.x_dim,
-                )
-                model_mode_selector = torch.where(
-                    temp_batch_data.isnan().detach(),
-                    torch.tensor(1.0, device=self.device),
-                    model_mode_selector,
-                )
-                # END: Compute autonomous mode selector for Half-Half visualization #################
-                # START: Compute noise-mixing #####################
-                noise_config = noise_configs.get(self.noise_sampling_method)
-                noise_selector = None
-                if noise_config is not None:
-                    noise_selector = create_autonomous_mode_selector(
+                    visualize_teacherforcing_2_autonomous(
+                        temp_batch_data,
+                        self.model,
+                        auto_mode_selector=model_mode_selector_flip_test,
+                        noise_selector=noise_selector,
+                        save_path=os.path.join(
+                            save_figures_dir, "sequence_reconstruction", "even_bursts"
+                        ),
+                        explain=f"even_bursts_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
+                        inference_mode=True,
+                        missing_mask=temp_missing_mask,
+                        hide_mask_output=(
+                            self._is_indicate_observation(
+                                getattr(dataset_config, "observation_process", None)
+                            )
+                        ),
+                    )
+
+                    # START: Compute autonomous mode selector for Half-Half visualization #################
+                    model_mode_selector_flip_test = create_autonomous_mode_selector(
                         temp_batch_data.size(0),
-                        mode=noise_config["mode"],
-                        autonomous_ratio=noise_config["ratio_fn"](),
+                        mode="half_half",
+                        device=self.device,
                         batch_size=temp_batch_data.size(1),
                         x_dim=dataset_config.x_dim,
-                        device=self.device,
                     )
-                    if self.noise_target == "tf_only":
-                        noise_selector *= 1 - model_mode_selector
-                    elif self.noise_target in ["ar_only", "hybrid_ar"]:
-                        noise_selector *= model_mode_selector
-                # END: Compute noise-mixing #####################
-
-                visualize_teacherforcing_2_autonomous(
-                    temp_batch_data,
-                    self.model,
-                    auto_mode_selector=model_mode_selector_flip_test,
-                    noise_selector=noise_selector,
-                    save_path=os.path.join(
-                        save_figures_dir, "sequence_reconstruction", "half_half"
-                    ),
-                    explain=f"half_half_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
-                    inference_mode=True,
-                    missing_mask=temp_missing_mask,
-                    hide_mask_output=(
-                        self._is_indicate_observation(
-                            getattr(dataset_config, "observation_process", None)
+                    model_mode_selector = torch.where(
+                        temp_batch_data.isnan().detach(),
+                        torch.tensor(1.0, device=self.device),
+                        model_mode_selector,
+                    )
+                    # END: Compute autonomous mode selector for Half-Half visualization #################
+                    # START: Compute noise-mixing #####################
+                    noise_config = noise_configs.get(self.noise_sampling_method)
+                    noise_selector = None
+                    if noise_config is not None:
+                        noise_selector = create_autonomous_mode_selector(
+                            temp_batch_data.size(0),
+                            mode=noise_config["mode"],
+                            autonomous_ratio=noise_config["ratio_fn"](),
+                            batch_size=temp_batch_data.size(1),
+                            x_dim=dataset_config.x_dim,
+                            device=self.device,
                         )
-                    ),
-                )
+                        if self.noise_target == "tf_only":
+                            noise_selector *= 1 - model_mode_selector
+                        elif self.noise_target in ["ar_only", "hybrid_ar"]:
+                            noise_selector *= model_mode_selector
+                    # END: Compute noise-mixing #####################
+
+                    visualize_teacherforcing_2_autonomous(
+                        temp_batch_data,
+                        self.model,
+                        auto_mode_selector=model_mode_selector_flip_test,
+                        noise_selector=noise_selector,
+                        save_path=os.path.join(
+                            save_figures_dir, "sequence_reconstruction", "half_half"
+                        ),
+                        explain=f"half_half_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
+                        inference_mode=True,
+                        missing_mask=temp_missing_mask,
+                        hide_mask_output=(
+                            self._is_indicate_observation(
+                                getattr(dataset_config, "observation_process", None)
+                            )
+                        ),
+                    )
 
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
                     alphas = 1 / (1 + np.exp(-sigmas_history[:, epoch]))
@@ -1713,6 +1843,28 @@ class LearningAlgorithm:
                     a_sigmas_history,
                     epoch,
                     alongside_mt=self.model_name in ("MT_RNN", "MT_VRNN"),
+                )
+
+            # Current weights, in addition to the best checkpoint and the
+            # final best-epoch file. 0 / off leaves this path unused.
+            if self._checkpoint_every and (epoch + 1) % self._checkpoint_every == 0:
+                epoch_file = os.path.join(
+                    save_dir, "{}_epoch{}.pt".format(self.model_name, epoch)
+                )
+                torch.save(
+                    {
+                        "epoch": epoch,
+                        "best_val_loss": best_val_loss,
+                        "val_criterion": self._val_criterion,
+                        "model_state_dict": self.model.state_dict(),
+                        "optim_state_dict": optimizer.state_dict(),
+                    },
+                    epoch_file,
+                )
+                logger.info(
+                    "Epoch: {} ===> current-epoch checkpoint stored at {}".format(
+                        epoch, epoch_file
+                    )
                 )
 
         # Save the final weights of network with the best validation loss
@@ -1744,6 +1896,9 @@ class LearningAlgorithm:
             "val_kl": val_kl,
             "kl_warm_epochs": kl_warm_epochs,
         }
+        if self._val_criterion == "spectrum":
+            pickle_dict["val_spectrum"] = val_spectrum[: epoch + 1]
+            pickle_dict["val_criterion"] = "spectrum"
         attach_timescale_history(
             pickle_dict,
             sigmas_history=(

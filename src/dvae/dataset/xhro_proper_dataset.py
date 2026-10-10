@@ -1019,12 +1019,14 @@ def coarse_test_cut(usable: np.ndarray, mode: str) -> int:
     """Row index where the contiguous test tail starts.
 
     ``usable_tail`` places ``n_usable // 5`` jointly usable epochs in the
-    tail (same floor as Xhro's ``n // 5``). ``last20_rows`` is ``n - n // 5``.
+    tail (same floor as Xhro's ``n // 5``). ``last20_rows`` uses
+    ``n + ((-n) // 5)``, the same ceil tail as Xhro's ``-n // 5`` slice.
+    ``_provisional_nontest_mask`` keeps the floor cut ``n - n // 5``.
     """
     usable = np.asarray(usable, dtype=bool)
     n = int(usable.shape[0])
     if mode == "last20_rows":
-        return n - (n // 5)
+        return n + ((-n) // 5)
     if mode == "usable_tail":
         idx = np.flatnonzero(usable)
         n_test = int(idx.size // 5)
@@ -1128,7 +1130,9 @@ def _apply_coarse_suffix(features: np.ndarray, suffix: str | None) -> np.ndarray
         return out.astype(np.float32)
     if suffix == "indicate":
         missing = ~np.isfinite(arr)
-        imputed = np.nan_to_num(arr, nan=0.0).astype(np.float32)
+        # Zero every non-finite, including +/-inf. nan_to_num leaves inf as
+        # the float extreme, and the float32 cast turns that back into inf.
+        imputed = np.where(missing, 0.0, arr).astype(np.float32)
         is_obs = (~missing).astype(np.float32)
         result = np.empty((arr.shape[0], arr.shape[1] * 2), dtype=np.float32)
         result[:, 0::2] = imputed
@@ -1158,6 +1162,76 @@ def intra_subject_window_starts(
             starts.extend(range(i, j - seq_len + 1, step))
         i = j
     return np.asarray(starts, dtype=np.int64)
+
+
+def max_group_span(group_index, n_rows: int) -> int:
+    """Longest contiguous run. ``group_index is None`` means one series."""
+    n_rows = int(n_rows)
+    if n_rows <= 0:
+        return 0
+    if group_index is None:
+        return n_rows
+    index = np.asarray(group_index)
+    if index.size == 0:
+        return 0
+    if index.size == 1:
+        return 1
+    changes = np.flatnonzero(index[1:] != index[:-1]) + 1
+    bounds = np.r_[0, changes, index.size]
+    return int(np.diff(bounds).max())
+
+
+def dataset_max_window_length(dataset) -> int:
+    """Longest window that stays inside one subject, stay, or the whole series."""
+    seq = getattr(dataset, "seq", None)
+    n_rows = 0 if seq is None else int(len(seq))
+    group = getattr(dataset, "subject_index_per_row", None)
+    if group is None:
+        group = getattr(dataset, "stay_id_per_row", None)
+    return max_group_span(group, n_rows)
+
+
+def crop_proper_frame(
+    frame: pd.DataFrame,
+    crop_start_sec,
+    crop_end_sec,
+) -> pd.DataFrame:
+    """Keep rows with ``crop_start_sec <= t <= crop_end_sec`` from the first timestamp.
+
+    Both bounds unset leaves the frame unchanged. Seconds are measured from
+    ``min(datetime)`` so a later resample does not move the crop. Applied on
+    the waveform path only, after ``load_proper_frame`` and before the test split.
+    """
+    if _is_unset(crop_start_sec) and _is_unset(crop_end_sec):
+        return frame
+    if frame is None or len(frame) == 0:
+        return frame
+    if "datetime" not in frame.columns:
+        warnings.warn(
+            "crop_start_sec/crop_end_sec ignored: frame has no datetime column.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return frame
+    t0 = frame["datetime"].min()
+    elapsed = (frame["datetime"] - t0).dt.total_seconds().to_numpy(dtype=np.float64)
+    keep = np.ones(len(frame), dtype=bool)
+    if not _is_unset(crop_start_sec):
+        keep &= elapsed >= float(crop_start_sec)
+    if not _is_unset(crop_end_sec):
+        keep &= elapsed <= float(crop_end_sec)
+    cropped = frame.loc[keep].reset_index(drop=True)
+    if len(cropped) == 0:
+        raise ValueError(
+            "crop_start_sec/crop_end_sec removed every row "
+            f"(start={crop_start_sec!r}, end={crop_end_sec!r}, "
+            f"span_sec={float(np.nanmax(elapsed) - np.nanmin(elapsed)):.6g})."
+        )
+    print(
+        f"[XhroProper] crop seconds [{crop_start_sec}, {crop_end_sec}] "
+        f"kept {len(cropped)}/{len(frame)} rows"
+    )
+    return cropped
 
 
 def build_coarse_subject(
@@ -1306,6 +1380,27 @@ def _log_coarse_subject(report: dict) -> None:
         )
 
 
+def _align_missing_mask(mask, processed) -> np.ndarray:
+    """Force the mask onto the rows ``apply_observation_process`` returned.
+
+    A longer mask means a leading all-NaN prefix was dropped from the signal.
+    Keep that suffix. A shorter mask is a bug: the signal rows are left as
+    apply produced them.
+    """
+    aligned = np.asarray(mask)
+    if aligned.ndim == 1:
+        aligned = aligned.reshape(-1, 1)
+    n_proc = int(processed.shape[0])
+    if len(aligned) == n_proc:
+        return aligned
+    if len(aligned) > n_proc:
+        return aligned[-n_proc:]
+    raise RuntimeError(
+        f"missing_mask length {len(aligned)} is shorter than the processed "
+        f"signal ({n_proc}). The mask must follow apply_observation_process."
+    )
+
+
 class XhroProper(Xhro):
     """Grok-pipeline XHRO sequences with named banks and honest gaps.
 
@@ -1326,6 +1421,9 @@ class XhroProper(Xhro):
         ``log_total_power_robust``.
       - coarse_eeg_artifact_k: required when the power rule is on.
       - coarse_eeg_max_rel_delta: optional rel_delta cap; unset means off.
+      - crop_start_sec / crop_end_sec: inclusive seconds from the first
+        timestamp. Unset means no crop. Waveform path only, after load and
+        before the 20% test split.
 
     Omit both ``data_root`` and ``corpus`` to keep today's packet-loss path:
     ``{data_dir}/xhro_packet_loss/grok_output/{dataset_label}_{variant}``.
@@ -1353,6 +1451,8 @@ class XhroProper(Xhro):
         coarse_eeg_artifact_mask=None,
         coarse_eeg_artifact_k=None,
         coarse_eeg_max_rel_delta=None,
+        crop_start_sec=None,
+        crop_end_sec=None,
         **kwargs,
     ):
         self.path_to_data = data_dir
@@ -1378,6 +1478,8 @@ class XhroProper(Xhro):
         self.device = device
         self.sampling_freq = None
         self.resample_hz = resample_hz
+        self.crop_start_sec = crop_start_sec
+        self.crop_end_sec = crop_end_sec
         self.coarse_mode = False
         base, _suffix = _split_process(self.observation_process)
         if base in COARSE_OBS_COLUMNS:
@@ -1412,6 +1514,9 @@ class XhroProper(Xhro):
         the_sequence = load_proper_frame(
             self.session_dir, base, resample_hz=self.resample_hz
         )
+        the_sequence = crop_proper_frame(
+            the_sequence, self.crop_start_sec, self.crop_end_sec
+        )
         if "datetime" in the_sequence.columns:
             # native rate from median Δt
             deltas = the_sequence["datetime"].diff().dt.total_seconds().dropna()
@@ -1440,6 +1545,7 @@ class XhroProper(Xhro):
         self.missing_mask = self._extract_missing_mask(the_sequence)
         the_sequence = self.apply_observation_process(the_sequence)
         the_sequence = the_sequence.squeeze()
+        self.missing_mask = _align_missing_mask(self.missing_mask, the_sequence)
 
         if self.x_dim is None:
             if the_sequence.ndim == 1:
@@ -1487,24 +1593,42 @@ class XhroProper(Xhro):
             )
         return sequence[cols]
 
-    def _extract_missing_mask(self, sequence):
-        base, _ = _split_process(self.observation_process)
+    def _values_apply_keeps(self, sequence: pd.DataFrame) -> np.ndarray:
+        """Value rows ``apply_observation_process`` keeps, before normalize.
+
+        Grok extras trim on the value frame's ``first_valid_index``. Parity
+        trims on the full frame, matching ``Xhro``. The missing mask uses
+        this same slice so a leading all-NaN value row cannot disagree with
+        the processed length. Which signal rows are kept does not change.
+        """
+        base, _suffix = _split_process(self.observation_process)
         if base in PARITY_PROCESSES:
-            # Reuse Xhro column names on the constructed frame.
-            return super()._extract_missing_mask(sequence)
-        values = self._value_frame(sequence).to_numpy(dtype=np.float64)
-        return np.isnan(values)
+            cols = select_columns_for_obs_conditions["original"][base]
+            data = sequence[cols]
+            first_valid = sequence.first_valid_index()
+        else:
+            data = self._value_frame(sequence)
+            first_valid = data.first_valid_index()
+        if first_valid is not None:
+            data = data.loc[first_valid:]
+        arr = data.to_numpy(dtype=np.float64)
+        if arr.ndim == 1:
+            arr = arr.reshape(-1, 1)
+        return arr
+
+    def _extract_missing_mask(self, sequence):
+        # Same rows apply keeps, including a datetime-valid leading row.
+        mask = np.isnan(self._values_apply_keeps(sequence))
+        if mask.ndim == 1:
+            mask = mask.reshape(-1, 1)
+        return mask
 
     def apply_observation_process(self, sequence) -> torch.Tensor:
         base, suffix = _split_process(self.observation_process)
         if base in PARITY_PROCESSES:
             return super().apply_observation_process(sequence)
 
-        data = self._value_frame(sequence)
-        first_valid = data.first_valid_index()
-        if first_valid is not None:
-            data = data.loc[first_valid:]
-        arr = data.to_numpy(dtype=np.float64)
+        arr = self._values_apply_keeps(sequence)
 
         if suffix is None:
             mean = np.nanmean(arr, axis=0)
@@ -1664,6 +1788,21 @@ class XhroProper(Xhro):
         new_seq_len = int(new_seq_len)
         if new_seq_len < 1:
             raise ValueError(f"seq_len must be >= 1, got {new_seq_len}.")
+        span = max_group_span(
+            self.subject_index_per_row, len(self.subject_index_per_row)
+        )
+        if span < 1:
+            self.seq_len = new_seq_len
+            self.data_idx = []
+            self.window_subject = []
+            print("[XhroProper][coarse] no subject rows; window set is empty.")
+            return
+        if new_seq_len > span:
+            print(
+                f"[XhroProper][coarse] seq_len {new_seq_len} exceeds the longest "
+                f"subject span {span}; using {span}."
+            )
+            new_seq_len = span
         self.seq_len = new_seq_len
         starts = intra_subject_window_starts(
             self.subject_index_per_row,

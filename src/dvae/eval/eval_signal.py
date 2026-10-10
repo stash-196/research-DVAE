@@ -73,8 +73,11 @@ from dataclasses import replace
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
 from dvae.dataset.xhro_proper_dataset import (
     coarse_dataframe_kwargs,
+    optional_config_float,
     optional_config_str,
 )
+from dvae.eval.window_length import apply_eval_seq_len, dataset_max_window_length
+from dvae.run_options import eval_output_dir, resolve_mask_label_override
 from dvae.eval.alpha_vs_spectrum import save_alpha_vs_spectrum_figures
 from dvae.eval.maybe_alphas import alphas_to_metric_list, maybe_alphas_per_unit
 from dvae.eval.utils.delay_dim_selection import (
@@ -309,6 +312,28 @@ class Options:
             help=(
                 "How many Lyapunov exponents to keep "
                 "(default: full latent dimension)."
+            ),
+        )
+        self.parser.add_argument(
+            "--mask-label",
+            dest="mask_label",
+            type=str,
+            default=None,
+            help=(
+                "Override [DataFrame] mask_label for this eval so a model can "
+                "be scored on another variant. When the override differs from "
+                "the config, artifacts are written under eval_mask_<suffix>/ "
+                "and the in-domain evaluation_summary.yaml is left in place."
+            ),
+        )
+        self.parser.add_argument(
+            "--eval-output-suffix",
+            dest="eval_output_suffix",
+            type=str,
+            default=None,
+            help=(
+                "Suffix used when --mask-label differs from the config. "
+                "Ignored when the override is omitted or matches the config."
             ),
         )
 
@@ -592,6 +617,18 @@ if __name__ == "__main__":
     # Convert config to dict for YAML
     config_dict = {section: dict(cfg[section]) for section in cfg.sections()}
 
+    config_mask_label = cfg.get("DataFrame", "mask_label", fallback=None)
+    eval_mask_label, eval_output_suffix = resolve_mask_label_override(
+        config_mask_label,
+        params.get("mask_label"),
+        params.get("eval_output_suffix"),
+    )
+    if params.get("mask_label"):
+        print(
+            f"[Eval] mask_label override={eval_mask_label!r} "
+            f"config={config_mask_label!r} suffix={eval_output_suffix!r}"
+        )
+
     # Create DatasetConfig for evaluation
     dataset_config = DatasetConfig(
         data_dir=learning_algo.data_dir,
@@ -608,9 +645,11 @@ if __name__ == "__main__":
         seq_len=None,
         device=device,
         dataset_label=cfg.get("DataFrame", "dataset_label", fallback=None),
-        mask_label=cfg.get("DataFrame", "mask_label", fallback=None),
+        mask_label=eval_mask_label,
         data_root=optional_config_str(cfg, "DataFrame", "data_root"),
         corpus=optional_config_str(cfg, "DataFrame", "corpus"),
+        crop_start_sec=optional_config_float(cfg, "DataFrame", "crop_start_sec"),
+        crop_end_sec=optional_config_float(cfg, "DataFrame", "crop_end_sec"),
         **coarse_dataframe_kwargs(cfg),
     )
 
@@ -626,9 +665,16 @@ if __name__ == "__main__":
     alphas_per_unit = maybe_alphas_per_unit(dvae)
 
     ############################################################################
-    # Path to the directory where the model and loss_model.pckl are saved
-    save_dir = os.path.dirname(params["saved_dict"])
-    loss_file = os.path.join(save_dir, "loss_model.pckl")
+    # Path to the directory where the model and loss_model.pckl are saved.
+    # A cross-variant mask label writes under eval_mask_<suffix>/ so the
+    # in-domain summary and figures stay put. Training loss is still read
+    # from the weights directory.
+    weights_dir = os.path.dirname(params["saved_dict"])
+    save_dir = eval_output_dir(weights_dir, eval_output_suffix)
+    if save_dir != weights_dir:
+        os.makedirs(save_dir, exist_ok=True)
+        print(f"[Eval] Cross-variant outputs: {save_dir}")
+    loss_file = os.path.join(weights_dir, "loss_model.pckl")
 
     # Initialize metrics
     metrics: dict[str, Any] = {"params": params}
@@ -641,6 +687,10 @@ if __name__ == "__main__":
     # Stamp weight provenance for eval harness (final vs checkpoint)
     metrics["weights_source"] = params.get("weights_source")
     metrics["weights_path"] = params.get("saved_dict")
+    if params.get("mask_label"):
+        metrics["mask_label_override"] = eval_mask_label
+        metrics["mask_label_config"] = config_mask_label
+        metrics["eval_output_suffix"] = eval_output_suffix
     print(
         f"[Eval] WEIGHTS_SOURCE={metrics['weights_source']} "
         f"weights_path={metrics['weights_path']}"
@@ -662,9 +712,7 @@ if __name__ == "__main__":
     with torch.no_grad():
 
         # Visualize results
-        save_fig_dir = os.path.join(
-            os.path.dirname(params["saved_dict"]), "post_training_figs"
-        )
+        save_fig_dir = os.path.join(save_dir, "post_training_figs")
         if not os.path.exists(save_fig_dir):
             os.makedirs(save_fig_dir)
 
@@ -706,13 +754,24 @@ if __name__ == "__main__":
             # For shorter sequence
             ############################################################################
             if learning_algo.dataset_name == "Lorenz63":
-                new_seq_len = 1000
+                requested_seq_len = 1000
             else:
-                new_seq_len = min(1000, len(test_dataloader.dataset.seq))
+                requested_seq_len = min(1000, len(test_dataloader.dataset.seq))
+            # Cap to one subject/stay. Pooled len(seq) can be longer than any window.
+            new_seq_len = apply_eval_seq_len(
+                test_dataloader.dataset, requested_seq_len
+            )
             print(f"[Eval] New sequence length: {new_seq_len}")
             # set random seed
             torch.manual_seed(42)
-            test_dataloader.dataset.update_sequence_length(new_seq_len)
+            batch_data_long = None
+            half_point_long = None
+            if new_seq_len < 1:
+                print(
+                    "[Eval] Skipping short-sequence figures: "
+                    "no window fits inside one subject"
+                )
+                test_dataloader.dataset.data_idx = []
             # Prepare the long sequence data
             for i, batch_data_long in enumerate(test_dataloader):
                 # batch_data_long = next(iter(test_dataloader))  # Single batch for demonstration
@@ -850,33 +909,47 @@ if __name__ == "__main__":
                 )
 
             # visualize the hidden states
-            visualize_variable_evolution(
-                dvae.h,
-                batch_data=batch_data_long,
-                save_dir=save_fig_dir,
-                variable_name=f"hidden",
-                alphas=alphas_per_unit,
-                add_lines_lst=[half_point_long],
-                is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
-            )
+            if batch_data_long is None:
+                print(
+                    "[Eval] Skipping hidden/x evolution figures: "
+                    "short-sequence window set is empty"
+                )
+            else:
+                visualize_variable_evolution(
+                    dvae.h,
+                    batch_data=batch_data_long,
+                    save_dir=save_fig_dir,
+                    variable_name=f"hidden",
+                    alphas=alphas_per_unit,
+                    add_lines_lst=[half_point_long],
+                    is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
+                )
 
-            # visualize the x_features
-            visualize_variable_evolution(
-                dvae.feature_x,
-                batch_data=batch_data_long,
-                save_dir=save_fig_dir,
-                variable_name=f"x_features",
-                add_lines_lst=[half_point_long],
-                is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
-            )
+                # visualize the x_features
+                visualize_variable_evolution(
+                    dvae.feature_x,
+                    batch_data=batch_data_long,
+                    save_dir=save_fig_dir,
+                    variable_name=f"x_features",
+                    add_lines_lst=[half_point_long],
+                    is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
+                )
 
             ############################################################################
             # For longer sequence
             ############################################################################
 
-            new_seq_len = min(20000, len(test_dataloader.dataset.seq))
+            new_seq_len = apply_eval_seq_len(
+                test_dataloader.dataset,
+                min(20000, len(test_dataloader.dataset.seq)),
+            )
             print(f"[Eval] Long-sequence eval: seq_len={new_seq_len}")
-            test_dataloader.dataset.update_sequence_length(new_seq_len)
+            if new_seq_len < 1:
+                print(
+                    "[Eval] Skipping long-sequence figures: "
+                    "no window fits inside one subject"
+                )
+                test_dataloader.dataset.data_idx = []
             n_long_windows = len(test_dataloader.dataset.data_idx)
             print(
                 f"[Eval] Test set has {n_long_windows} window(s) at seq_len={new_seq_len} "
@@ -1103,7 +1176,8 @@ if __name__ == "__main__":
         # Metrics window length depends on how free-run is driven (not the
         # qualitative long-seq length above). half_half: one TF block + one Auto
         # block of length block_len each -> T=2*block_len, many batches.
-        data_len = len(test_dataloader.dataset.seq)
+        # One subject or stay, not the pooled concatenation.
+        data_len = dataset_max_window_length(test_dataloader.dataset)
         metrics_seq_len_override = params.get("metrics_seq_len")
         if metrics_seq_len_override is not None:
             metrics_seq_len = int(metrics_seq_len_override)
@@ -1122,7 +1196,12 @@ if __name__ == "__main__":
             # even_bursts / all_1 / stress tests: keep a long window.
             metrics_seq_len = min(20000, data_len)
 
-        metrics_seq_len = max(2, min(int(metrics_seq_len), data_len))
+        if data_len < 1:
+            metrics_seq_len = 0
+        elif data_len < 2:
+            metrics_seq_len = int(data_len)
+        else:
+            metrics_seq_len = max(2, min(int(metrics_seq_len), data_len))
         # batch_size=1 so each dataloader step is one independent window
         # (training batch_size would pack many windows into one "batch" and
         # max_eval_batches would not match multi-start half_half trials).
@@ -1135,12 +1214,29 @@ if __name__ == "__main__":
             split="test",
             eval_mode=True,
         )
-        metrics_dataloader.dataset.update_sequence_length(metrics_seq_len)
+        if metrics_seq_len < 1:
+            print(
+                "[Eval] Skipping quantitative metrics: "
+                "no window fits inside one subject"
+            )
+            metrics["metrics_skip_reason"] = "no_windows"
+            n_test_windows = 0
+        else:
+            metrics_dataloader.dataset.update_sequence_length(metrics_seq_len)
+            metrics_seq_len = int(metrics_dataloader.dataset.seq_len)
+            if len(metrics_dataloader.dataset.data_idx) == 0:
+                print(
+                    "[Eval] Skipping quantitative metrics: "
+                    "window set is empty after the subject cap"
+                )
+                metrics["metrics_skip_reason"] = "no_windows"
         new_seq_len = metrics_seq_len
         print(
             f"[Eval] Metrics seq_len={metrics_seq_len} "
             f"(mode={auto_eval_mode}, block_len={auto_eval_block_len}, batch_size=1)"
         )
+        if metrics_seq_len < 1:
+            metrics_dataloader.dataset.data_idx = []
 
         n_test_windows = len(metrics_dataloader.dataset.data_idx)
         n_eval_windows = min(n_test_windows, max_eval_batches)
@@ -1688,12 +1784,21 @@ if __name__ == "__main__":
         #
         print("[Eval] Starting local drift statistics computation...")
         sys.stdout.flush()
-        new_seq_len_short = 60  # Short sequences to stay in linear regime
-        test_dataloader.dataset.update_sequence_length(new_seq_len_short)
+        new_seq_len_short = apply_eval_seq_len(test_dataloader.dataset, 60)
+        if new_seq_len_short < 2:
+            print(
+                "[Eval] Skipping local drift: no window of at least 2 steps "
+                "fits inside one subject"
+            )
+            test_dataloader.dataset.data_idx = []
+            drift_flip_point = 0
+        else:
+            # 30 on a 60-step window. Shorter subjects fork at the midpoint.
+            drift_flip_point = min(30, new_seq_len_short // 2)
         n_drift_windows = len(test_dataloader.dataset.data_idx)
         print(
             f"[Eval] Local drift: seq_len={new_seq_len_short}, "
-            f"flip_point=30, {n_drift_windows} window(s)"
+            f"flip_point={drift_flip_point}, {n_drift_windows} window(s)"
         )
         sys.stdout.flush()
 
@@ -1717,9 +1822,9 @@ if __name__ == "__main__":
                 1, 0, 2
             )  # (seq_len, batch_size, x_dim)
 
-            # Choose where to flip from TF to Auto
-            # Typically around 50-60% through the short sequence
-            flip_point = 30
+            # Choose where to flip from TF to Auto.
+            # 60-step windows keep the historical fork at step 30.
+            flip_point = drift_flip_point
             auto_len = new_seq_len_short - flip_point
 
             # Compute drift statistics for this batch
@@ -1753,56 +1858,59 @@ if __name__ == "__main__":
         print("[Eval] [CHECKPOINT] Local drift statistics computation completed")
         sys.stdout.flush()
 
-        # Aggregate drift statistics across all batches
-        # Each stat in drift_stats_list is a dict with 'd_norm', 'cross_term', 'delta_mse'
-        all_d_norm = np.array([s["d_norm"] for s in drift_stats_list])
-        all_cross = np.array([s["cross_term"] for s in drift_stats_list])
-        all_delta_mse = np.array([s["delta_mse"] for s in drift_stats_list])
+        if not drift_stats_list:
+            metrics["local_drift_skip_reason"] = "no_windows"
+            print("[Eval] Local drift skipped: window set is empty")
+        else:
+            # Each stat in drift_stats_list is a dict with 'd_norm', 'cross_term', 'delta_mse'
+            all_d_norm = np.array([s["d_norm"] for s in drift_stats_list])
+            all_cross = np.array([s["cross_term"] for s in drift_stats_list])
+            all_delta_mse = np.array([s["delta_mse"] for s in drift_stats_list])
 
-        # Compute mean and std across batches
-        metrics["local_drift_avg_d_norm"] = float(np.mean(all_d_norm))
-        metrics["local_drift_avg_d_norm_std"] = float(np.std(all_d_norm))
-        metrics["local_drift_avg_cross_term"] = float(np.mean(all_cross))
-        metrics["local_drift_avg_cross_term_std"] = float(np.std(all_cross))
-        metrics["local_drift_avg_delta_mse"] = float(np.mean(all_delta_mse))
-        metrics["local_drift_avg_delta_mse_std"] = float(np.std(all_delta_mse))
+            # Compute mean and std across batches
+            metrics["local_drift_avg_d_norm"] = float(np.mean(all_d_norm))
+            metrics["local_drift_avg_d_norm_std"] = float(np.std(all_d_norm))
+            metrics["local_drift_avg_cross_term"] = float(np.mean(all_cross))
+            metrics["local_drift_avg_cross_term_std"] = float(np.std(all_cross))
+            metrics["local_drift_avg_delta_mse"] = float(np.mean(all_delta_mse))
+            metrics["local_drift_avg_delta_mse_std"] = float(np.std(all_delta_mse))
 
-        print(
-            f"[Eval] Local Drift - Mean ||d||²: {metrics['local_drift_avg_d_norm']:.6f}"
-        )
-        print(
-            f"[Eval] Local Drift - Mean d^T e: {metrics['local_drift_avg_cross_term']:.6f}"
-        )
-        print(
-            f"[Eval] Local Drift - Mean ΔMSE: {metrics['local_drift_avg_delta_mse']:.6f}"
-        )
+            print(
+                f"[Eval] Local Drift - Mean ||d||²: {metrics['local_drift_avg_d_norm']:.6f}"
+            )
+            print(
+                f"[Eval] Local Drift - Mean d^T e: {metrics['local_drift_avg_cross_term']:.6f}"
+            )
+            print(
+                f"[Eval] Local Drift - Mean ΔMSE: {metrics['local_drift_avg_delta_mse']:.6f}"
+            )
 
-        # Optionally save per-step drift growth for visualization
-        # Stack all per-step arrays: (n_batches, auto_len)
-        all_per_step_d_norm = np.stack(drift_per_step_d_norm_list, axis=0)
-        all_per_step_cross = np.stack(drift_per_step_cross_list, axis=0)
-        all_per_step_delta_mse = np.stack(drift_per_step_delta_mse_list, axis=0)
+            # Optionally save per-step drift growth for visualization
+            # Stack all per-step arrays: (n_batches, auto_len)
+            all_per_step_d_norm = np.stack(drift_per_step_d_norm_list, axis=0)
+            all_per_step_cross = np.stack(drift_per_step_cross_list, axis=0)
+            all_per_step_delta_mse = np.stack(drift_per_step_delta_mse_list, axis=0)
 
-        # Compute mean and std across batches at each step
-        mean_d_norm_over_time = np.mean(all_per_step_d_norm, axis=0)  # (auto_len,)
-        std_d_norm_over_time = np.std(all_per_step_d_norm, axis=0)
-        mean_cross_over_time = np.mean(all_per_step_cross, axis=0)
-        std_cross_over_time = np.std(all_per_step_cross, axis=0)
-        mean_delta_mse_over_time = np.mean(all_per_step_delta_mse, axis=0)
+            # Compute mean and std across batches at each step
+            mean_d_norm_over_time = np.mean(all_per_step_d_norm, axis=0)  # (auto_len,)
+            std_d_norm_over_time = np.std(all_per_step_d_norm, axis=0)
+            mean_cross_over_time = np.mean(all_per_step_cross, axis=0)
+            std_cross_over_time = np.std(all_per_step_cross, axis=0)
+            mean_delta_mse_over_time = np.mean(all_per_step_delta_mse, axis=0)
 
-        # Store time series for later visualization/analysis
-        metrics["local_drift_per_step_d_norm_mean"] = mean_d_norm_over_time.tolist()
-        metrics["local_drift_per_step_d_norm_std"] = std_d_norm_over_time.tolist()
-        metrics["local_drift_per_step_cross_mean"] = mean_cross_over_time.tolist()
-        metrics["local_drift_per_step_cross_std"] = std_cross_over_time.tolist()
-        metrics["local_drift_per_step_delta_mse_mean"] = (
-            mean_delta_mse_over_time.tolist()
-        )
-        metrics["local_drift_flip_point"] = int(flip_point)
-        metrics["local_drift_auto_len"] = int(auto_len)
-        metrics["local_drift_n_batches"] = len(drift_stats_list)
+            # Store time series for later visualization/analysis
+            metrics["local_drift_per_step_d_norm_mean"] = mean_d_norm_over_time.tolist()
+            metrics["local_drift_per_step_d_norm_std"] = std_d_norm_over_time.tolist()
+            metrics["local_drift_per_step_cross_mean"] = mean_cross_over_time.tolist()
+            metrics["local_drift_per_step_cross_std"] = std_cross_over_time.tolist()
+            metrics["local_drift_per_step_delta_mse_mean"] = (
+                mean_delta_mse_over_time.tolist()
+            )
+            metrics["local_drift_flip_point"] = int(flip_point)
+            metrics["local_drift_auto_len"] = int(auto_len)
+            metrics["local_drift_n_batches"] = len(drift_stats_list)
 
-        print(f"[Eval] Local Drift computed from {len(drift_stats_list)} batches")
+            print(f"[Eval] Local Drift computed from {len(drift_stats_list)} batches")
 
     # Wait for parallel visualizations to complete (optional - can be removed if not needed)
     # The YAML is already saved above, so we can exit early if desired
