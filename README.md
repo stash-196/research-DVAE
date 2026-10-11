@@ -65,6 +65,43 @@ Eval / aggregate after a pull: `scripts/slurm/evaluation/run_eval_multiple.sh`, 
 
 Paths for this machine vs Deigo live in `config/device_paths.yaml`. Studio `~/mounts/bucket/...` is a local cache, not a live cluster mount.
 
+## PhysioNet 2012 OTF benchmark
+
+Compares opportunistic teacher forcing (OTF) with interpolation-input and missingness-indicator-input on hourly ICU stays. Training still uses `dataset_name = PhysioNet2012` and `bin/train_model.py`. The new observation names (`benchmark_otf`, `benchmark_interpolate`, `benchmark_indicate`, and the `benchmark_vitals_*` pilot) are opt-in. `raw_vitals` / `raw_hr` are unchanged. Configs are written by `bin/generate_physionet2012_benchmark_configs.py`, not by `bin/generate_config_file_for_multiple.py`.
+
+Held-out protocol, in `src/dvae/dataset/physionet2012_benchmark.py`: stay split matches the existing loader (last 20% of stays test, then `val_indices` of the rest validation). On validation and on test, 10% of observed entries are hidden (`HOLDOUT_SEED = 2012`) and never fed as inputs. Training stays are not artificially masked. Errors are MAE and MSE on those entries after training-set standardization. With `sampling_method = ptf` and `sampling_ratio = 0`, OTF autonomy is only the NaN fill already implemented in the RNN (`impute_strategy` default `auto`). Published GRU-D, BRITS, and SAITS numbers are reference points for the task (cited in the module docstring); this repo's RNN is causal, so those bidirectional scores are not a target to hit.
+
+The 5-vital pilot runs on the parquet from `bin/prepare_physionet2012.py`. The 37-variable run needs a separate file:
+
+```sh
+python bin/prepare_physionet2012_benchmark.py
+# writes {data_dir}/physionet2012/processed/hourly_benchmark_v1/stays.parquet
+```
+
+On Deigo, after `git pull` into `~/workspace/research-DVAE`:
+
+```sh
+ml singularity
+singularity exec /bucket/DoyaU/stash/containers/generic_ml_container.sif \
+  python3 bin/prepare_physionet2012_benchmark.py
+singularity exec /bucket/DoyaU/stash/containers/generic_ml_container.sif \
+  python3 bin/generate_physionet2012_benchmark_configs.py
+bash scripts/slurm/train/run_training_multiple.sh physionet2012_otf_benchmark
+```
+
+That submits three jobs (OTF, interpolate, indicate). A cheaper 5-vital grid is `python3 bin/generate_physionet2012_benchmark_configs.py --subset vitals`, then `run_training_multiple.sh physionet2012_otf_benchmark_vitals`.
+
+Imputation eval (and an optional linear mortality probe) is a separate script. Point it at one generated ini and a `*_final_epoch*.pt` or `*_checkpoint.pt`:
+
+```sh
+singularity exec /bucket/DoyaU/stash/containers/generic_ml_container.sif \
+  python3 bin/eval_physionet2012_benchmark.py \
+  --cfg config/general_signal/generated/physionet2012_otf_benchmark/cfg_....ini \
+  --saved_dict /flash/DoyaU/stash/research-DVAE/saved_model/.../RNN_final_epochN.pt
+```
+
+`--no-mortality` skips the probe. Omitting `--saved_dict` still writes mean-fill and linear-interpolation MAE/MSE on the held-out mask. The figure uses `dvae.eval.aggregate_plot_style`.
+
 ## XhroProper session paths
 
 `XhroProper` reads `grok_output/<session>/intermediates/*.npz`. With neither `corpus` nor `data_root` set, the path stays the packet-loss tree:

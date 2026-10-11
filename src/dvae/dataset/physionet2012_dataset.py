@@ -14,6 +14,10 @@ On-disk layout::
     {data_dir}/physionet2012/processed/{dataset_label}/stays.parquet
 
 ``dataset_label`` defaults to ``hourly_v1``. Cite Silva et al., CinC 2012.
+
+``benchmark_*`` observation names are opt-in and live in
+``physionet2012_benchmark``. ``raw_hr`` / ``raw_vitals`` and their
+``_interpolate`` / ``_indicate`` suffixes do not take that path.
 """
 
 from __future__ import annotations
@@ -293,6 +297,24 @@ class PhysioNet2012(Dataset):
         the_sequence = the_sequence.sort_values(["stay_id", "hour"]).reset_index(
             drop=True
         )
+
+        if isinstance(self.observation_process, str) and self.observation_process.startswith(
+            "benchmark_"
+        ):
+            from dvae.dataset.physionet2012_benchmark import (
+                init_benchmark_dataset,
+                is_benchmark_observation,
+            )
+
+            if not is_benchmark_observation(self.observation_process):
+                raise ValueError(
+                    f"Unknown benchmark observation {self.observation_process!r}. "
+                    "Expected benchmark_otf, benchmark_interpolate, benchmark_indicate, "
+                    "or the benchmark_vitals_* counterparts."
+                )
+            self._benchmark_kwargs = kwargs
+            init_benchmark_dataset(self, the_sequence)
+            return
 
         unique_ids = unique_stay_ids_in_order(the_sequence["stay_id"].tolist())
         train_ids, val_ids, test_ids = partition_stay_ids(
