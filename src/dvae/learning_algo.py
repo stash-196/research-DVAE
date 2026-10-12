@@ -44,9 +44,9 @@ from dvae.visualizers import (
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
 from dvae.dataset.xhro_proper_dataset import (
     coarse_dataframe_kwargs,
-    optional_config_bool,
     optional_config_float,
     optional_config_str,
+    windowing_from_config,
 )
 from dvae.eval.utils.spectrum_validation import (
     capture_fixed_spectrum_windows,
@@ -458,18 +458,7 @@ class LearningAlgorithm:
             filled_nan_log_sec=optional_config_float(
                 self.cfg, "DataFrame", "filled_nan_log_sec"
             ),
-            max_gap_window_frac=optional_config_float(
-                self.cfg, "DataFrame", "max_gap_window_frac"
-            ),
-            start_on_observed=optional_config_bool(
-                self.cfg, "DataFrame", "start_on_observed"
-            ),
-            strict_non_overlap=optional_config_bool(
-                self.cfg, "DataFrame", "strict_non_overlap"
-            ),
-            max_window_nan_ratio=optional_config_float(
-                self.cfg, "DataFrame", "max_window_nan_ratio"
-            ),
+            **windowing_from_config(self.cfg),
             block_mask_file=optional_config_str(
                 self.cfg, "DataFrame", "block_mask_file"
             ),

@@ -73,9 +73,9 @@ from dataclasses import replace
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
 from dvae.dataset.xhro_proper_dataset import (
     coarse_dataframe_kwargs,
-    optional_config_bool,
     optional_config_float,
     optional_config_str,
+    windowing_from_config,
 )
 from dvae.eval.window_length import apply_eval_seq_len, dataset_max_window_length
 from dvae.run_options import eval_output_dir, resolve_mask_label_override
@@ -655,18 +655,7 @@ if __name__ == "__main__":
         filled_nan_log_sec=optional_config_float(
             cfg, "DataFrame", "filled_nan_log_sec"
         ),
-        max_gap_window_frac=optional_config_float(
-            cfg, "DataFrame", "max_gap_window_frac"
-        ),
-        start_on_observed=optional_config_bool(
-            cfg, "DataFrame", "start_on_observed"
-        ),
-        strict_non_overlap=optional_config_bool(
-            cfg, "DataFrame", "strict_non_overlap"
-        ),
-        max_window_nan_ratio=optional_config_float(
-            cfg, "DataFrame", "max_window_nan_ratio"
-        ),
+        **windowing_from_config(cfg),
         block_mask_file=optional_config_str(cfg, "DataFrame", "block_mask_file"),
         block_mask_mode=optional_config_str(cfg, "DataFrame", "block_mask_mode"),
         **coarse_dataframe_kwargs(cfg),

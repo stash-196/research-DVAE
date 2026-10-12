@@ -105,11 +105,28 @@ def test_old_npz_recut_matches_find_indices(tmp_path, capsys):
 
     _fake_session(tmp_path)
     capsys.readouterr()
-    ds = _load(tmp_path, seq_len=16)
+    ds = _load(tmp_path, seq_len=16, max_window_nan_ratio="off")
     assert ds.split_boundaries is None
     assert ds.segment_index_per_row is None
+    assert ds.strict_non_overlap is True
+    assert ds.start_on_observed is True
+    assert ds.max_gap_window_frac == pytest.approx(0.25)
     n = len(np.asarray(ds.seq))
-    assert list(ds.data_idx) == list(np.asarray(find_indices(n, 16, n // 16)).tolist())
+    assert list(ds.data_idx) == list(
+        np.asarray(find_indices(n, 16, n // 16, strict_non_overlap=True)).tolist()
+    )
+    # This fixture's first window is mostly NaN, so the 0.3 default drops it.
+    filtered = _load(tmp_path, seq_len=16)
+    assert filtered.max_window_nan_ratio == pytest.approx(0.3)
+    assert 0 not in filtered.data_idx
+    legacy = _load(tmp_path, seq_len=16, legacy_windowing=True)
+    assert legacy.strict_non_overlap is False
+    assert legacy.start_on_observed is False
+    assert legacy.max_window_nan_ratio is None
+    assert legacy.max_gap_window_frac is None
+    assert list(legacy.data_idx) == list(
+        np.asarray(find_indices(n, 16, n // 16)).tolist()
+    )
     out = capsys.readouterr().out
     assert "present_frac=1.000" in out
     assert "segments=1" in out
@@ -120,7 +137,9 @@ def test_old_npz_recut_matches_find_indices(tmp_path, capsys):
     capsys.readouterr()
     ds.update_sequence_length(20)
     assert ds.seq_len == 20
-    assert list(ds.data_idx) == list(np.asarray(find_indices(n, 20, n // 20)).tolist())
+    assert list(ds.data_idx) == list(
+        np.asarray(find_indices(n, 20, n // 20, strict_non_overlap=True)).tolist()
+    )
     assert not _crosses(ds.data_idx, ds.seq_len, [])
     recut = capsys.readouterr().out
     assert f"re-cut seq_len=20 windows={len(ds.data_idx)}" in recut
@@ -135,7 +154,13 @@ def test_segment_boundary_survives_recut(tmp_path, capsys):
     ds = _load(tmp_path, seq_len=10)
     assert list(np.asarray(ds.split_boundaries).tolist()) == [40]
     _assert_inside(ds)
-    expected = find_indices(len(ds.seq), 10, 1, boundaries=ds.split_boundaries)
+    expected = find_indices(
+        len(ds.seq),
+        10,
+        1,
+        boundaries=ds.split_boundaries,
+        strict_non_overlap=True,
+    )
     assert list(ds.data_idx) == list(np.asarray(expected).tolist())
 
     capsys.readouterr()
@@ -144,7 +169,11 @@ def test_segment_boundary_survives_recut(tmp_path, capsys):
         assert ds.seq_len == new_len
         _assert_inside(ds)
         expected = find_indices(
-            len(ds.seq), new_len, 1, boundaries=ds.split_boundaries
+            len(ds.seq),
+            new_len,
+            1,
+            boundaries=ds.split_boundaries,
+            strict_non_overlap=True,
         )
         assert list(ds.data_idx) == list(np.asarray(expected).tolist())
     # Repeating a length is deterministic (local RandomState, not global).
@@ -169,6 +198,7 @@ def test_overlap_recut_does_not_cross_segment(tmp_path):
         tmp_path,
         seq_len=10,
         overlap=True,
+        strict_non_overlap=False,
         observation_process="raw_ecg",
         x_dim=2,
     )
@@ -219,7 +249,9 @@ def test_long_filled_gap_is_logged_when_unset_and_split_when_set(tmp_path, capsy
     )
     _session(tmp_path, n, **gap)
     capsys.readouterr()
-    kept = _load(tmp_path, seq_len=10, filled_nan_log_sec=0.01)
+    kept = _load(
+        tmp_path, seq_len=10, filled_nan_log_sec=0.01, legacy_windowing=True
+    )
     assert kept.split_boundaries is None or len(kept.split_boundaries) == 0
     seq = np.asarray(kept.seq).reshape(-1)
     assert np.isnan(seq[30:38]).all()
@@ -233,7 +265,9 @@ def test_long_filled_gap_is_logged_when_unset_and_split_when_set(tmp_path, capsy
     )
 
     capsys.readouterr()
-    split = _load(tmp_path, seq_len=4, max_fill_gap_sec=0.01)
+    split = _load(
+        tmp_path, seq_len=4, max_fill_gap_sec=0.01, legacy_windowing=True
+    )
     assert list(np.asarray(split.split_boundaries).tolist()) == [30, 38]
     _assert_inside(split)
     assert any(30 <= int(s) < 38 for s in split.data_idx)
@@ -302,6 +336,7 @@ def test_template_has_gap_keys():
     assert "start_on_observed = {start_on_observed}" in text
     assert "max_window_nan_ratio = {max_window_nan_ratio}" in text
     assert "strict_non_overlap = {strict_non_overlap}" in text
+    assert "legacy_windowing = {legacy_windowing}" in text
 
 
 def _overlaps(starts, seq_len) -> bool:
@@ -375,7 +410,7 @@ def test_strict_non_overlap_steps_over_a_missing_start(tmp_path):
     present = np.ones(n, dtype=bool)
     present[20:30] = False
     _session(tmp_path, n, present=present, segment_id=segment)
-    old = _load(tmp_path, seq_len=10, strict_non_overlap=False)
+    old = _load(tmp_path, seq_len=10, legacy_windowing=True)
     length = len(np.asarray(old.seq))
     assert list(old.data_idx) == list(
         np.asarray(find_indices(length, 10, length // 10, boundaries=[40])).tolist()
@@ -435,10 +470,10 @@ def test_start_on_observed_moves_off_present_false(tmp_path):
     present[0] = False
     present[2] = False
     _session(tmp_path, n, present=present, segment_id=np.zeros(n, dtype=np.int64))
-    plain = _load(tmp_path, seq_len=10)
+    plain = _load(tmp_path, seq_len=10, legacy_windowing=True)
     assert 0 in plain.data_idx
     assert any(s <= 2 < s + plain.seq_len for s in plain.data_idx)
-    moved = _load(tmp_path, seq_len=10, start_on_observed=True)
+    moved = _load(tmp_path, seq_len=10)
     assert 0 not in moved.data_idx
     assert 1 in moved.data_idx
     # The hole at row 2 stays inside the window that now starts at 1.
@@ -455,7 +490,12 @@ def test_start_on_observed_drops_a_start_that_cannot_fit(tmp_path):
     present = np.ones(n, dtype=bool)
     present[24:40] = False
     _session(tmp_path, n, present=present, segment_id=segment)
-    ds = _load(tmp_path, seq_len=10, start_on_observed=True)
+    ds = _load(
+        tmp_path,
+        seq_len=10,
+        max_gap_window_frac="off",
+        max_window_nan_ratio="off",
+    )
     _assert_inside(ds)
     assert 24 not in ds.data_idx
     assert not any(24 <= int(s) < 40 for s in ds.data_idx)
@@ -479,7 +519,12 @@ def test_max_gap_window_frac_is_recomputed_on_recut(tmp_path):
         gap_kind=np.array(["packet_loss"]),
         gap_index=np.array([30], dtype=np.int64),
     )
-    ds = _load(tmp_path, seq_len=20, max_gap_window_frac=0.5)
+    ds = _load(
+        tmp_path,
+        seq_len=20,
+        max_gap_window_frac=0.5,
+        max_window_nan_ratio="off",
+    )
     # 8 samples is not longer than 0.5 * 20, so the hole stays inside a window.
     assert ds.split_boundaries is None or len(ds.split_boundaries) == 0
     assert any(start < 38 and start + ds.seq_len > 30 for start in ds.data_idx)
@@ -534,3 +579,43 @@ def test_max_window_nan_ratio_filters_recuts_unless_overridden(tmp_path):
         Path(__file__).resolve().parents[1] / "src/dvae/learning_algo.py"
     ).read_text()
     assert "minimum_nan_ratio=0.3" in text
+    assert open_windows.max_window_nan_ratio == pytest.approx(0.3)
+
+
+def test_default_fraction_splits_and_legacy_keeps_an_explicit_key(tmp_path):
+    from dvae.dataset.xhro_proper_dataset import resolve_windowing, windowing_from_config
+    import configparser
+
+    blank = resolve_windowing()
+    assert blank["legacy_windowing"] is False
+    assert blank["start_on_observed"] is True
+    assert blank["strict_non_overlap"] is True
+    assert blank["max_window_nan_ratio"] == pytest.approx(0.3)
+    assert blank["max_gap_window_frac"] == pytest.approx(0.25)
+    legacy = resolve_windowing(legacy_windowing=True)
+    assert legacy["start_on_observed"] is False
+    assert legacy["strict_non_overlap"] is False
+    assert legacy["max_window_nan_ratio"] is None
+    assert legacy["max_gap_window_frac"] is None
+    mixed = resolve_windowing(legacy_windowing=True, start_on_observed=True)
+    assert mixed["start_on_observed"] is True
+    assert mixed["strict_non_overlap"] is False
+    assert resolve_windowing(max_gap_window_frac="off")["max_gap_window_frac"] is None
+
+    cfg = configparser.ConfigParser()
+    cfg.add_section("DataFrame")
+    cfg.set("DataFrame", "legacy_windowing", "true")
+    cfg.set("DataFrame", "max_gap_window_frac", "0.5")
+    from_cfg = windowing_from_config(cfg)
+    assert from_cfg["legacy_windowing"] is True
+    assert from_cfg["max_gap_window_frac"] == pytest.approx(0.5)
+    assert from_cfg["start_on_observed"] is False
+
+    n = 100
+    present = np.ones(n, dtype=bool)
+    present[30:38] = False
+    _session(tmp_path, n, present=present, segment_id=np.zeros(n, dtype=np.int64))
+    # 8 samples is longer than 0.25 * 10, so the default fraction splits.
+    split = _load(tmp_path, seq_len=10, max_window_nan_ratio="off")
+    assert split.max_gap_window_frac == pytest.approx(0.25)
+    assert not any(start < 38 and start + split.seq_len > 30 for start in split.data_idx)

@@ -277,7 +277,7 @@ class PhysioNet2012(Dataset):
         self.shuffle = shuffle
         self.device = device
         self.sampling_freq = SAMPLING_FREQ_HZ
-        self.max_window_nan_ratio = kwargs.get("max_window_nan_ratio", None)
+        self.max_window_nan_ratio = kwargs.get("max_window_nan_ratio", 0.3)
 
         parquet = processed_parquet_path(data_dir, dataset_label)
         if not parquet.is_file():

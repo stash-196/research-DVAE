@@ -50,7 +50,7 @@ class SimpleHarmonicOscillator(Dataset):
         self.observation_process = observation_process
         self.overlap = overlap
         self.shuffle = shuffle
-        self.strict_non_overlap = bool(kwargs.get("strict_non_overlap", False))
+        self.strict_non_overlap = bool(kwargs.get("strict_non_overlap", True))
         self.device = device
         self.with_nan = with_nan
 

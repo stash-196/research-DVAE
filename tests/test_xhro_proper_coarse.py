@@ -623,6 +623,7 @@ def test_missing_mask_indexes_flat_multi_subject_series(tmp_path, _torch_require
         coarse_test_split="last20_rows",
         shuffle=False,
         val_indices=0.0,
+        start_on_observed=False,
     )
     boundary = int(np.sum(ds.subject_per_row == "subj_a"))
     assert not ds.missing_mask[0].any()
@@ -691,13 +692,16 @@ def test_update_sequence_length_round_trip_and_nan_filter(tmp_path, _torch_requi
         shuffle=False,
         val_indices=0.0,
         coarse_test_split="last20_rows",
+        start_on_observed=False,
     )
     filtered.update_sequence_length(10)
-    assert 0 in filtered.data_idx
-    filtered.update_sequence_length(10, minimum_nan_ratio=0.0)
+    # Default max_window_nan_ratio is 0.3, so the all-NaN prefix is dropped.
+    assert filtered.max_window_nan_ratio == pytest.approx(0.3)
     assert 0 not in filtered.data_idx
-    filtered.update_sequence_length(10)
+    filtered.update_sequence_length(10, minimum_nan_ratio=1.0)
     assert 0 in filtered.data_idx
+    filtered.update_sequence_length(10)
+    assert 0 not in filtered.data_idx
 
 
 def test_artifact_mask_off_by_default_keeps_high_power(tmp_path, _torch_required):

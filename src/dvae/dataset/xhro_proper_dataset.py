@@ -31,15 +31,19 @@ subject. ``[DataFrame] max_fill_gap_sec`` (unset by default) additionally
 splits filled gaps longer than that many seconds. Those split sample
 indices stay on the dataset and are applied again whenever
 ``update_sequence_length`` rebuilds windows (curriculum resizes included).
-``[DataFrame] max_gap_window_frac`` (unset) splits a filled gap whose
-sample count is longer than that fraction of the current sequence length,
-and is recomputed on every re-cut. ``[DataFrame] start_on_observed``
-(false) moves a start that lands on ``present=False`` forward to the next
-observed sample in the same segment. ``[DataFrame] strict_non_overlap``
-(false) keeps the historical ``find_indices`` placement, including its
-local ``RandomState(1234567890)``. True tiles each segment with abutting
-windows. ``[DataFrame] max_window_nan_ratio``
-(unset) is the existing NaN-fraction filter on every re-cut.
+``[DataFrame] max_gap_window_frac`` (default 0.25) splits a filled gap
+whose sample count is longer than that fraction of the current sequence
+length, and is recomputed on every re-cut. ``[DataFrame] start_on_observed``
+(default true) moves a start that lands on ``present=False`` forward to
+the next observed sample in the same segment. ``[DataFrame]
+strict_non_overlap`` (default true) tiles each segment with abutting
+windows. False keeps the historical ``find_indices`` placement, including
+its local ``RandomState(1234567890)``. ``[DataFrame] max_window_nan_ratio``
+(default 0.3) is the NaN-fraction filter on every re-cut.
+``[DataFrame] legacy_windowing`` (default false) restores the previous
+bundle when those four keys are blank: starts may land on a missing
+sample, the historical picker is used, and neither the fraction split nor
+the NaN filter is applied. An explicit value for one key still wins.
 ``[DataFrame] block_mask_file`` (unset) is an npz of block flags applied
 before the time crop. ``block_mask_mode`` defaults to ``not_good``.
 ``filled_nan_log_sec`` is the re-cut log cutoff when ``max_fill_gap_sec``
@@ -789,6 +793,86 @@ def _optional_nonnegative_float(value, name: str) -> float | None:
     if out is not None and out < 0:
         raise ValueError(f"{name} must be >= 0, got {out!r}.")
     return out
+
+
+# Blank keys take these. ``legacy_windowing`` true makes a blank key mean off.
+DEFAULT_MAX_WINDOW_NAN_RATIO = 0.3
+DEFAULT_MAX_GAP_WINDOW_FRAC = 0.25
+_WINDOW_DEFAULT = object()
+_FLOAT_OFF = {"off", "unset", "false", "no"}
+
+
+def _window_bool(value, name: str, default: bool) -> bool:
+    if value is _WINDOW_DEFAULT or _is_unset(value):
+        return default
+    return _optional_bool(value, name, default=default)
+
+
+def _window_float(value, name: str, default: float | None) -> float | None:
+    """Blank uses ``default``. ``off`` is an explicit disable."""
+    if value is _WINDOW_DEFAULT or _is_unset(value):
+        return default
+    if isinstance(value, str) and value.strip().lower() in _FLOAT_OFF:
+        return None
+    return _optional_nonnegative_float(value, name)
+
+
+def resolve_windowing(
+    legacy_windowing=_WINDOW_DEFAULT,
+    start_on_observed=_WINDOW_DEFAULT,
+    strict_non_overlap=_WINDOW_DEFAULT,
+    max_window_nan_ratio=_WINDOW_DEFAULT,
+    max_gap_window_frac=_WINDOW_DEFAULT,
+) -> dict:
+    """Defaults for the four window rules, and the legacy override.
+
+    A blank key takes the new default. ``legacy_windowing`` true changes
+    that blank-key default back to the historical one (starts may be
+    missing, historical ``find_indices``, no fraction split, no NaN
+    filter). A value that is actually set still wins, including ``off``
+    on the two float keys.
+    """
+    legacy = _window_bool(legacy_windowing, "legacy_windowing", False)
+    if legacy:
+        start_default = False
+        strict_default = False
+        nan_default = None
+        frac_default = None
+    else:
+        start_default = True
+        strict_default = True
+        nan_default = DEFAULT_MAX_WINDOW_NAN_RATIO
+        frac_default = DEFAULT_MAX_GAP_WINDOW_FRAC
+    return {
+        "legacy_windowing": legacy,
+        "start_on_observed": _window_bool(
+            start_on_observed, "start_on_observed", start_default
+        ),
+        "strict_non_overlap": _window_bool(
+            strict_non_overlap, "strict_non_overlap", strict_default
+        ),
+        "max_window_nan_ratio": _window_float(
+            max_window_nan_ratio, "max_window_nan_ratio", nan_default
+        ),
+        "max_gap_window_frac": _window_float(
+            max_gap_window_frac, "max_gap_window_frac", frac_default
+        ),
+    }
+
+
+def windowing_from_config(cfg) -> dict:
+    """Resolve the ``[DataFrame]`` window rules, including a blank legacy key."""
+    return resolve_windowing(
+        legacy_windowing=optional_config_str(cfg, "DataFrame", "legacy_windowing"),
+        start_on_observed=optional_config_str(cfg, "DataFrame", "start_on_observed"),
+        strict_non_overlap=optional_config_str(cfg, "DataFrame", "strict_non_overlap"),
+        max_window_nan_ratio=optional_config_str(
+            cfg, "DataFrame", "max_window_nan_ratio"
+        ),
+        max_gap_window_frac=optional_config_str(
+            cfg, "DataFrame", "max_gap_window_frac"
+        ),
+    )
 
 
 def _optional_user_float(value, name: str) -> float | None:
@@ -1668,22 +1752,27 @@ class XhroProper(Xhro):
         inside windows. When set, a filled gap with ``gap_duration_s``
         greater than this becomes a window split, like a segment boundary.
         The split indices are stored and reused on every re-cut.
-      - max_gap_window_frac: waveform only. Unset does not add splits.
-        A filled gap with more samples than this fraction of the current
-        sequence length is a split for that re-cut only.
-      - start_on_observed: waveform only. False keeps today's starts.
-        True moves a start on a missing sample forward to the next
-        observed sample that still fits in the segment.
-      - strict_non_overlap: waveform only. False keeps the historical
+      - legacy_windowing: false by default. True restores the previous
+        window bundle when the four keys below are blank.
+      - max_gap_window_frac: waveform only. Blank is 0.25 (off when
+        ``legacy_windowing`` is true). A filled gap with more samples
+        than this fraction of the current sequence length is a split
+        for that re-cut only. ``off`` disables it.
+      - start_on_observed: waveform and coarse. Blank is true (false when
+        ``legacy_windowing`` is true). True moves a start on a missing
+        sample forward to the next observed sample that still fits in
+        the segment.
+      - strict_non_overlap: waveform only. Blank is true (false when
+        ``legacy_windowing`` is true). False keeps the historical
         ``find_indices`` starts. True tiles each segment without overlap
         or interior holes; the only unused samples are the final remainder
         of each piece, plus any gap a start had to step over.
       - block_mask_file / block_mask_mode: waveform only. Unset file means
         no block mask. The file's flagged blocks are set to NaN and
         ``present=False`` before the time crop, so they act as gaps.
-      - max_window_nan_ratio: waveform and coarse re-cuts. Unset means
-        no NaN-fraction filtering. An explicit ``minimum_nan_ratio``
-        argument overrides it.
+      - max_window_nan_ratio: waveform and coarse re-cuts. Blank is 0.3
+        (off when ``legacy_windowing`` is true). ``off`` disables it.
+        An explicit ``minimum_nan_ratio`` argument overrides it.
       - filled_nan_log_sec: waveform log only. When ``max_fill_gap_sec``
         is unset, a re-cut reports how many windows contain a filled NaN
         run longer than this. Unset means that count is ``na``.
@@ -1718,10 +1807,11 @@ class XhroProper(Xhro):
         crop_end_sec=None,
         max_fill_gap_sec=None,
         filled_nan_log_sec=None,
-        max_gap_window_frac=None,
-        start_on_observed=False,
-        strict_non_overlap=False,
-        max_window_nan_ratio=None,
+        legacy_windowing=_WINDOW_DEFAULT,
+        max_gap_window_frac=_WINDOW_DEFAULT,
+        start_on_observed=_WINDOW_DEFAULT,
+        strict_non_overlap=_WINDOW_DEFAULT,
+        max_window_nan_ratio=_WINDOW_DEFAULT,
         block_mask_file=None,
         block_mask_mode=None,
         **kwargs,
@@ -1757,22 +1847,22 @@ class XhroProper(Xhro):
         self.filled_nan_log_sec = _optional_nonnegative_float(
             filled_nan_log_sec, "filled_nan_log_sec"
         )
-        self.max_gap_window_frac = _optional_nonnegative_float(
-            max_gap_window_frac, "max_gap_window_frac"
+        windowing = resolve_windowing(
+            legacy_windowing=legacy_windowing,
+            start_on_observed=start_on_observed,
+            strict_non_overlap=strict_non_overlap,
+            max_window_nan_ratio=max_window_nan_ratio,
+            max_gap_window_frac=max_gap_window_frac,
         )
-        self.start_on_observed = _optional_bool(
-            start_on_observed, "start_on_observed"
-        )
-        self.strict_non_overlap = _optional_bool(
-            strict_non_overlap, "strict_non_overlap"
-        )
+        self.legacy_windowing = windowing["legacy_windowing"]
+        self.max_gap_window_frac = windowing["max_gap_window_frac"]
+        self.start_on_observed = windowing["start_on_observed"]
+        self.strict_non_overlap = windowing["strict_non_overlap"]
+        self.max_window_nan_ratio = windowing["max_window_nan_ratio"]
         self.block_mask_file = (
             None if _is_unset(block_mask_file) else str(block_mask_file).strip()
         )
         self.block_mask_mode = parse_block_mask_mode(block_mask_mode)
-        self.max_window_nan_ratio = _optional_nonnegative_float(
-            max_window_nan_ratio, "max_window_nan_ratio"
-        )
         self.segment_index_per_row = None
         self.split_boundaries = None
         self.filled_run_sec = None

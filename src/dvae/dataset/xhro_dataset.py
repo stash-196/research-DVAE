@@ -81,10 +81,10 @@ class Xhro(Dataset):
         self.sampling_freq = None
         # Optional window rules. XhroProper sets the parsed values; a plain
         # Xhro run stores whatever the config passed and leaves them off.
-        self.start_on_observed = bool(kwargs.get("start_on_observed", False))
-        self.strict_non_overlap = bool(kwargs.get("strict_non_overlap", False))
-        self.max_gap_window_frac = kwargs.get("max_gap_window_frac", None)
-        self.max_window_nan_ratio = kwargs.get("max_window_nan_ratio", None)
+        self.start_on_observed = bool(kwargs.get("start_on_observed", True))
+        self.strict_non_overlap = bool(kwargs.get("strict_non_overlap", True))
+        self.max_gap_window_frac = kwargs.get("max_gap_window_frac", 0.25)
+        self.max_window_nan_ratio = kwargs.get("max_window_nan_ratio", 0.3)
         self.filled_gap_spans = kwargs.get("filled_gap_spans", None)
         self.observed_per_row = kwargs.get("observed_per_row", None)
 

@@ -59,12 +59,13 @@ class DatasetConfig:
     # filled_nan_log_sec is the re-cut log cutoff when max_fill is unset.
     max_fill_gap_sec: float | None = None
     filled_nan_log_sec: float | None = None
-    # Waveform re-cut options. Unset / false keeps today's windows.
-    max_gap_window_frac: float | None = None
-    start_on_observed: bool = False
-    # False keeps the historical find_indices placement.
-    strict_non_overlap: bool = False
-    max_window_nan_ratio: float | None = None
+    # Window rules. Blank config keys take these. legacy_windowing true
+    # restores the previous bundle for whichever of the four are blank.
+    legacy_windowing: bool = False
+    max_gap_window_frac: float | None = 0.25
+    start_on_observed: bool = True
+    strict_non_overlap: bool = True
+    max_window_nan_ratio: float | None = 0.3
     # Waveform block mask. None file means no masking. Mode None is not_good.
     block_mask_file: str | None = None
     block_mask_mode: str | None = None
