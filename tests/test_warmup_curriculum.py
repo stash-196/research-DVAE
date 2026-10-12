@@ -104,6 +104,25 @@ def test_blank_config_uses_window_first_and_the_patience_fraction():
         warmup_settings_from_config(_cfg("[Training]\nwarmup_patience_start =\n"))
 
 
+def test_round_of_point_two_times_one_is_zero_but_the_start_is_one():
+    """round(0.2 * 1) is 0. The resolved start is still 1. An explicit 0 stays 0."""
+    assert round(0.2 * 1) == 0
+    assert patience_start_from_fraction(0.2, 1) == 1
+    cfg = _cfg(
+        "[Training]\n"
+        "warmup_patience_start =\n"
+        "warmup_patience_start_frac = 0.2\n"
+        "early_stop_patience = 1\n"
+    )
+    assert warmup_settings_from_config(cfg)[1] == 1.0
+    explicit = _cfg(
+        "[Training]\n"
+        "warmup_patience_start = 0\n"
+        "early_stop_patience = 1\n"
+    )
+    assert warmup_settings_from_config(explicit)[1] == 0.0
+
+
 def test_patience_start_fraction_scales_early_stop_and_an_integer_overrides():
     assert patience_start_from_fraction(0.2, 10) == 2
     assert patience_start_from_fraction(0.2, 1) == 1

@@ -170,11 +170,14 @@ ECG-removed EEG (stage 09b)
 ``ecg_removed_eeg`` (plus ``_interpolate`` / ``_indicate``) reads
 ``{session_dir}/intermediates/stage09b_ecg_remove.npz`` key
 ``eeg_clean_template``, on the same 250 Hz time axis as
-``stage06_eeg_filtered.npz`` key ``eeg``. ``load_proper_frame`` builds that
+``stage06_eeg_filtered.npz`` key ``eeg``. ``ecg_removed_eeg_scale`` reads
+key ``eeg_clean_scale`` from that same file (method A: the global
+least-squares ECG scale subtracted). ``load_proper_frame`` builds each
 frame the same way ``bipolar_eeg`` builds stage 06, and the suffixes follow
-that grok-extra path (indicate appends one shared is_observed column). The
-file exists for only some sessions; a missing file raises
-``FileNotFoundError`` naming the path.
+that grok-extra path (indicate appends one shared is_observed column).
+NaNs in the array stay NaN. The file exists for only some sessions; a
+missing file raises ``FileNotFoundError`` naming the path. A missing key
+raises ``KeyError``.
 """
 
 from __future__ import annotations
@@ -228,6 +231,7 @@ GROK_EXTRA_COLUMNS = {
     "bipolar_ecg": ["ecg"],
     "bipolar_eeg": ["eeg"],
     "ecg_removed_eeg": ["eeg_clean_template"],
+    "ecg_removed_eeg_scale": ["eeg_clean_scale"],
     "bipolar_both": ["ecg", "eeg"],
     "ppg_ch1": ["ppg_ch1"],
     "ppg_ch2": ["ppg_ch2"],
@@ -614,27 +618,24 @@ def load_proper_frame(
         df = frames[0] if len(frames) == 1 else _align_on_datetime(frames[0], frames[1])
         return _maybe_resample(df, resample_hz)
 
-    if base_process == "ecg_removed_eeg":
+    if base_process in ("ecg_removed_eeg", "ecg_removed_eeg_scale"):
+        column = GROK_EXTRA_COLUMNS[base_process][0]
         path = inter / "stage09b_ecg_remove.npz"
         if not path.exists():
             raise FileNotFoundError(
                 "Missing ECG-removed EEG intermediate: "
-                f"{path}. ecg_removed_eeg reads key 'eeg_clean_template' "
+                f"{path}. {base_process} reads key {column!r} "
                 "(present for only some sessions)."
             )
         z = np.load(path, allow_pickle=False)
-        if "eeg_clean_template" not in z.files:
+        if column not in z.files:
             raise KeyError(
-                f"{path} has no 'eeg_clean_template' array "
+                f"{path} has no {column!r} array "
                 f"(found {sorted(z.files)})."
             )
         df = frame_from(
             z,
-            {
-                "eeg_clean_template": np.asarray(
-                    z["eeg_clean_template"], dtype=np.float64
-                )
-            },
+            {column: np.asarray(z[column], dtype=np.float64)},
         )
         return _maybe_resample(df, resample_hz)
 
@@ -662,6 +663,9 @@ def _columns_for_base(base: str) -> list[str]:
 # One map from observation_process (without suffix) to model columns.
 # ``coarse_full`` adds log10 absolute band powers, IAF, and log10 EEG RMS.
 # ``coarse_hr*`` modes select no EEG columns.
+# Modes that list ``hr_mean_bpm`` raise unless ``coarse_include_hr`` is
+# true, and then warn. ``coarse_eeg_acc`` and ``coarse_eeg_acc_tod`` are
+# the ECG-free defaults (widths 5 and 7).
 COARSE_OBS_COLUMNS = {
     "coarse_hr": ["hr_mean_bpm"],
     "coarse_hr_acc": ["hr_mean_bpm", "acc_motion_rms"],
@@ -672,6 +676,22 @@ COARSE_OBS_COLUMNS = {
         "tod_cos",
     ],
     "coarse_eeg": ["rel_delta", "rel_theta", "rel_alpha", "rel_beta"],
+    "coarse_eeg_acc": [
+        "rel_delta",
+        "rel_theta",
+        "rel_alpha",
+        "rel_beta",
+        "acc_motion_rms",
+    ],
+    "coarse_eeg_acc_tod": [
+        "rel_delta",
+        "rel_theta",
+        "rel_alpha",
+        "rel_beta",
+        "acc_motion_rms",
+        "tod_sin",
+        "tod_cos",
+    ],
     "coarse_eeg_hr": [
         "rel_delta",
         "rel_theta",
@@ -983,6 +1003,33 @@ def optional_config_float(cfg, section: str, option: str) -> float | None:
     return _optional_user_float(text, f"[{section}] {option}")
 
 
+def coarse_feature_columns(base: str, include_hr: bool = False) -> list[str]:
+    """Columns for one coarse mode.
+
+    ``hr_mean_bpm`` stays out of a run unless ``include_hr`` is true.
+    The columns themselves are not removed from ``coarse_full``; the
+    mode is refused until the flag is set, and then a warning names
+    ``hr_mean_bpm``.
+    """
+    if base not in COARSE_OBS_COLUMNS:
+        raise ValueError(f"Unknown coarse observation process: {base!r}.")
+    columns = list(COARSE_OBS_COLUMNS[base])
+    if "hr_mean_bpm" in columns:
+        if not include_hr:
+            raise ValueError(
+                f"{base} includes hr_mean_bpm. Set coarse_include_hr = true "
+                "to opt in. That column is XHRO's ECG heart rate and is "
+                "unreliable. coarse_eeg_acc and coarse_eeg_acc_tod omit it."
+            )
+        warnings.warn(
+            f"{base} includes hr_mean_bpm. That column is XHRO's ECG heart "
+            "rate and is unreliable. coarse_include_hr is on.",
+            UserWarning,
+            stacklevel=2,
+        )
+    return columns
+
+
 def coarse_dataframe_kwargs(cfg) -> dict:
     """Optional ``[DataFrame]`` keys for coarse XhroProper. Missing = defaults."""
     return {
@@ -995,6 +1042,9 @@ def coarse_dataframe_kwargs(cfg) -> dict:
         ),
         "coarse_eeg_max_rel_delta": optional_config_float(
             cfg, "DataFrame", "coarse_eeg_max_rel_delta"
+        ),
+        "coarse_include_hr": optional_config_bool(
+            cfg, "DataFrame", "coarse_include_hr", False
         ),
     }
 
@@ -1912,6 +1962,7 @@ class XhroProper(Xhro):
         coarse_eeg_artifact_mask=None,
         coarse_eeg_artifact_k=None,
         coarse_eeg_max_rel_delta=None,
+        coarse_include_hr=False,
         crop_start_sec=None,
         crop_end_sec=None,
         max_fill_gap_sec=None,
@@ -2008,6 +2059,7 @@ class XhroProper(Xhro):
                 coarse_eeg_artifact_mask=coarse_eeg_artifact_mask,
                 coarse_eeg_artifact_k=coarse_eeg_artifact_k,
                 coarse_eeg_max_rel_delta=coarse_eeg_max_rel_delta,
+                coarse_include_hr=coarse_include_hr,
             )
             return
 
@@ -2388,6 +2440,7 @@ class XhroProper(Xhro):
         coarse_eeg_artifact_mask,
         coarse_eeg_artifact_k,
         coarse_eeg_max_rel_delta,
+        coarse_include_hr=False,
     ) -> None:
         self.coarse_test_split = _normalize_coarse_test_split(coarse_test_split)
         self.coarse_eeg_artifact_mask = _normalize_artifact_mask_name(
@@ -2403,7 +2456,8 @@ class XhroProper(Xhro):
             self.coarse_eeg_artifact_mask, self.coarse_eeg_artifact_k
         )
         self.sampling_freq = COARSE_SAMPLING_FREQ
-        self.feature_columns = list(COARSE_OBS_COLUMNS[base])
+        self.coarse_include_hr = bool(coarse_include_hr)
+        self.feature_columns = coarse_feature_columns(base, self.coarse_include_hr)
         self.dataset_labels = _parse_coarse_labels(self.dataset_label)
         self.is_segmented_1d = False
         print(

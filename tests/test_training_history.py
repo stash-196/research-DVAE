@@ -10,6 +10,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.figure
+from matplotlib.colors import to_rgb
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -103,6 +104,135 @@ def _history(n=4):
         sigmas_history=sigmas,
         a_sigmas_history=sigmas + 1.0,
     )
+
+
+def test_subband_and_decorr_series_are_stored_only_when_passed():
+    history = _history()
+    assert "train_subband" not in history
+    assert "decorr_loss_weight_values" not in history
+    series = _series()
+    series["train_subband"] = np.ones(4)
+    series["val_subband"] = np.full(4, 2.0)
+    series["subband_warm_values"] = np.array([0.0, 0.0, 0.25, 0.5])
+    series["subband_loss_weight_values"] = np.array([0.0, 0.0, 0.5, 1.0])
+    series["train_decorr"] = np.zeros(4)
+    series["val_decorr"] = np.zeros(4)
+    series["decorr_warm_values"] = np.zeros(4)
+    series["decorr_loss_weight_values"] = np.zeros(4)
+    stored = build_training_history(
+        end=4,
+        model_name="RNN",
+        tag="unit",
+        auto_sampling_method="ptf",
+        noise_sampling_method="none",
+        delta_threshold=1e-4,
+        val_criteria=("recon",),
+        val_reference={"recon": 0.5},
+        series=series,
+        dataset_stats=_stats(),
+    )
+    np.testing.assert_allclose(stored["train_subband"], np.ones(4))
+    np.testing.assert_allclose(
+        stored["subband_loss_weight_values"], [0.0, 0.0, 0.5, 1.0]
+    )
+    np.testing.assert_allclose(stored["subband_warm_values"], [0.0, 0.0, 0.25, 0.5])
+    assert list(stored["subband_warm_epochs"].tolist()) == [0, 2, 3]
+    assert "auto_warm_values" in stored
+    assert "subband_enabled" not in stored
+
+
+def _vertical_line_colors(ax):
+    colors = []
+    for line in ax.lines:
+        x = np.asarray(line.get_xdata(), dtype=float)
+        if x.size >= 2 and np.allclose(x, x[0]):
+            colors.append(to_rgb(line.get_color()))
+    return colors
+
+
+def test_warmup_panel_draws_enabled_scales_and_hides_a_disabled_term(tmp_path):
+    """Subband scale and weight sit with the other warm-up traces.
+
+    Decorr is stored but disabled, so the panel and the bump lines omit it.
+    Subband scale changes draw on the warm-up panel and on the other panels.
+    """
+    n = 4
+    scale = np.array([0.0, 0.0, 0.5, 1.0])
+    weight = 2.0 * scale
+    series = _series(n)
+    series["subband_warm_values"] = scale
+    series["subband_loss_weight_values"] = weight
+    series["decorr_warm_values"] = np.array([0.0, 0.25, 0.5, 1.0])
+    series["decorr_loss_weight_values"] = 3.0 * series["decorr_warm_values"]
+    history = build_training_history(
+        end=n,
+        model_name="RNN",
+        tag="reg",
+        auto_sampling_method="ss",
+        noise_sampling_method="none",
+        delta_threshold=1e-4,
+        val_criteria=("recon",),
+        val_reference={"recon": 0.5},
+        series=series,
+        dataset_stats=_stats(),
+        subband_enabled=True,
+        decorr_enabled=False,
+    )
+    assert "auto_warm_values" in history
+    assert "kl_warm_values" in history
+    assert "noise_warm_values" in history
+    assert "sequence_len_values" in history
+    assert "cpt_patience_epochs" in history
+    np.testing.assert_allclose(history["subband_warm_values"], scale)
+    np.testing.assert_allclose(history["subband_loss_weight_values"], weight)
+    assert history["subband_enabled"] is True
+    assert history["decorr_enabled"] is False
+    # The disabled series is still in the file. The figure must not draw it.
+    assert "decorr_warm_values" in history
+
+    out = tmp_path / "figs"
+    regenerate_training_figures(history, out)
+    # Rebuild the combined figure in memory so the axes can be inspected.
+    captured = {}
+    real_savefig = plt.savefig
+
+    def _save(path, *args, **kwargs):
+        if "delta_kl_cpt" in str(path):
+            fig = plt.gcf()
+            warm = fig.axes[1]
+            captured["labels"] = [
+                text.get_text() for text in warm.get_legend().get_texts()
+            ]
+            captured["warm_colors"] = _vertical_line_colors(warm)
+            captured["delta_colors"] = _vertical_line_colors(fig.axes[0])
+            captured["patience_colors"] = _vertical_line_colors(fig.axes[3])
+            by_label = {line.get_label(): line for line in warm.get_lines()}
+            captured["scale"] = np.asarray(by_label["subband scale"].get_ydata())
+            captured["weight"] = np.asarray(by_label["subband weight"].get_ydata())
+        return real_savefig(path, *args, **kwargs)
+
+    plt.savefig = _save
+    try:
+        regenerate_training_figures(history, tmp_path / "inspect")
+    finally:
+        plt.savefig = real_savefig
+
+    assert "subband scale" in captured["labels"]
+    assert "subband weight" in captured["labels"]
+    assert "auto_warm" in captured["labels"]
+    assert "decorr scale" not in captured["labels"]
+    assert "decorr weight" not in captured["labels"]
+    # step() repeats each sample. The underlying scale and weight remain.
+    assert set(np.round(captured["scale"], 5)) == {0.0, 0.5, 1.0}
+    assert set(np.round(captured["weight"], 5)) == {0.0, 1.0, 2.0}
+    orange = to_rgb("tab:orange")
+    purple = to_rgb("tab:purple")
+    # Change epochs of [0, 0, 0.5, 1] are 0, 2, and 3.
+    assert captured["warm_colors"].count(orange) == 3
+    assert captured["delta_colors"].count(orange) == 3
+    assert captured["patience_colors"].count(orange) == 3
+    assert purple not in captured["warm_colors"]
+    assert purple not in captured["delta_colors"]
 
 
 def test_new_history_stores_the_series_that_were_missing():

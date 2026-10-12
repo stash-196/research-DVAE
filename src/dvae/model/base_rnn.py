@@ -9,6 +9,7 @@ import torch
 from collections import OrderedDict
 from dvae.utils.model_mode_selector import prepare_mode_selector
 from dvae.model.base_model import BaseModel
+from dvae.model.hidden_block import install_hidden_block, masked_vanilla_step
 from dvae.model.plrnn import PLRNN, shPLRNN, shPLRNN_wo_A
 from collections import deque
 
@@ -63,6 +64,8 @@ class BaseRNN(BaseModel):
         )
         self.gen_out = nn.Linear(last_dim, self.y_dim)
         self.rnn = self._build_recurrence()
+        self.hidden_block = None
+        install_hidden_block(self)
 
     def _build_recurrence(self):
         input_dim = self.dense_x[-1] if self.dense_x else self.x_dim
@@ -93,11 +96,24 @@ class BaseRNN(BaseModel):
 
     def generation_x(self, h_t):
         dec_output = self.mlp_h_x(h_t)
+        # Empty dense_h_x leaves gen_out reading the hidden state. Cross
+        # terms are 0 in the stored weight and multiplied by decoder_mask
+        # on every step, so an optimizer step cannot refill them.
+        decoder_mask = getattr(self, "decoder_mask", None)
+        if decoder_mask is not None:
+            return torch.nn.functional.linear(
+                dec_output, self.gen_out.weight * decoder_mask, self.gen_out.bias
+            )
         y_t = self.gen_out(dec_output)
         return y_t
 
     def recurrence(self, feature_xt, h_t, c_t=None):
         # feature_xt: (1, batch_size, input_size)
+        block_mask = getattr(self, "block_hh_mask", None)
+        if block_mask is not None and self.type_rnn in ("RNN", "LSTM"):
+            return masked_vanilla_step(
+                self.rnn, self.type_rnn, feature_xt, h_t, c_t, block_mask
+            )
         if self.type_rnn == "LSTM":
             _, (h_tp1, c_tp1) = self.rnn(feature_xt, (h_t, c_t))
             return h_tp1, c_tp1

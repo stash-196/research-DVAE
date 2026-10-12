@@ -75,8 +75,35 @@ def test_learning_algo_still_logs_mt_alphas_and_plots_plrnn():
     assert "log_plrnn_timescales(" in text
     assert "visualize_sigma_history(" in text
     assert "visualize_alpha_history(" in text
-    assert "1 / (1 + np.exp(-sigmas_history[:, epoch]))" in text
-    assert "1 / (1 + np.exp(-sigmas_history[:, -1]))" in text
+    assert "alphas = sigmoid_10(sigmas_history[:, epoch])" in text
+    assert "alphas = sigmoid_10(sigmas_history[:, -1])" in text
+    assert "np.exp(-sigmas_history" not in text
+
+
+def test_logged_alphas_match_mt_rnn_base10_sigmoid():
+    """Epoch and final logs use MT_RNN.sigmoid_10, not the natural sigmoid."""
+    torch = pytest.importorskip("torch")
+    from dvae.learning_algo import sigmoid_10
+    from dvae.model.mt_rnn import MT_RNN
+
+    sigmas = np.array([1.0, 0.0, -1.0], dtype=np.float64)
+    logged = sigmoid_10(sigmas)
+    model = MT_RNN.sigmoid_10(torch.tensor(sigmas, dtype=torch.float64)).numpy()
+    np.testing.assert_allclose(logged, model)
+    np.testing.assert_allclose(logged, 1.0 / (1.0 + np.power(10.0, -sigmas)))
+    epoch_line = "alphas: {}".format([f"{alpha:.5f}" for alpha in logged])
+    final_line = "Final alphas: {}".format([f"{alpha:.5f}" for alpha in logged])
+    assert "0.90909" in epoch_line
+    assert "0.90909" in final_line
+    assert "0.73106" not in epoch_line
+    assert "0.73106" not in final_line
+
+    hits = []
+    for path in (REPO_ROOT / "src" / "dvae").rglob("*.py"):
+        source = path.read_text()
+        if "np.exp(-sigmas" in source or "np.exp(-np.max(sigmas" in source:
+            hits.append(str(path.relative_to(REPO_ROOT)))
+    assert hits == []
 
 
 def test_diagonal_A_matches_plrnn_and_shplrnn_cells():
@@ -145,7 +172,7 @@ def test_pickle_keeps_mt_sigmas_and_adds_plrnn_A_sigmas():
     assert attach_timescale_history({}) == {}
 
 
-def test_default_alpha_figure_still_uses_natural_sigmoid(tmp_path):
+def test_default_alpha_figure_uses_the_model_base10_sigmoid(tmp_path):
     metrics = _metrics()
     seen = {}
     original = metrics.mt_alpha_from_sigma
@@ -161,7 +188,7 @@ def test_default_alpha_figure_still_uses_natural_sigmoid(tmp_path):
         tmp_path,
         "MT_RNN",
     )
-    assert seen["value"][0] == pytest.approx(1 / (1 + np.exp(-1)))
+    assert seen["value"][0] == pytest.approx(1 / (1 + 10 ** (-1)))
     alpha_path = tmp_path / "vis_training_history_of_alpha_MT_RNN.png"
     sigma_called = tmp_path / "vis_training_history_of_sigma_MT_RNN.png"
     _assert_png(alpha_path)

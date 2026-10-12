@@ -40,6 +40,7 @@ from dvae.visualizers import (
     visualize_combined_metrics,
     visualize_sigma_history,
     visualize_alpha_history,
+    save_drift_timestep_figures,
 )
 
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
@@ -72,6 +73,11 @@ from dvae.epoch_log import (
     make_bump_row,
 )
 from dvae.wall_clock import sync_cuda
+from dvae.regularizers import (
+    parse_regularizer_settings,
+    regularizer_losses,
+    warmup_progress,
+)
 from dvae.warmup_curriculum import (
     WarmupCurriculum,
     format_patience,
@@ -230,9 +236,10 @@ class LearningAlgorithm:
         if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
             # defaults to the same as lr if not present
             self.alpha_lr = self.cfg.getfloat("Training", "alpha_lr", fallback=self.lr)
+            # base_parameters drops every name that contains "sigmas",
+            # so this group is the only one that steps the timescale.
             params = [
                 {"params": self.model.base_parameters(), "lr": self.lr},
-                # include sigma values
                 {"params": [self.model.sigmas], "lr": self.alpha_lr},
             ]
         else:
@@ -403,6 +410,21 @@ class LearningAlgorithm:
                 self._ftle_per_window[epoch] = np.asarray(
                     scored["ftle_per_window"], dtype=float
                 )
+            # Full-window traces for the checkpoint figure. The scalar
+            # series above stay the post-flip means. These arrays are
+            # replaced every epoch and are not stored in the checkpoint.
+            self._latest_drift_steps = {
+                "e2": np.asarray(scored["e2_per_step"], dtype=np.float64),
+                "ed": np.asarray(scored["ed_per_step"], dtype=np.float64),
+                "d2": np.asarray(scored["d2_per_step"], dtype=np.float64),
+                "cos": np.asarray(scored["cos_per_step"], dtype=np.float64),
+            }
+            self._latest_drift_steps_varnorm = {
+                "e2": np.asarray(scored["e2_per_step_varnorm"], dtype=np.float64),
+                "ed": np.asarray(scored["ed_per_step_varnorm"], dtype=np.float64),
+                "d2": np.asarray(scored["d2_per_step_varnorm"], dtype=np.float64),
+                "cos": np.asarray(scored["cos_per_step_varnorm"], dtype=np.float64),
+            }
             self.logger.info(
                 "Val spectrum error (free-run half): {:.6f}".format(
                     val_spectrum[epoch]
@@ -663,6 +685,10 @@ class LearningAlgorithm:
         self._lle_gt_per_window = None
         self._lle_per_window = None
         self._ftle_per_window = None
+        # Latest epoch's per-timestep traces, kept only until the
+        # checkpoint figure is drawn. Not written into the history.
+        self._latest_drift_steps = None
+        self._latest_drift_steps_varnorm = None
         self._embed_tau, self._embed_dim = _get_delay_params(self.dataset_name)
         if self._monitor_spectrum:
             n_windows = parse_optional_int(
@@ -836,6 +862,14 @@ class LearningAlgorithm:
         # Create python list for loss
         loss_log = None
         sigmas_history = None
+
+        def new_sigmas_history():
+            """One row per entry of the shared sigmas parameter."""
+            current = self.model.sigmas.detach().cpu().numpy().reshape(-1)
+            history = np.zeros((current.shape[0], epochs))
+            history[:, 0] = current
+            return history
+
         if not self.params["reload"]:
             train_loss = np.zeros((epochs,))
             val_loss = np.zeros((epochs,))
@@ -850,14 +884,7 @@ class LearningAlgorithm:
             best_optim_dict = optimizer.state_dict()
             start_epoch = -1
             if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
-                alphas_init = [
-                    float(i)
-                    for i in self.cfg.get("Network", "alphas").split(",")
-                    if i != ""
-                ]
-                sigmas_history = np.zeros((len(alphas_init), epochs))
-                # set initial values of sigmas_history with alphas_init
-                sigmas_history[:, 0] = sigmoid_reverse_10(alphas_init)
+                sigmas_history = new_sigmas_history()
         else:
             cp_file = os.path.join(save_dir, "{}_checkpoint.pt".format(self.model_name))
             try:
@@ -883,14 +910,7 @@ class LearningAlgorithm:
             best_state_dict = self.model.state_dict()
             best_optim_dict = optimizer.state_dict()
             if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
-                alphas_init = [
-                    float(i)
-                    for i in self.cfg.get("Network", "alphas").split(",")
-                    if i != ""
-                ]
-                sigmas_history = np.zeros((len(alphas_init), epochs))
-                # set initial values of sigmas_history with alphas_init
-                sigmas_history[:, 0] = sigmoid_reverse_10(alphas_init)
+                sigmas_history = new_sigmas_history()
 
         # PLRNN / shPLRNN diagonal A. Independent of MT mixing sigmas.
         a_sigmas_history = init_A_sigmas_history(self.model, epochs)
@@ -978,6 +998,22 @@ class LearningAlgorithm:
         time_rosenstein = series_or_new(loss_log, "time_rosenstein", epochs)
         time_plot = series_or_new(loss_log, "time_plot", epochs)
         time_eval = series_or_new(loss_log, "time_eval", epochs)
+        train_subband = series_or_new(loss_log, "train_subband", epochs)
+        val_subband = series_or_new(loss_log, "val_subband", epochs)
+        subband_warm_values = series_or_new(
+            loss_log, "subband_warm_values", epochs, fill="hold"
+        )
+        subband_loss_weight_values = series_or_new(
+            loss_log, "subband_loss_weight_values", epochs, fill="hold"
+        )
+        train_decorr = series_or_new(loss_log, "train_decorr", epochs)
+        val_decorr = series_or_new(loss_log, "val_decorr", epochs)
+        decorr_warm_values = series_or_new(
+            loss_log, "decorr_warm_values", epochs, fill="hold"
+        )
+        decorr_loss_weight_values = series_or_new(
+            loss_log, "decorr_loss_weight_values", epochs, fill="hold"
+        )
         bump_events = []
         if isinstance(loss_log, dict) and isinstance(loss_log.get("bump_events"), list):
             bump_events = [dict(row) for row in loss_log["bump_events"]]
@@ -1135,6 +1171,11 @@ class LearningAlgorithm:
             )
         )
         auto_kl_done = 0
+        self._regularizers = parse_regularizer_settings(
+            self.cfg,
+            y_dim=int(self.model.y_dim),
+            hidden_block=getattr(self.model, "hidden_block", None),
+        )
         dataset_stats = snapshot_window_stats(train_dataloader.dataset)
 
         def history_at(end):
@@ -1196,7 +1237,17 @@ class LearningAlgorithm:
                     "time_rosenstein": time_rosenstein,
                     "time_plot": time_plot,
                     "time_eval": time_eval,
+                    "train_subband": train_subband,
+                    "val_subband": val_subband,
+                    "subband_warm_values": subband_warm_values,
+                    "subband_loss_weight_values": subband_loss_weight_values,
+                    "train_decorr": train_decorr,
+                    "val_decorr": val_decorr,
+                    "decorr_warm_values": decorr_warm_values,
+                    "decorr_loss_weight_values": decorr_loss_weight_values,
                 },
+                subband_enabled=self._regularizers.subband_on,
+                decorr_enabled=self._regularizers.decorr_on,
                 dataset_stats=dataset_stats,
                 sigmas_history=(
                     sigmas_history
@@ -1238,6 +1289,36 @@ class LearningAlgorithm:
         stopped_early = False
         for epoch in range(start_epoch + 1, epochs):
             ran_epoch = True
+            # The bump that ends this epoch increments auto_kl_done afterwards,
+            # so the loss of the trigger epoch still uses the previous scale.
+            # A disabled term stores a zero scale and a zero weight. The
+            # warm-up panel hides those series.
+            sub_scale = (
+                warmup_progress(
+                    auto_kl_done,
+                    warmup.autonomous_steps,
+                    warmup.kl_steps,
+                    self._regularizers.subband_warmup,
+                )
+                if self._regularizers.subband_on
+                else 0.0
+            )
+            dec_scale = (
+                warmup_progress(
+                    auto_kl_done,
+                    warmup.autonomous_steps,
+                    warmup.kl_steps,
+                    self._regularizers.decorr_warmup,
+                )
+                if self._regularizers.decorr_on
+                else 0.0
+            )
+            sub_w = float(self._regularizers.subband_weight) * sub_scale
+            dec_w = float(self._regularizers.decorr_weight) * dec_scale
+            subband_warm_values[epoch] = sub_scale
+            decorr_warm_values[epoch] = dec_scale
+            subband_loss_weight_values[epoch] = sub_w
+            decorr_loss_weight_values[epoch] = dec_w
 
             start_time = datetime.datetime.now()
 
@@ -1507,8 +1588,12 @@ class LearningAlgorithm:
                     f"[Learning Algo][epoch{epoch}] loss_recon.device: {loss_recon.device}, loss_kl.device: {loss_kl.device}"
                 )
                 loss_tot_avg = loss_recon_avg + loss_kl_avg
+                sub_loss, dec_loss = regularizer_losses(
+                    self.model, batch_data, self._regularizers
+                )
+                loss_backward = loss_tot_avg + sub_w * sub_loss + dec_w * dec_loss
                 optimizer.zero_grad()
-                loss_tot_avg.backward()
+                loss_backward.backward()
 
                 # temporarily store detatched parameters
                 current_named_params_grad = [
@@ -1559,11 +1644,17 @@ class LearningAlgorithm:
                 optimizer.step()
                 # profiler.step()
 
-                train_loss[epoch] += loss_tot_avg.item() * bs
+                # tot is the tensor that was backward'd: recon + KL plus the
+                # weighted subband and decorr terms. recon and KL stay separate.
+                train_loss[epoch] += loss_backward.item() * bs
                 train_recon[epoch] += loss_recon_avg.item() * bs
                 train_kl[epoch] += loss_kl_avg.item() * bs
+                train_subband[epoch] += float(sub_loss.detach()) * bs
+                train_decorr[epoch] += float(dec_loss.detach()) * bs
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
-                    sigmas_history[:, epoch] = self.model.sigmas.detach().cpu().numpy()
+                    sigmas_history[:, epoch] = (
+                        self.model.sigmas.detach().cpu().numpy()
+                    )
                 update_A_sigmas_history(a_sigmas_history, self.model, epoch)
 
             sync_cuda(self.device)
@@ -1769,10 +1860,15 @@ class LearningAlgorithm:
                     f"[Learning Algo][epoch{epoch}] loss_recon.device: {loss_recon.device}, loss_kl.device: {loss_kl.device}"
                 )
                 loss_tot_avg = loss_recon_avg + loss_kl_avg
+                sub_loss, dec_loss = regularizer_losses(
+                    self.model, batch_data, self._regularizers
+                )
 
                 val_loss[epoch] += loss_tot_avg.item() * bs
                 val_recon[epoch] += loss_recon_avg.item() * bs
                 val_kl[epoch] += loss_kl_avg.item() * bs
+                val_subband[epoch] += float(sub_loss.detach()) * bs
+                val_decorr[epoch] += float(dec_loss.detach()) * bs
 
             sync_cuda(self.device)
             time_val[epoch] = time.perf_counter() - val_t0
@@ -1784,6 +1880,10 @@ class LearningAlgorithm:
             val_loss[epoch] = val_loss[epoch] / val_num
             val_recon[epoch] = val_recon[epoch] / val_num
             val_kl[epoch] = val_kl[epoch] / val_num
+            train_subband[epoch] = train_subband[epoch] / train_num
+            train_decorr[epoch] = train_decorr[epoch] / train_num
+            val_subband[epoch] = val_subband[epoch] / val_num
+            val_decorr[epoch] = val_decorr[epoch] / val_num
 
             # Training time
             end_time = datetime.datetime.now()
@@ -1792,15 +1892,38 @@ class LearningAlgorithm:
                 "Epoch: {} training time {}".format(epoch, str(interval).split(".")[0])
             )
             logger.info(
-                "Train => tot: {:.4f} recon {:.4f} KL {:.4f} Val => tot: {:.4f} recon {:.4f} KL {:.4f}".format(
+                "Train => tot: {:.4f} recon {:.4f} KL {:.4f} subband {:.4f} decorr {:.4f} "
+                "Val => tot: {:.4f} recon {:.4f} KL {:.4f} subband {:.4f} decorr {:.4f}".format(
                     train_loss[epoch],
                     train_recon[epoch],
                     train_kl[epoch],
+                    train_subband[epoch],
+                    train_decorr[epoch],
                     val_loss[epoch],
                     val_recon[epoch],
                     val_kl[epoch],
+                    val_subband[epoch],
+                    val_decorr[epoch],
                 )
             )
+            if self._regularizers.subband_on:
+                logger.info(
+                    "Train => subband {:.4f} weight {:.4f} Val => subband {:.4f} weight {:.4f}".format(
+                        train_subband[epoch],
+                        sub_w,
+                        val_subband[epoch],
+                        sub_w,
+                    )
+                )
+            if self._regularizers.decorr_on:
+                logger.info(
+                    "Train => decorr {:.4f} weight {:.4f} Val => decorr {:.4f} weight {:.4f}".format(
+                        train_decorr[epoch],
+                        dec_w,
+                        val_decorr[epoch],
+                        dec_w,
+                    )
+                )
 
             selection_value, selection_raw, selection_norm = self._epoch_selection_value(
                 epoch, val_loss, val_spectrum, val_criteria_score, drift_arrays
@@ -1995,6 +2118,9 @@ class LearningAlgorithm:
                         logger.info("Resetting KL & auto & noise warm-ups")
                 else:
                     logger.info("Unknown early stop condition")
+                # Window bumps do not advance this count. The increment is
+                # after this epoch's loss, so the trigger epoch keeps the
+                # previous subband and decorr scale.
                 if bumped.kind in ("auto", "kl"):
                     auto_kl_done += 1
                 patience_after = warmup.active_patience(
@@ -2023,6 +2149,34 @@ class LearningAlgorithm:
                         changes.append(("auto", old_auto, float(current_auto_warm)))
                     if bumped.noise_bumped:
                         changes.append(("noise", old_noise, float(current_noise_warm)))
+                # The scale used next epoch. A window bump does not move
+                # auto_kl_done, so these rows stay empty then. The row's
+                # epoch is the one that decided the bump; the figure draws
+                # the line on the following epoch, where the series changes.
+                for kind, enabled, warmup_on, old_scale in (
+                    (
+                        "subband",
+                        self._regularizers.subband_on,
+                        self._regularizers.subband_warmup,
+                        sub_scale,
+                    ),
+                    (
+                        "decorr",
+                        self._regularizers.decorr_on,
+                        self._regularizers.decorr_warmup,
+                        dec_scale,
+                    ),
+                ):
+                    if not enabled or not warmup_on:
+                        continue
+                    new_scale = warmup_progress(
+                        auto_kl_done,
+                        warmup.autonomous_steps,
+                        warmup.kl_steps,
+                        True,
+                    )
+                    if abs(new_scale - float(old_scale)) > 1e-12:
+                        changes.append((kind, float(old_scale), new_scale))
                 for kind, old_value, new_value in changes:
                     row = make_bump_row(
                         epoch,
@@ -2086,6 +2240,18 @@ class LearningAlgorithm:
                 auto_warm_epochs = warmup_change_epochs(auto_warm_values[:shown])
                 noise_warm_epochs = warmup_change_epochs(noise_warm_values[:shown])
                 sequence_len_epochs = warmup_change_epochs(sequence_len_values[:shown])
+                # Disabled terms pass None, so the warm-up panel and the
+                # bump lines leave them out.
+                subband_line_epochs = (
+                    warmup_change_epochs(subband_warm_values[:shown])
+                    if self._regularizers.subband_on
+                    else None
+                )
+                decorr_line_epochs = (
+                    warmup_change_epochs(decorr_warm_values[:shown])
+                    if self._regularizers.decorr_on
+                    else None
+                )
 
                 visualize_total_loss(
                     train_loss[: epoch + 1],
@@ -2099,6 +2265,8 @@ class LearningAlgorithm:
                     self.noise_sampling_method,
                     save_figures_dir,
                     tag,
+                    subband_warm_epochs=subband_line_epochs,
+                    decorr_warm_epochs=decorr_line_epochs,
                 )
                 visualize_val_criteria(
                     self._val_criteria,
@@ -2143,7 +2311,25 @@ class LearningAlgorithm:
                         if self._monitor_spectrum
                         else None
                     ),
+                    subband_warm_epochs=subband_line_epochs,
+                    decorr_warm_epochs=decorr_line_epochs,
                 )
+                # Drawn on every save_frequency checkpoint, whenever the
+                # fixed windows were scored, including when drift is not
+                # a selection criterion. The arrays are not checkpointed.
+                if self._latest_drift_steps is not None:
+                    drift_figures = save_drift_timestep_figures(
+                        self._latest_drift_steps,
+                        save_figures_dir,
+                        epoch,
+                        flip=self._spectrum_tf_steps,
+                        varnorm_terms=self._latest_drift_steps_varnorm,
+                    )
+                    logger.info(
+                        "Epoch: {} ===> drift timestep figures {}".format(
+                            epoch, ", ".join(drift_figures)
+                        )
+                    )
                 visualize_total_loss(
                     train_loss[: epoch + 1],
                     val_loss[: epoch + 1],
@@ -2157,6 +2343,8 @@ class LearningAlgorithm:
                     save_figures_dir,
                     tag,
                     log_scale=True,
+                    subband_warm_epochs=subband_line_epochs,
+                    decorr_warm_epochs=decorr_line_epochs,
                 )
 
                 if self.model_name in ["VRNN", "MT_VRNN"]:
@@ -2172,6 +2360,8 @@ class LearningAlgorithm:
                         self.noise_sampling_method,
                         save_figures_dir,
                         tag,
+                        subband_warm_epochs=subband_line_epochs,
+                        decorr_warm_epochs=decorr_line_epochs,
                     )
                     visualize_recon_loss(
                         train_recon[: epoch + 1],
@@ -2186,6 +2376,8 @@ class LearningAlgorithm:
                         save_figures_dir,
                         tag,
                         log_scale=True,
+                        subband_warm_epochs=subband_line_epochs,
+                        decorr_warm_epochs=decorr_line_epochs,
                     )
                     visualize_kld_loss(
                         train_kl[: epoch + 1],
@@ -2199,6 +2391,8 @@ class LearningAlgorithm:
                         self.noise_sampling_method,
                         save_figures_dir,
                         tag,
+                        subband_warm_epochs=subband_line_epochs,
+                        decorr_warm_epochs=decorr_line_epochs,
                     )
                     visualize_kld_loss(
                         train_kl[: epoch + 1],
@@ -2213,6 +2407,8 @@ class LearningAlgorithm:
                         save_figures_dir,
                         tag,
                         log_scale=True,
+                        subband_warm_epochs=subband_line_epochs,
+                        decorr_warm_epochs=decorr_line_epochs,
                     )
 
                 visualize_combined_metrics(
@@ -2250,6 +2446,28 @@ class LearningAlgorithm:
                         "time_plot": time_plot[: epoch + 1],
                         "time_eval": time_eval[: epoch + 1],
                     },
+                    subband_warm_values=(
+                        subband_warm_values[:shown]
+                        if self._regularizers.subband_on
+                        else None
+                    ),
+                    subband_loss_weight_values=(
+                        subband_loss_weight_values[:shown]
+                        if self._regularizers.subband_on
+                        else None
+                    ),
+                    decorr_warm_values=(
+                        decorr_warm_values[:shown]
+                        if self._regularizers.decorr_on
+                        else None
+                    ),
+                    decorr_loss_weight_values=(
+                        decorr_loss_weight_values[:shown]
+                        if self._regularizers.decorr_on
+                        else None
+                    ),
+                    subband_warm_epochs=subband_line_epochs,
+                    decorr_warm_epochs=decorr_line_epochs,
                 )
 
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
@@ -2270,6 +2488,8 @@ class LearningAlgorithm:
                             else None
                         ),
                         sequence_len_epochs,
+                        subband_warm_epochs=subband_line_epochs,
+                        decorr_warm_epochs=decorr_line_epochs,
                     )
                     visualize_alpha_history(
                         sigmas_history[:, : epoch + 1],
@@ -2288,6 +2508,8 @@ class LearningAlgorithm:
                             else None
                         ),
                         sequence_len_epochs,
+                        subband_warm_epochs=subband_line_epochs,
+                        decorr_warm_epochs=decorr_line_epochs,
                     )
 
                 # Same sigma/alpha history figures for PLRNN / shPLRNN diagonal A.
@@ -2312,6 +2534,8 @@ class LearningAlgorithm:
                     sequence_len_epochs,
                     visualize_sigma_history=visualize_sigma_history,
                     visualize_alpha_history=visualize_alpha_history,
+                    subband_warm_epochs=subband_line_epochs,
+                    decorr_warm_epochs=decorr_line_epochs,
                 )
 
                 # Visualize model parameters
@@ -2597,7 +2821,7 @@ class LearningAlgorithm:
                     )
 
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
-                    alphas = 1 / (1 + np.exp(-sigmas_history[:, epoch]))
+                    alphas = sigmoid_10(sigmas_history[:, epoch])
                     logger.info(
                         "alphas: {}".format([f"{alpha:.5f}" for alpha in alphas])
                     )
@@ -2668,7 +2892,7 @@ class LearningAlgorithm:
 
         # Log all final alpha values
         if self.model_name in ["MT_RNN", "MT_VRNN"]:
-            alphas = 1 / (1 + np.exp(-sigmas_history[:, -1]))
+            alphas = sigmoid_10(sigmas_history[:, -1])
             logger.info("Final alphas: {}".format([f"{alpha:.5f}" for alpha in alphas]))
         log_plrnn_timescales(
             logger,

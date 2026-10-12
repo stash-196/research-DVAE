@@ -25,6 +25,7 @@ import torch
 from collections import OrderedDict
 import math
 from dvae.model.base_rnn import BaseRNN
+from dvae.model.hidden_block import initial_per_unit_alphas
 
 
 def build_MT_RNN(cfg, device="cpu"):
@@ -106,13 +107,22 @@ class MT_RNN(BaseRNN):
         )
 
         self.alphas = alphas
-        self.sigmas = nn.Parameter(
-            torch.tensor(
+        # A block list or range only fills the initial per-unit values of
+        # this same parameter. With no block spec, sigmas stays the shared
+        # list and alphas_per_unit tiles it.
+        initial = initial_per_unit_alphas(
+            alphas, getattr(self, "hidden_block", None), dim_rnn
+        )
+        if initial is None:
+            sigma_values = torch.tensor(
                 [self.inverse_sigmoid_10(alpha) for alpha in alphas],
                 dtype=torch.float32,
-            ),
-            requires_grad=True,
-        )
+            )
+        else:
+            sigma_values = (
+                self.inverse_sigmoid_10(initial).detach().to(dtype=torch.float32)
+            )
+        self.sigmas = nn.Parameter(sigma_values, requires_grad=True)
 
         self.beta = beta
 
@@ -137,20 +147,18 @@ class MT_RNN(BaseRNN):
             repeats = self.dim_rnn // len(alphas)
             remainder = self.dim_rnn % len(alphas)
             return torch.cat([alphas] * repeats + [alphas[:remainder]])
-        else:
-            return alphas[: self.dim_rnn]
+        return alphas[: self.dim_rnn]
 
     def recurrence(self, feature_xt, h_t, c_t=None):
-        if self.type_rnn == "LSTM":
-            _, (h_tp1, c_tp1) = self.rnn(feature_xt, (h_t, c_t))
-        elif self.type_rnn in ["RNN", "PLRNN", "shPLRNN"]:
-            _, h_tp1 = self.rnn(feature_xt, h_t)
-            c_tp1 = None
-        else:
-            raise ValueError(
-                f"Unsupported RNN type for MT_RNN recurrence: {self.type_rnn}"
-            )
-        h_tp1 = (1 - self.alphas_per_unit()) * h_t + self.alphas_per_unit() * h_tp1
+        # ``h_t`` is the hidden state entering this step. The block mask,
+        # when it is on, multiplies the recurrent map that reads that
+        # entering state. It does not project the updated state onto the
+        # blocks afterwards.
+        # The mix keeps that same entering state: (1 - alpha) * h_entering
+        # + alpha * h_cell. Alpha is not applied inside the cell.
+        h_tp1, c_tp1 = super().recurrence(feature_xt, h_t, c_t)
+        alphas = self.alphas_per_unit()
+        h_tp1 = (1 - alphas) * h_t + alphas * h_tp1
         return h_tp1, c_tp1
 
 

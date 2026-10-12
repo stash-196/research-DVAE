@@ -48,8 +48,13 @@ class PLRNN(nn.Module):
         for t in range(seq_len):
             x = input[t]  # (batch_size, input_size)
 
-            # Apply mask to W to zero diagonal, preserving gradient flow
+            # Apply mask to W to zero diagonal, preserving gradient flow.
+            # A heart/brain mask, when installed, is an extra factor.
+            # It does not replace W_mask, so the diagonal stays zero.
             W_off = self.W * self.W_mask
+            block_mask = getattr(self, "block_hh_mask", None)
+            if block_mask is not None:
+                W_off = W_off * block_mask
 
             # h_t = A * h_{t-1} + W_off @ ReLU(h_{t-1}) + C x_t + b
             relu_h = F.relu(h)
@@ -132,12 +137,18 @@ class shPLRNN(nn.Module):
             x = input[t]  # (batch_size, input_size)
 
             # shPLRNN step: A * h + W1 @ ReLU(W2 @ h + b2) + b1 + linear_C(x)
+            # Block masks, when installed, scale W1 and W2. linear_C stays dense.
+            w1 = self.W1
+            w2 = self.W2
+            if getattr(self, "block_w1_mask", None) is not None:
+                w1 = w1 * self.block_w1_mask
+                w2 = w2 * self.block_w2_mask
             relu_term = F.relu(
-                torch.matmul(h, self.W2.T) + self.b2
+                torch.matmul(h, w2.T) + self.b2
             )  # (batch_size, hidden_sh_size)
             h = (
                 self.A * h
-                + torch.matmul(relu_term, self.W1.T)
+                + torch.matmul(relu_term, w1.T)
                 + self.b1
                 + self.linear_C(x)
             )

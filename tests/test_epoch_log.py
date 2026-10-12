@@ -17,6 +17,8 @@ from dvae.epoch_log import (
     make_bump_row,
     vertical_line_epochs,
 )
+import numpy as np
+
 from dvae.training_history import warmup_change_epochs
 from dvae.wall_clock import WallClock, sync_cuda
 
@@ -62,6 +64,15 @@ def test_bump_early_stop_and_budget_lines():
     )
     with pytest.raises(ValueError, match="bump type"):
         make_bump_row(1, "lr", 0.1, 0.2, 2, 2, 1)
+    scale = make_bump_row(1, "subband", 0.0, 0.5, 1, 2, 1)
+    assert scale["type"] == "subband"
+    assert format_bump_line(scale).startswith(
+        "Warm-up bump epoch=1 type=subband old=0 new=0.5 "
+    )
+    assert vertical_line_epochs([scale], "subband") == [0, 2]
+    assert vertical_line_epochs([scale], "subband") == list(
+        warmup_change_epochs(np.array([0.0, 0.0, 0.5]))
+    )
     assert format_early_stop_line(9, 10, 10) == (
         "Early stop epoch=9: reason=patience cpt_patience=10 "
         "active_patience=10 warmups_finished=true"

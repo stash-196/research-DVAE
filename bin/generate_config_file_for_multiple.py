@@ -59,9 +59,10 @@ def xhro_proper_coarse_example():
 
     Artifact mask is off unless ``coarse_eeg_artifact_mask`` is
     ``log_total_power_robust`` (then set ``coarse_eeg_artifact_k``) and/or
-    ``coarse_eeg_max_rel_delta`` is a float. ``coarse_hr``, ``coarse_hr_acc``,
-    and ``coarse_hr_acc_tod`` select no EEG columns, so those rules do not run.
-    On the cluster, set ``data_root`` to the grok_output folder.
+    ``coarse_eeg_max_rel_delta`` is a float. Modes that include
+    ``hr_mean_bpm`` need ``coarse_include_hr``. This example is
+    ``coarse_eeg_acc_tod`` (no ECG). On the cluster, set ``data_root``
+    to the grok_output folder.
     """
     return {
         "dataset_name": ["XhroProper"],
@@ -69,8 +70,8 @@ def xhro_proper_coarse_example():
         "mask_label": ["None"],
         "corpus": ["multi"],
         "data_root": ["None"],
-        "observation_process": ["coarse_eeg_hr_acc_tod"],
-        "x_dim": [8],
+        "observation_process": ["coarse_eeg_acc_tod"],
+        "x_dim": [7],
         "sequence_len": [64],
         "coarse_test_split": ["usable_tail"],
         "coarse_eeg_artifact_mask": ["none"],
@@ -361,6 +362,7 @@ if __name__ == "__main__":
             # "coarse_eeg_hr_acc_tod",
             # "coarse_full",
             # "ecg_removed_eeg",
+            # "ecg_removed_eeg_scale",
         ]
     elif dataset_name[0] == "PhysioNet2012":
         observation_process = [
@@ -414,6 +416,8 @@ if __name__ == "__main__":
         "coarse_hr_acc": 2,
         "coarse_hr_acc_tod": 4,
         "coarse_eeg": 4,
+        "coarse_eeg_acc": 5,
+        "coarse_eeg_acc_tod": 7,
         "coarse_eeg_hr": 5,
         "coarse_eeg_hr_acc": 6,
         "coarse_eeg_hr_acc_tod": 8,

@@ -399,8 +399,10 @@ class WarmupCurriculum:
         bump: float = WARMUP_BUMP,
     ):
         self.order = resolve_warmup_order(order)
-        # None is already resolved: adaptive patience is off. The config
-        # reader turns a blank key into 2 before it reaches this constructor.
+        # None is already resolved: adaptive patience is off. A blank
+        # config key never arrives as None from the reader. The reader
+        # turns it into max(1, round(0.2 * early_stop_patience)) first.
+        # An explicit 0 is passed through as 0.
         if patience_start is None:
             self.patience_start = None
         else:

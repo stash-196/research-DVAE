@@ -2,6 +2,27 @@ import matplotlib.pyplot as plt
 import os
 import numpy as np
 
+from dvae.eval.aggregate_plot_style import (
+    apply_paper_ready_line_style,
+    setup_plot_y_axis,
+)
+
+
+def draw_regularizer_warmup_lines(ax, subband_warm_epochs=None, decorr_warm_epochs=None):
+    """Vertical markers for subband and decorr scale changes.
+
+    Orange dashed: subband warm-up scale. Purple dotted: decorr warm-up
+    scale. ``None`` draws nothing, which is how a disabled term stays
+    off the figure. A passed list is the same change-epoch set the
+    other warm-up lines use, including the leading 0.
+    """
+    if subband_warm_epochs is not None:
+        for epoch in np.asarray(subband_warm_epochs).reshape(-1):
+            ax.axvline(x=float(epoch), color="tab:orange", linestyle=(0, (2, 2)))
+    if decorr_warm_epochs is not None:
+        for epoch in np.asarray(decorr_warm_epochs).reshape(-1):
+            ax.axvline(x=float(epoch), color="tab:purple", linestyle=(0, (1, 1)))
+
 
 def draw_loss_warmup_lines(
     ax,
@@ -12,12 +33,16 @@ def draw_loss_warmup_lines(
     auto_warm_epochs,
     noise_warm_epochs,
     sequence_len_epochs,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     """Vertical warmup markers used by the loss-over-epochs figure.
 
     Cyan dashed: KL warm-up, VRNN / MT_VRNN only. Red dotted: autonomous
     warm-up when the sampler is ss or sm. Green dash-dot: noise warm-up
     on the same samplers. Magenta dash-dot: sequence-length changes.
+    Orange and purple mark subband and decorr scale changes when those
+    terms are enabled.
     """
     if model_name in ["VRNN", "MT_VRNN"]:
         for kl_warm_epoch in kl_warm_epochs:
@@ -30,6 +55,7 @@ def draw_loss_warmup_lines(
             ax.axvline(x=noise_warm_epoch, color="g", linestyle="-.")
     for sequence_len_epoch in sequence_len_epochs:
         ax.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
+    draw_regularizer_warmup_lines(ax, subband_warm_epochs, decorr_warm_epochs)
 
 
 # Four Appendix B terms. Log figures use a symlog axis so a negative
@@ -274,7 +300,18 @@ def _drift_linthresh(terms) -> float:
     return _symlog_linthresh(list(terms.values()))
 
 
-def _draw_warmup(ax, model_name, auto_sampling_method, noise_sampling_method, kl_warm_epochs, auto_warm_epochs, noise_warm_epochs, sequence_len_epochs):
+def _draw_warmup(
+    ax,
+    model_name,
+    auto_sampling_method,
+    noise_sampling_method,
+    kl_warm_epochs,
+    auto_warm_epochs,
+    noise_warm_epochs,
+    sequence_len_epochs,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
+):
     draw_loss_warmup_lines(
         ax,
         model_name,
@@ -284,6 +321,8 @@ def _draw_warmup(ax, model_name, auto_sampling_method, noise_sampling_method, kl
         auto_warm_epochs,
         noise_warm_epochs,
         sequence_len_epochs,
+        subband_warm_epochs,
+        decorr_warm_epochs,
     )
 
 
@@ -426,6 +465,8 @@ def build_val_criteria_figure(
     lyapunov=None,
     log_scale=False,
     normalized=False,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     """Recon, spectrum, the four drift terms overlaid, then Lyapunov.
 
@@ -498,6 +539,8 @@ def build_val_criteria_figure(
             auto_warm_epochs,
             noise_warm_epochs,
             sequence_len_epochs,
+            subband_warm_epochs,
+            decorr_warm_epochs,
         )
         if kind == "overlay":
             _draw_drift_overlay(
@@ -563,6 +606,8 @@ def build_drift_panels_figure(
     best_epoch=None,
     log_scale=False,
     normalized=False,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     """One subplot per Appendix B term, with one shared y range.
 
@@ -595,6 +640,8 @@ def build_drift_panels_figure(
             auto_warm_epochs,
             noise_warm_epochs,
             sequence_len_epochs,
+            subband_warm_epochs,
+            decorr_warm_epochs,
         )
         selected = _criterion_selected(name, criteria, normalized=normalized)
         ylabel = _DRIFT_PANEL_LABELS[name]
@@ -646,6 +693,8 @@ def visualize_val_criteria(
     recon_k=None,
     lyapunov=None,
     drift_norm="both",
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     """Save both validation layouts, each raw and variance-normalised.
 
@@ -675,6 +724,8 @@ def visualize_val_criteria(
         drift=drift,
         recon_k=recon_k,
         lyapunov=lyapunov,
+        subband_warm_epochs=subband_warm_epochs,
+        decorr_warm_epochs=decorr_warm_epochs,
     )
     modes = []
     if drift_norm in ("raw", "both"):
@@ -708,6 +759,8 @@ def visualize_val_criteria(
             noise_sampling_method=noise_sampling_method,
             criteria=criteria,
             best_epoch=best_epoch,
+            subband_warm_epochs=subband_warm_epochs,
+            decorr_warm_epochs=decorr_warm_epochs,
         )
         for normalized, norm_suffix in modes:
             if _drift_arrays(drift, normalized=normalized) is None:
@@ -737,6 +790,8 @@ def visualize_total_loss(
     save_figures_dir,
     tag,
     log_scale=False,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     plt.clf()
     fig = plt.figure(figsize=(8, 6))
@@ -750,6 +805,8 @@ def visualize_total_loss(
         auto_warm_epochs,
         noise_warm_epochs,
         sequence_len_epochs,
+        subband_warm_epochs,
+        decorr_warm_epochs,
     )
     plt.plot(train_loss, label="training loss")
     plt.plot(val_loss, label="validation loss")
@@ -778,6 +835,8 @@ def visualize_recon_loss(
     save_figures_dir,
     tag,
     log_scale=False,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     plt.clf()
     fig = plt.figure(figsize=(8, 6))
@@ -793,6 +852,9 @@ def visualize_recon_loss(
             plt.axvline(x=noise_warm_epoch, color="g", linestyle="-.")
     for sequence_len_epoch in sequence_len_epochs:
         plt.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
+    draw_regularizer_warmup_lines(
+        plt.gca(), subband_warm_epochs, decorr_warm_epochs
+    )
     plt.plot(train_recon, label="Training")
     plt.plot(val_recon, label="Validation")
     plt.legend(fontsize=16, title=f"{model_name}: Recon. Loss", title_fontsize=20)
@@ -820,6 +882,8 @@ def visualize_kld_loss(
     save_figures_dir,
     tag,
     log_scale=False,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     plt.clf()
     fig = plt.figure(figsize=(8, 6))
@@ -835,6 +899,9 @@ def visualize_kld_loss(
             plt.axvline(x=noise_warm_epoch, color="g", linestyle="-.")
     for sequence_len_epoch in sequence_len_epochs:
         plt.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
+    draw_regularizer_warmup_lines(
+        plt.gca(), subband_warm_epochs, decorr_warm_epochs
+    )
     plt.plot(train_kl, label="Training")
     plt.plot(val_kl, label="Validation")
     plt.legend(fontsize=16, title=f"{model_name}: KL Div. Loss", title_fontsize=20)
@@ -937,6 +1004,12 @@ def visualize_combined_metrics(
     mean_start_shift=None,
     dataset_stats=None,
     timing=None,
+    subband_warm_values=None,
+    subband_loss_weight_values=None,
+    decorr_warm_values=None,
+    decorr_loss_weight_values=None,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     """Warm-up, patience, windowing, and, when stored, epoch wall time.
 
@@ -985,6 +1058,25 @@ def visualize_combined_metrics(
             noise_warm_values,
             label="noise_warm",
             color="g",
+        )
+    # Scale is the 0–1 warm-up progress. Weight is that scale times the
+    # configured loss weight. None hides a disabled term.
+    _regularizer_warm_steps = (
+        (subband_warm_values, "subband scale", "tab:orange", "-"),
+        (subband_loss_weight_values, "subband weight", "tab:orange", "--"),
+        (decorr_warm_values, "decorr scale", "tab:purple", "-"),
+        (decorr_loss_weight_values, "decorr weight", "tab:purple", "--"),
+    )
+    for values, label, color, linestyle in _regularizer_warm_steps:
+        if values is None:
+            continue
+        series = np.asarray(values, dtype=float).reshape(-1)
+        axs[1].step(
+            np.arange(series.size),
+            series,
+            label=label,
+            color=color,
+            linestyle=linestyle,
         )
 
     if axs[1].get_legend_handles_labels()[1]:
@@ -1113,6 +1205,11 @@ def visualize_combined_metrics(
         for i in range(len(axs)):
             axs[i].axvline(x=sequence_len_epoch, color="m", linestyle="-.")
 
+    for i in range(len(axs)):
+        draw_regularizer_warmup_lines(
+            axs[i], subband_warm_epochs, decorr_warm_epochs
+        )
+
     fig_file = os.path.join(
         save_figures_dir, f"vis_training_delta_kl_cpt_best_state_{tag}.png"
     )
@@ -1121,13 +1218,13 @@ def visualize_combined_metrics(
 
 
 def mt_alpha_from_sigma(sigmas):
-    """Map stored MT sigmas to the values drawn in the alpha-history figure.
+    """Map stored MT sigmas with the model's base-10 sigmoid.
 
-    This is the historical natural sigmoid used by MT_RNN plots and logs.
-    The model itself mixes hidden states with a base-10 sigmoid. Do not
-    change this default: existing MT figures depend on it.
+    This is ``1 / (1 + 10 ** (-sigma))``, the same map ``MT_RNN.sigmoid_10``
+    uses for the mixing weights.
     """
-    return 1 / (1 + np.exp(-sigmas))
+    sigmas = np.asarray(sigmas, dtype=np.float64)
+    return 1.0 / (1.0 + np.power(10.0, -sigmas))
 
 
 def _history_figure_tag(tag, file_tag):
@@ -1140,6 +1237,8 @@ def _draw_warmup_markers(
     auto_warm_epochs,
     noise_warm_epochs,
     sequence_len_epochs,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     if model_name in ["VRNN", "MT_VRNN"] and kl_warm_epochs is not None:
         for kl_warm_epoch in kl_warm_epochs:
@@ -1153,6 +1252,9 @@ def _draw_warmup_markers(
     if sequence_len_epochs is not None:
         for sequence_len_epoch in sequence_len_epochs:
             plt.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
+    draw_regularizer_warmup_lines(
+        plt.gca(), subband_warm_epochs, decorr_warm_epochs
+    )
 
 
 def visualize_sigma_history(
@@ -1169,6 +1271,8 @@ def visualize_sigma_history(
     series_name="Sigma",
     legend_title="Sigma values",
     ylabel="sigma",
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     plt.clf()
     fig = plt.figure(figsize=(8, 6))
@@ -1179,6 +1283,8 @@ def visualize_sigma_history(
         auto_warm_epochs,
         noise_warm_epochs,
         sequence_len_epochs,
+        subband_warm_epochs,
+        decorr_warm_epochs,
     )
 
     for i in range(sigmas_history.shape[0]):
@@ -1210,6 +1316,8 @@ def visualize_alpha_history(
     series_name="Alpha",
     legend_title="Alpha values",
     ylabel="alpha",
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     plt.clf()
     fig = plt.figure(figsize=(8, 6))
@@ -1220,6 +1328,8 @@ def visualize_alpha_history(
         auto_warm_epochs,
         noise_warm_epochs,
         sequence_len_epochs,
+        subband_warm_epochs,
+        decorr_warm_epochs,
     )
 
     transform = mt_alpha_from_sigma if alpha_from_sigma is None else alpha_from_sigma
@@ -1238,3 +1348,174 @@ def visualize_alpha_history(
     )
     plt.savefig(fig_file)
     plt.close(fig)
+
+
+# One row per fixed window, one column per timestep of that window.
+# The last flag fixes a linear cosine axis on [-1, 1].
+_DRIFT_STEP_PANELS = (
+    ("e2", r"$e_t^{2}$", "tab:blue", False),
+    ("ed", r"$e_t d_t$", "tab:green", False),
+    ("d2", r"$d_t^{2}$", "tab:orange", False),
+    ("cos", r"$\cos_t$", "tab:red", True),
+)
+
+
+def _align_drift_timestep_axes(fig, axes, time):
+    """Same x limits and ticks. Y labels share a left edge. Y scales stay per panel."""
+    left = float(time[0])
+    right = float(time[-1]) if time.size > 1 else left + 1.0
+    axes[-1].set_xlim(left, right)
+    fig.canvas.draw()
+    xticks = np.asarray(axes[-1].get_xticks(), dtype=float)
+    for ax in axes:
+        ax.set_xlim(left, right)
+        ax.set_xticks(xticks)
+    fig.align_ylabels(axes)
+
+
+def build_drift_timestep_figure(terms, flip=None, normalized=False):
+    """Four stacked panels of per-window drift trajectories.
+
+    ``terms`` maps ``e2``, ``ed``, ``d2``, and ``cos`` to arrays shaped
+    ``(window, time)``. Each panel draws every window faintly and the
+    mean across windows as a solid line. The time axis, its limits, and
+    its ticks are shared. Each panel keeps its own y scale. The cosine
+    panel is linear on ``[-1, 1]``. ``flip`` marks the teacher-forced
+    boundary when it is known. Styling follows ``aggregate_plot_style``.
+    """
+    saved_style = plt.rcParams.copy()
+    apply_paper_ready_line_style()
+    try:
+        fig, axes = plt.subplots(
+            len(_DRIFT_STEP_PANELS), 1, sharex=True, figsize=(12, 18), squeeze=True
+        )
+        time = None
+        for ax, (key, label, color, cosine_axis) in zip(axes, _DRIFT_STEP_PANELS):
+            values = np.asarray(terms[key], dtype=float)
+            if values.ndim != 2:
+                raise ValueError(
+                    f"drift timestep {key} must have shape (window, time), "
+                    f"got {values.shape}."
+                )
+            if time is None:
+                time = np.arange(values.shape[1])
+            elif values.shape[1] != time.size:
+                raise ValueError(
+                    "drift timestep panels must share a time axis, "
+                    f"got {time.size} and {values.shape[1]}."
+                )
+            for index in range(values.shape[0]):
+                ax.plot(
+                    time,
+                    values[index],
+                    color=color,
+                    alpha=0.2,
+                    linewidth=1.0,
+                    label="window" if index == 0 else "_nolegend_",
+                    zorder=1,
+                )
+            finite = np.isfinite(values)
+            count = finite.sum(axis=0)
+            summed = np.sum(np.where(finite, values, 0.0), axis=0)
+            mean = np.full(count.shape, np.nan, dtype=float)
+            ok = count > 0
+            mean[ok] = summed[ok] / count[ok]
+            ax.plot(
+                time,
+                mean,
+                color=color,
+                alpha=1.0,
+                linestyle="-",
+                label="mean",
+                zorder=3,
+            )
+            if flip is not None:
+                ax.axvline(
+                    float(flip),
+                    color="0.35",
+                    linestyle="--",
+                    linewidth=1.0,
+                    label="_nolegend_",
+                    zorder=2,
+                )
+            if cosine_axis:
+                ylabel = label
+            else:
+                ylabel = label + (r" / var" if normalized else "")
+            ax.set_ylabel(ylabel)
+            if cosine_axis:
+                ax.set_yscale("linear")
+                ax.set_ylim(-1.0, 1.0)
+                ax.set_autoscaley_on(False)
+            else:
+                setup_plot_y_axis(ax, values)
+            ax.legend(loc="upper right")
+        axes[-1].set_xlabel(r"$t$")
+        _align_drift_timestep_axes(fig, axes, time)
+        return fig
+    finally:
+        plt.rcParams.update(saved_style)
+
+
+def save_drift_timestep_figure(terms, path, flip=None, normalized=False):
+    """Write the four-panel drift trajectory figure."""
+    fig = build_drift_timestep_figure(terms, flip=flip, normalized=normalized)
+    try:
+        try:
+            fig.tight_layout()
+        except Exception:
+            pass
+        fig.align_ylabels(fig.axes)
+        fig.savefig(path, bbox_inches="tight", pad_inches=0.3)
+    finally:
+        plt.close(fig)
+
+
+# Own folder under vis_during_training, same layout as
+# sequence_reconstruction/half_half, even_bursts, and training_mode.
+# The epoch is in the filename so each checkpoint keeps its own figure.
+DRIFT_TIMESTEP_SUBDIR = "drift_timestep"
+
+
+def drift_timestep_figure_path(save_figures_dir, epoch, normalized=False):
+    """Path of the checkpoint drift-trajectory figure.
+
+    Raw:
+    ``{save_figures_dir}/drift_timestep/vis_drift_timestep_epoch_{epoch}.png``
+
+    Variance-normalised:
+    ``{save_figures_dir}/drift_timestep/vis_drift_timestep_varnorm_epoch_{epoch}.png``
+
+    ``save_figures_dir`` is the run's ``vis_during_training`` directory.
+    """
+    stem = (
+        "vis_drift_timestep_varnorm_epoch_{}.png"
+        if normalized
+        else "vis_drift_timestep_epoch_{}.png"
+    )
+    return os.path.join(
+        save_figures_dir, DRIFT_TIMESTEP_SUBDIR, stem.format(int(epoch))
+    )
+
+
+def save_drift_timestep_figures(
+    terms, save_figures_dir, epoch, flip=None, varnorm_terms=None
+):
+    """Draw the checkpoint drift trajectories into their own subdirectory.
+
+    ``terms`` and ``varnorm_terms`` are the current epoch only. Nothing
+    here is written into the training history. Returns the paths written.
+    """
+    path = drift_timestep_figure_path(save_figures_dir, epoch, normalized=False)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    save_drift_timestep_figure(terms, path, flip=flip, normalized=False)
+    written = [path]
+    if varnorm_terms is not None:
+        var_path = drift_timestep_figure_path(
+            save_figures_dir, epoch, normalized=True
+        )
+        save_drift_timestep_figure(
+            varnorm_terms, var_path, flip=flip, normalized=True
+        )
+        written.append(var_path)
+    return written

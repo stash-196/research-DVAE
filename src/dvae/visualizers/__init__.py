@@ -24,4 +24,5 @@ from .visualize_training_metrics import (
     visualize_combined_metrics,
     visualize_sigma_history,
     visualize_alpha_history,
+    save_drift_timestep_figures,
 )

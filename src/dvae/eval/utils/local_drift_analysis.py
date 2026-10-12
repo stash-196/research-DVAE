@@ -142,6 +142,41 @@ def x_true_variance(windows, observation_process=None) -> np.ndarray:
     return variance
 
 
+def _cosine_per_step(err, delta, mask) -> np.ndarray:
+    """Cosine of ``e`` and ``d`` across selected channels. Shape ``(window, time)``.
+
+    ``cos_t = (e_t · d_t) / (||e_t|| ||d_t||)`` on the channels ``mask``
+    keeps. A step is NaN when it has no selected channel or either vector
+    has norm 0, including a teacher-forced step where ``d`` is 0.
+    """
+    chosen = np.asarray(mask, dtype=bool)
+    err = np.asarray(err, dtype=np.float64)
+    delta = np.asarray(delta, dtype=np.float64)
+    safe_err = np.where(chosen & np.isfinite(err), err, 0.0)
+    safe_delta = np.where(chosen & np.isfinite(delta), delta, 0.0)
+    dot = np.sum(safe_err * safe_delta, axis=-1)
+    err_norm = np.sqrt(np.sum(safe_err * safe_err, axis=-1))
+    delta_norm = np.sqrt(np.sum(safe_delta * safe_delta, axis=-1))
+    out = np.full(dot.shape, np.nan, dtype=np.float64)
+    ok = (chosen.sum(axis=-1) > 0) & (err_norm > 0.0) & (delta_norm > 0.0)
+    out[ok] = dot[ok] / (err_norm[ok] * delta_norm[ok])
+    return out
+
+
+def _channel_mean(values, mask) -> np.ndarray:
+    """Mean over channels at each time. ``values`` is ``(window, time, channel)``.
+
+    Returns ``(window, time)``. A time with no selected channel is NaN.
+    """
+    chosen = np.asarray(mask, dtype=bool)
+    count = chosen.sum(axis=-1)
+    summed = np.sum(np.where(chosen, values, 0.0), axis=-1)
+    out = np.full(count.shape, np.nan, dtype=np.float64)
+    ok = count > 0
+    out[ok] = summed[ok] / count[ok]
+    return out
+
+
 def _mean_masked(values, mask) -> float:
     mask = np.asarray(mask, dtype=bool)
     count = int(mask.sum())
@@ -249,6 +284,18 @@ def drift_metrics_from_series(
     ``ftle_k_start..ftle_k_end`` (default ``1..K``). ``||d_k||`` is the
     Euclidean norm of the observed entries at that step, pooled across
     windows.
+
+    The scalar means use only the post-flip horizon. The diagnostic
+    traces ``e2_per_step``, ``ed_per_step``, and ``d2_per_step`` cover
+    every timestep of the window (the fixed validation length, 2000 by
+    default). Each is the mean over observed channels of ``e^2``,
+    ``e d``, and ``d^2``, with one row per window. ``cos_per_step`` is
+    the cosine of those same observed-channel vectors, NaN when either
+    norm is 0. The ``*_varnorm`` copies divide by that channel's
+    ``x_true`` variance first; the variance-normalised cosine uses
+    ``e/sqrt(var)`` and ``d/sqrt(var)`` on channels with a positive
+    variance. The training loop draws these traces at a checkpoint and
+    does not write them into the history.
     """
     horizon = int(horizon)
     flip = int(flip)
@@ -270,17 +317,31 @@ def drift_metrics_from_series(
     cross_rows = []
     auto_rows = []
     mask_rows = []
+    e2_full = []
+    ed_full = []
+    d2_full = []
+    err_rows = []
+    delta_rows = []
+    mask_full = []
     for truth, tf, auto in zip(truths, teacher, autonomous):
         if truth.shape != (length, width) or tf.shape != truth.shape or auto.shape != truth.shape:
             raise ValueError(
                 "Drift series must share the window shape "
                 f"{(length, width)}; got {truth.shape}, {tf.shape}, {auto.shape}."
             )
+        err_full = tf - truth
+        delta_full = auto - tf
+        e2_full.append(err_full * err_full)
+        ed_full.append(err_full * delta_full)
+        d2_full.append(delta_full * delta_full)
+        err_rows.append(err_full)
+        delta_rows.append(delta_full)
+        mask_full.append(observed_entry_mask(truth, observation_process))
         sl = slice(flip, flip + horizon)
-        err = tf[sl] - truth[sl]
-        delta = auto[sl] - tf[sl]
+        err = err_full[sl]
+        delta = delta_full[sl]
         auto_err = auto[sl] - truth[sl]
-        mask = observed_entry_mask(truth[sl], observation_process)
+        mask = mask_full[-1][sl]
         e2_rows.append(err * err)
         d2_rows.append(delta * delta)
         cross_rows.append(2.0 * delta * err)
@@ -291,6 +352,16 @@ def drift_metrics_from_series(
     cross = np.stack(cross_rows, axis=0)
     auto2 = np.stack(auto_rows, axis=0)
     mask = np.stack(mask_rows, axis=0)
+    full_mask = np.stack(mask_full, axis=0)
+    e2_cube = np.stack(e2_full, axis=0)
+    ed_cube = np.stack(ed_full, axis=0)
+    d2_cube = np.stack(d2_full, axis=0)
+    err_cube = np.stack(err_rows, axis=0)
+    delta_cube = np.stack(delta_rows, axis=0)
+    e2_per_step = _channel_mean(e2_cube, full_mask)
+    ed_per_step = _channel_mean(ed_cube, full_mask)
+    d2_per_step = _channel_mean(d2_cube, full_mask)
+    cos_per_step = _cosine_per_step(err_cube, delta_cube, full_mask)
     base_error = _mean_masked(e2, mask)
     auto_drift = _mean_masked(d2, mask)
     cross_term = _mean_masked(cross, mask)
@@ -298,6 +369,15 @@ def drift_metrics_from_series(
     recon_k = _mean_masked(auto2, mask)
     safe = np.where(np.isfinite(scale) & (scale > 0.0), scale, 1.0)
     usable = mask & np.isfinite(scale) & (scale > 0.0)
+    full_usable = full_mask & np.isfinite(scale) & (scale > 0.0)
+    inv = (1.0 / safe).reshape(1, 1, -1)
+    e2_per_step_varnorm = _channel_mean(e2_cube * inv, full_usable)
+    ed_per_step_varnorm = _channel_mean(ed_cube * inv, full_usable)
+    d2_per_step_varnorm = _channel_mean(d2_cube * inv, full_usable)
+    std = np.sqrt(safe).reshape(1, 1, -1)
+    cos_per_step_varnorm = _cosine_per_step(
+        err_cube / std, delta_cube / std, full_usable
+    )
     if int(usable.sum()) == 0:
         base_n = drift_n = cross_n = float("nan")
     else:
@@ -343,6 +423,14 @@ def drift_metrics_from_series(
             d_norm_by_k, k_start=ftle_k_start, k_end=ftle_k_end
         ),
         "ftle_per_window": ftle_per_window,
+        "e2_per_step": e2_per_step,
+        "ed_per_step": ed_per_step,
+        "d2_per_step": d2_per_step,
+        "cos_per_step": cos_per_step,
+        "e2_per_step_varnorm": e2_per_step_varnorm,
+        "ed_per_step_varnorm": ed_per_step_varnorm,
+        "d2_per_step_varnorm": d2_per_step_varnorm,
+        "cos_per_step_varnorm": cos_per_step_varnorm,
     }
 
 

@@ -265,6 +265,107 @@ def test_ecg_removed_eeg_loads_stage09b(tmp_path):
 
 
 @pytest.mark.skipif(not HAS_TORCH, reason="torch not installed in this env")
+def test_ecg_removed_eeg_scale_loads_stage09b_and_keeps_nans(tmp_path):
+    sess = _fake_session(tmp_path)
+    inter = sess / "intermediates"
+    n = 200
+    t = np.arange(n, dtype=np.float64) * 0.004
+    t_abs = pd.date_range("2026-06-22 14:00:00", periods=n, freq="4ms", tz="Asia/Tokyo")
+    template = np.linspace(-1.0, 1.0, n)
+    scale = np.linspace(2.0, 4.0, n)
+    scale[5] = np.nan
+    scale[9] = np.nan
+    _write_stage(
+        inter / "stage09b_ecg_remove.npz",
+        t,
+        t_abs,
+        eeg_clean_template=template,
+        eeg_clean_scale=scale,
+    )
+    frame = load_proper_frame(sess, "ecg_removed_eeg_scale")
+    stage06 = load_proper_frame(sess, "bipolar_eeg")
+    assert list(frame.columns) == ["datetime", "eeg_clean_scale"]
+    assert frame["datetime"].equals(stage06["datetime"])
+    assert frame["eeg_clean_scale"].iloc[0] == pytest.approx(2.0)
+    assert int(frame["eeg_clean_scale"].isna().sum()) == 2
+    assert bool(frame["eeg_clean_scale"].isna().iloc[5])
+    assert bool(frame["eeg_clean_scale"].isna().iloc[9])
+    template_frame = load_proper_frame(sess, "ecg_removed_eeg")
+    assert list(template_frame.columns) == ["datetime", "eeg_clean_template"]
+    assert template_frame["eeg_clean_template"].iloc[0] == pytest.approx(-1.0)
+
+    template_only = tmp_path / "template_only"
+    (template_only / "intermediates").mkdir(parents=True)
+    _write_stage(
+        template_only / "intermediates" / "stage09b_ecg_remove.npz",
+        t,
+        t_abs,
+        eeg_clean_template=template,
+    )
+    with pytest.raises(KeyError, match="eeg_clean_scale"):
+        load_proper_frame(template_only, "ecg_removed_eeg_scale")
+
+    bare = tmp_path / "no_stage09b_scale"
+    bare.mkdir()
+    missing = bare / "intermediates" / "stage09b_ecg_remove.npz"
+    with pytest.raises(FileNotFoundError) as exc:
+        load_proper_frame(bare, "ecg_removed_eeg_scale")
+    assert str(missing) in str(exc.value)
+    assert "eeg_clean_scale" in str(exc.value)
+
+
+@pytest.mark.skipif(not HAS_TORCH, reason="torch not installed in this env")
+def test_ecg_removed_eeg_scale_dataset_keeps_nans(tmp_path):
+    sess = _fake_session(tmp_path)
+    inter = sess / "intermediates"
+    n = 200
+    t = np.arange(n, dtype=np.float64) * 0.004
+    t_abs = pd.Timestamp("2026-06-22 14:00:00", tz="Asia/Tokyo") + pd.to_timedelta(
+        t, unit="s"
+    )
+    scale = np.linspace(2.0, 4.0, n)
+    scale[3] = np.nan
+    _write_stage(
+        inter / "stage09b_ecg_remove.npz",
+        t,
+        t_abs,
+        eeg_clean_scale=scale,
+    )
+    common = dict(
+        data_dir=str(tmp_path),
+        dataset_label="REC1",
+        mask_label="realtime",
+        split="train",
+        seq_len=16,
+        sample_rate=1,
+        skip_rate=1,
+        val_indices=0.0,
+        device="cpu",
+        overlap=False,
+        shuffle=False,
+    )
+    plain = XhroProper(
+        **common, x_dim=1, observation_process="ecg_removed_eeg_scale"
+    )
+    assert plain.sampling_freq == pytest.approx(250.0)
+    plain_seq = np.asarray(plain.seq)
+    assert plain_seq.shape[1] == 1
+    assert int(np.isnan(plain_seq).sum()) == 1
+    interpolated = XhroProper(
+        **common, x_dim=1, observation_process="ecg_removed_eeg_scale_interpolate"
+    )
+    assert np.asarray(interpolated.seq).shape[1] == 1
+    assert np.isfinite(np.asarray(interpolated.seq)).all()
+    indicated = XhroProper(
+        **common, x_dim=2, observation_process="ecg_removed_eeg_scale_indicate"
+    )
+    ind = np.asarray(indicated.seq)
+    assert ind.shape[1] == 2
+    assert ind[:, 1].min() == pytest.approx(0.0)
+    assert ind[:, 1].max() == pytest.approx(1.0)
+
+
+@pytest.mark.skipif(not HAS_TORCH, reason="torch not installed in this env")
 def test_ecg_removed_eeg_dataset_suffixes(tmp_path):
     sess = _fake_session(tmp_path)
     inter = sess / "intermediates"
