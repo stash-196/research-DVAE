@@ -9,14 +9,17 @@ Two `[Training]` keys. Blank keys take the new-run defaults:
   run once, at the full length. `auto_first` is the previous nested
   order: a full autonomous ramp, then KL, at every window length, and
   each sequence-length bump resets autonomous, KL, and noise.
-* `warmup_patience_start` blank is 2. In ``window_first`` every
-  sequence-length bump uses that start. Patience then rises only over
-  the autonomous and KL bumps:
+* `warmup_patience_start_frac` blank is 0.2. When
+  `warmup_patience_start` is blank, the start is
+  ``max(1, round(frac * early_stop_patience))``. In ``window_first``
+  every sequence-length bump uses that start. Patience then rises only
+  over the autonomous and KL bumps:
   ``start + (early_stop_patience - start) * k / K``, where ``k`` is how
   many of those bumps have already fired and ``K`` is how many are
   planned. The final stop uses the full ``early_stop_patience``. With
   no autonomous or KL bumps, window bumps stay at the start and the
-  stop uses the full patience. ``auto_first`` keeps a single patience,
+  stop uses the full patience. An explicit `warmup_patience_start`
+  overrides the fraction. ``auto_first`` keeps a single patience,
   ``early_stop_patience``, for every bump and the stop. ``off`` does
   the same in ``window_first``.
 
@@ -42,7 +45,7 @@ WARMUP_BUMP = 0.1
 ORDER_AUTO_FIRST = "auto_first"
 ORDER_WINDOW_FIRST = "window_first"
 DEFAULT_WARMUP_ORDER = ORDER_WINDOW_FIRST
-DEFAULT_WARMUP_PATIENCE_START = 2.0
+DEFAULT_WARMUP_PATIENCE_START_FRAC = 0.2
 _ORDERS = (ORDER_AUTO_FIRST, ORDER_WINDOW_FIRST)
 _UNSET = {"", "none", "null"}
 _PATIENCE_OFF = {"off", "false", "no"}
@@ -71,12 +74,53 @@ def resolve_warmup_order(value, legacy: bool = False) -> str:
     )
 
 
-def resolve_warmup_patience_start(value, legacy: bool = False) -> float | None:
-    """Blank is 2. ``off`` is the single ``early_stop_patience``.
+def resolve_warmup_patience_start_frac(value) -> float:
+    """Blank is 0.2. A set value is a fraction in ``[0, 1]``."""
+    if isinstance(value, bool):
+        raise ValueError(
+            "warmup_patience_start_frac must be a fraction in [0, 1], "
+            f"got {value!r}."
+        )
+    if isinstance(value, (int, float)):
+        number = float(value)
+    else:
+        text = "" if value is None else str(value).strip().lower()
+        if text in _UNSET:
+            return DEFAULT_WARMUP_PATIENCE_START_FRAC
+        try:
+            number = float(text)
+        except ValueError as exc:
+            raise ValueError(
+                "warmup_patience_start_frac must be a fraction in [0, 1], "
+                f"got {value!r}."
+            ) from exc
+    if not math.isfinite(number) or number < 0 or number > 1:
+        raise ValueError(
+            "warmup_patience_start_frac must be a fraction in [0, 1], "
+            f"got {value!r}."
+        )
+    return number
 
-    Legacy blank is that single patience too. A number is that start,
-    including under legacy. ``None`` here is a missing config value, not
-    the already-resolved "patience is off" stored on ``WarmupCurriculum``.
+
+def patience_start_from_fraction(frac, early_stop_patience) -> int:
+    """``max(1, round(frac * early_stop_patience))``."""
+    scaled = round(float(frac) * float(early_stop_patience))
+    return max(1, int(scaled))
+
+
+def resolve_warmup_patience_start(
+    value,
+    legacy: bool = False,
+    frac: float = DEFAULT_WARMUP_PATIENCE_START_FRAC,
+    early_stop_patience: int | None = None,
+) -> float | None:
+    """Blank uses the fraction. An explicit number overrides it.
+
+    ``off`` is the single ``early_stop_patience``. Legacy blank is that
+    single patience too, and it ignores the fraction. A number is that
+    start, including under legacy. ``None`` here is a missing config
+    value, not the already-resolved "patience is off" stored on
+    ``WarmupCurriculum``.
     """
     if isinstance(value, bool):
         if value is True:
@@ -92,7 +136,14 @@ def resolve_warmup_patience_start(value, legacy: bool = False) -> float | None:
         if text in _UNSET:
             if legacy:
                 return None
-            return DEFAULT_WARMUP_PATIENCE_START
+            if early_stop_patience is None:
+                raise ValueError(
+                    "early_stop_patience is required to scale "
+                    "warmup_patience_start_frac."
+                )
+            return float(
+                patience_start_from_fraction(frac, early_stop_patience)
+            )
         if text in _PATIENCE_OFF:
             return None
         try:
@@ -110,24 +161,48 @@ def resolve_warmup_patience_start(value, legacy: bool = False) -> float | None:
     return number
 
 
-def warmup_settings_from_config(cfg) -> tuple[str, float | None]:
-    """Read the two keys. Missing options match a blank template.
+def _configured_early_stop_patience(cfg) -> int | None:
+    if not cfg.has_section("Training"):
+        return None
+    if not cfg.has_option("Training", "early_stop_patience"):
+        return None
+    raw = cfg.get("Training", "early_stop_patience")
+    if raw is None or str(raw).strip() == "":
+        return None
+    return cfg.getint("Training", "early_stop_patience")
 
-    Blank is ``window_first`` and patience 2. ``legacy_defaults`` or
-    ``legacy_windowing`` changes those blanks to ``auto_first`` and a
-    single patience. Explicit values still win.
+
+def warmup_settings_from_config(cfg) -> tuple[str, float | None]:
+    """Read the warm-up keys. Missing options match a blank template.
+
+    Blank order is ``window_first``. A blank patience start is
+    ``max(1, round(frac * early_stop_patience))`` with frac 0.2.
+    ``legacy_defaults`` or ``legacy_windowing`` changes those blanks to
+    ``auto_first`` and a single patience. An explicit patience number
+    overrides the fraction, including under the legacy switch.
     """
     from dvae.run_options import legacy_defaults_from_config
 
     legacy = legacy_defaults_from_config(cfg)
     order_raw = None
     patience_raw = None
+    frac_raw = None
     if cfg.has_section("Training"):
         order_raw = cfg.get("Training", "warmup_order", fallback=None)
-        patience_raw = cfg.get("Training", "warmup_patience_start", fallback=None)
+        patience_raw = cfg.get(
+            "Training", "warmup_patience_start", fallback=None
+        )
+        frac_raw = cfg.get(
+            "Training", "warmup_patience_start_frac", fallback=None
+        )
     return (
         resolve_warmup_order(order_raw, legacy=legacy),
-        resolve_warmup_patience_start(patience_raw, legacy=legacy),
+        resolve_warmup_patience_start(
+            patience_raw,
+            legacy=legacy,
+            frac=resolve_warmup_patience_start_frac(frac_raw),
+            early_stop_patience=_configured_early_stop_patience(cfg),
+        ),
     )
 
 

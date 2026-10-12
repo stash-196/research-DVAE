@@ -21,6 +21,7 @@ from dvae.warmup_curriculum import (
     format_patience,
     auto_kl_patience,
     kl_step_count,
+    patience_start_from_fraction,
     planned_bump_count,
     simulate_recon_warmup,
     warmup_action,
@@ -57,18 +58,23 @@ def _kinds(sim):
     return [event["kind"] for event in sim.events]
 
 
-def test_blank_config_uses_window_first_and_patience_2():
+def test_blank_config_uses_window_first_and_the_patience_fraction():
     cfg = configparser.ConfigParser()
-    cfg.read_string("[Training]\nwarmup_order =\nwarmup_patience_start =\n")
+    cfg.read_string(
+        "[Training]\n"
+        "warmup_order =\n"
+        "warmup_patience_start =\n"
+        "early_stop_patience = 10\n"
+    )
     order, start = warmup_settings_from_config(cfg)
     assert order == "window_first"
     assert start == 2.0
 
     cfg = configparser.ConfigParser()
-    cfg.read_string("[Training]\nepochs = 3\n")
+    cfg.read_string("[Training]\nepochs = 3\nearly_stop_patience = 15\n")
     order, start = warmup_settings_from_config(cfg)
     assert order == "window_first"
-    assert start == 2.0
+    assert start == 3.0
 
     cfg = configparser.ConfigParser()
     cfg.read_string(
@@ -81,14 +87,82 @@ def test_blank_config_uses_window_first_and_patience_2():
     assert start is None
 
     cfg = configparser.ConfigParser()
-    cfg.read_string("[Training]\nwarmup_patience_start = none\n")
+    cfg.read_string(
+        "[Training]\nwarmup_patience_start = none\nearly_stop_patience = 10\n"
+    )
     assert warmup_settings_from_config(cfg) == ("window_first", 2.0)
     cfg = configparser.ConfigParser()
-    cfg.read_string("[Training]\nwarmup_patience_start = null\n")
-    assert warmup_settings_from_config(cfg)[1] == 2.0
+    cfg.read_string(
+        "[Training]\nwarmup_patience_start = null\nearly_stop_patience = 1\n"
+    )
+    assert warmup_settings_from_config(cfg)[1] == 1.0
     cfg = configparser.ConfigParser()
     cfg.read_string("[Training]\nwarmup_patience_start = 4\n")
     assert warmup_settings_from_config(cfg)[1] == 4.0
+
+    with pytest.raises(ValueError, match="early_stop_patience is required"):
+        warmup_settings_from_config(_cfg("[Training]\nwarmup_patience_start =\n"))
+
+
+def test_patience_start_fraction_scales_early_stop_and_an_integer_overrides():
+    assert patience_start_from_fraction(0.2, 10) == 2
+    assert patience_start_from_fraction(0.2, 1) == 1
+    assert patience_start_from_fraction(0.2, 3) == 1
+    assert patience_start_from_fraction(0.2, 7) == 1
+    assert patience_start_from_fraction(0.2, 8) == 2
+    assert patience_start_from_fraction(0.2, 15) == 3
+    assert patience_start_from_fraction(0.2, 0) == 1
+    assert patience_start_from_fraction(0.5, 10) == 5
+
+    cfg = _cfg(
+        "[Training]\n"
+        "warmup_patience_start_frac = 0.5\n"
+        "warmup_patience_start =\n"
+        "early_stop_patience = 10\n"
+    )
+    assert warmup_settings_from_config(cfg) == ("window_first", 5.0)
+
+    cfg = _cfg(
+        "[Training]\n"
+        "warmup_patience_start_frac = 0.5\n"
+        "warmup_patience_start = 4\n"
+        "early_stop_patience = 10\n"
+    )
+    assert warmup_settings_from_config(cfg)[1] == 4.0
+
+    cfg = _cfg(
+        "[Training]\n"
+        "warmup_patience_start_frac = 0.5\n"
+        "warmup_patience_start =\n"
+        "early_stop_patience = 10\n"
+        "[DataFrame]\n"
+        "legacy_defaults = true\n"
+    )
+    assert warmup_settings_from_config(cfg) == ("auto_first", None)
+
+    assert warmup_settings_from_config(
+        _cfg("[Training]\nearly_stop_patience = 8\n")
+    )[1] == 2.0
+    assert warmup_settings_from_config(
+        _cfg("[Training]\nearly_stop_patience = 7\n")
+    )[1] == 1.0
+    assert warmup_settings_from_config(
+        _cfg(
+            "[Training]\n"
+            "warmup_patience_start_frac = none\n"
+            "early_stop_patience = 10\n"
+        )
+    )[1] == 2.0
+
+    for bad in ("1.5", "-0.1", "off"):
+        with pytest.raises(ValueError):
+            warmup_settings_from_config(
+                _cfg(
+                    "[Training]\n"
+                    f"warmup_patience_start_frac = {bad}\n"
+                    "early_stop_patience = 10\n"
+                )
+            )
 
 
 def test_legacy_switch_restores_auto_first_and_a_single_patience():
@@ -122,15 +196,18 @@ def test_legacy_switch_restores_auto_first_and_a_single_patience():
     assert warmup_settings_from_config(cfg) == ("auto_first", None)
 
 
-def test_template_documents_window_first_and_patience_2():
+def test_template_documents_window_first_and_patience_fraction():
     text = (
         Path(__file__).resolve().parents[1]
         / "config/general_signal/cfg_base_template.ini"
     ).read_text()
     assert "warmup_order = {warmup_order}" in text
+    assert (
+        "warmup_patience_start_frac = {warmup_patience_start_frac}" in text
+    )
     assert "warmup_patience_start = {warmup_patience_start}" in text
     assert "Blank = window_first" in text
-    assert "Blank = 2." in text
+    assert "Blank = 0.2" in text
     assert "legacy_defaults = {legacy_defaults}" in text
     assert "legacy_windowing = {legacy_windowing}" in text
 

@@ -354,7 +354,9 @@ def visualize_combined_metrics(
         range(len(cpt_patience_epochs)), cpt_patience_epochs, label="cpt_patience"
     )
     # Dashed threshold: the patience that would fire a bump or the final stop
-    # on that epoch. Constant when warmup_patience_start is unset.
+    # on that epoch. Held at the warm-up start during sequence growth, then
+    # rising over autonomous and KL bumps. Flat when the run uses a single
+    # early_stop_patience.
     if patience_threshold_epochs is not None:
         axs[3].step(
             range(len(patience_threshold_epochs)),

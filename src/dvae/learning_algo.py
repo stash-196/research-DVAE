@@ -682,9 +682,11 @@ class LearningAlgorithm:
                 if len(restored) == len(self._val_criteria):
                     self._val_reference = restored
 
-        # Blank warmup_order is window_first. Blank warmup_patience_start
-        # is 2: sequence-length bumps hold that value, then it rises over
-        # the autonomous and KL bumps. auto_first uses early_stop_patience
+        # Blank warmup_order is window_first. A blank warmup_patience_start
+        # is max(1, round(frac * early_stop_patience)), frac 0.2.
+        # Sequence-length bumps hold that value, then it rises over the
+        # autonomous and KL bumps. An explicit warmup_patience_start
+        # overrides the fraction. auto_first uses early_stop_patience
         # for every bump. legacy_defaults or legacy_windowing restores
         # auto_first and that single patience when those keys are blank.
         warmup_order, warmup_patience_start = warmup_settings_from_config(self.cfg)
