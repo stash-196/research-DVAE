@@ -305,8 +305,10 @@ def regularizer_losses(model, target: torch.Tensor, settings: RegularizerSetting
 OPTIONAL_HISTORY_KEYS = (
     "train_subband",
     "val_subband",
+    "subband_warm_values",
     "subband_loss_weight_values",
     "train_decorr",
     "val_decorr",
+    "decorr_warm_values",
     "decorr_loss_weight_values",
 )

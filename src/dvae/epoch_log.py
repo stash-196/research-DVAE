@@ -33,7 +33,7 @@ TIMING_PLOT_LABELS = (
     ("time_eval", "eval"),
 )
 
-_BUMP_TYPES = ("window", "auto", "noise", "KL")
+_BUMP_TYPES = ("window", "auto", "noise", "KL", "subband", "decorr")
 
 
 def format_timing_line(epoch, times) -> str:
@@ -74,7 +74,12 @@ def format_new_best_line(epoch, score, raw, norm) -> str:
 
 
 def format_bump_line(row) -> str:
-    """One knob change. ``type`` is window, auto, noise, or KL."""
+    """One knob change.
+
+    ``type`` is window, auto, noise, KL, subband, or decorr. The
+    subband and decorr rows record the warm-up scale, the same 0–1
+    progress the weight is multiplied by, not the weighted loss.
+    """
     return (
         "Warm-up bump epoch={epoch} type={type} old={old:.6g} new={new:.6g} "
         "patience_before={patience:.6g} patience_after={patience_after:.6g} "
@@ -109,7 +114,8 @@ def make_bump_row(epoch, kind, old, new, patience_before, patience_after, cpt_pa
     """One table row. ``patience`` is the active patience that fired the bump."""
     if kind not in _BUMP_TYPES:
         raise ValueError(
-            "bump type must be window, auto, noise, or KL, got {!r}.".format(kind)
+            "bump type must be window, auto, noise, KL, subband, or decorr, "
+            "got {!r}.".format(kind)
         )
     return {
         "epoch": int(epoch),

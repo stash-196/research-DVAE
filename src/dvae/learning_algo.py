@@ -73,9 +73,9 @@ from dvae.epoch_log import (
 )
 from dvae.wall_clock import sync_cuda
 from dvae.regularizers import (
-    effective_weight,
     parse_regularizer_settings,
     regularizer_losses,
+    warmup_progress,
 )
 from dvae.warmup_curriculum import (
     WarmupCurriculum,
@@ -985,13 +985,19 @@ class LearningAlgorithm:
         time_eval = series_or_new(loss_log, "time_eval", epochs)
         train_subband = series_or_new(loss_log, "train_subband", epochs)
         val_subband = series_or_new(loss_log, "val_subband", epochs)
+        subband_warm_values = series_or_new(
+            loss_log, "subband_warm_values", epochs, fill="hold"
+        )
         subband_loss_weight_values = series_or_new(
-            loss_log, "subband_loss_weight_values", epochs
+            loss_log, "subband_loss_weight_values", epochs, fill="hold"
         )
         train_decorr = series_or_new(loss_log, "train_decorr", epochs)
         val_decorr = series_or_new(loss_log, "val_decorr", epochs)
+        decorr_warm_values = series_or_new(
+            loss_log, "decorr_warm_values", epochs, fill="hold"
+        )
         decorr_loss_weight_values = series_or_new(
-            loss_log, "decorr_loss_weight_values", epochs
+            loss_log, "decorr_loss_weight_values", epochs, fill="hold"
         )
         bump_events = []
         if isinstance(loss_log, dict) and isinstance(loss_log.get("bump_events"), list):
@@ -1218,11 +1224,15 @@ class LearningAlgorithm:
                     "time_eval": time_eval,
                     "train_subband": train_subband,
                     "val_subband": val_subband,
+                    "subband_warm_values": subband_warm_values,
                     "subband_loss_weight_values": subband_loss_weight_values,
                     "train_decorr": train_decorr,
                     "val_decorr": val_decorr,
+                    "decorr_warm_values": decorr_warm_values,
                     "decorr_loss_weight_values": decorr_loss_weight_values,
                 },
+                subband_enabled=self._regularizers.subband_on,
+                decorr_enabled=self._regularizers.decorr_on,
                 dataset_stats=dataset_stats,
                 sigmas_history=(
                     sigmas_history
@@ -1266,20 +1276,32 @@ class LearningAlgorithm:
             ran_epoch = True
             # The bump that ends this epoch increments auto_kl_done afterwards,
             # so the loss of the trigger epoch still uses the previous scale.
-            sub_w = effective_weight(
-                self._regularizers.subband_weight,
-                self._regularizers.subband_warmup,
-                auto_kl_done,
-                warmup.autonomous_steps,
-                warmup.kl_steps,
+            # A disabled term stores a zero scale and a zero weight. The
+            # warm-up panel hides those series.
+            sub_scale = (
+                warmup_progress(
+                    auto_kl_done,
+                    warmup.autonomous_steps,
+                    warmup.kl_steps,
+                    self._regularizers.subband_warmup,
+                )
+                if self._regularizers.subband_on
+                else 0.0
             )
-            dec_w = effective_weight(
-                self._regularizers.decorr_weight,
-                self._regularizers.decorr_warmup,
-                auto_kl_done,
-                warmup.autonomous_steps,
-                warmup.kl_steps,
+            dec_scale = (
+                warmup_progress(
+                    auto_kl_done,
+                    warmup.autonomous_steps,
+                    warmup.kl_steps,
+                    self._regularizers.decorr_warmup,
+                )
+                if self._regularizers.decorr_on
+                else 0.0
             )
+            sub_w = float(self._regularizers.subband_weight) * sub_scale
+            dec_w = float(self._regularizers.decorr_weight) * dec_scale
+            subband_warm_values[epoch] = sub_scale
+            decorr_warm_values[epoch] = dec_scale
             subband_loss_weight_values[epoch] = sub_w
             decorr_loss_weight_values[epoch] = dec_w
 
@@ -2110,6 +2132,34 @@ class LearningAlgorithm:
                         changes.append(("auto", old_auto, float(current_auto_warm)))
                     if bumped.noise_bumped:
                         changes.append(("noise", old_noise, float(current_noise_warm)))
+                # The scale used next epoch. A window bump does not move
+                # auto_kl_done, so these rows stay empty then. The row's
+                # epoch is the one that decided the bump; the figure draws
+                # the line on the following epoch, where the series changes.
+                for kind, enabled, warmup_on, old_scale in (
+                    (
+                        "subband",
+                        self._regularizers.subband_on,
+                        self._regularizers.subband_warmup,
+                        sub_scale,
+                    ),
+                    (
+                        "decorr",
+                        self._regularizers.decorr_on,
+                        self._regularizers.decorr_warmup,
+                        dec_scale,
+                    ),
+                ):
+                    if not enabled or not warmup_on:
+                        continue
+                    new_scale = warmup_progress(
+                        auto_kl_done,
+                        warmup.autonomous_steps,
+                        warmup.kl_steps,
+                        True,
+                    )
+                    if abs(new_scale - float(old_scale)) > 1e-12:
+                        changes.append((kind, float(old_scale), new_scale))
                 for kind, old_value, new_value in changes:
                     row = make_bump_row(
                         epoch,
@@ -2173,6 +2223,18 @@ class LearningAlgorithm:
                 auto_warm_epochs = warmup_change_epochs(auto_warm_values[:shown])
                 noise_warm_epochs = warmup_change_epochs(noise_warm_values[:shown])
                 sequence_len_epochs = warmup_change_epochs(sequence_len_values[:shown])
+                # Disabled terms pass None, so the warm-up panel and the
+                # bump lines leave them out.
+                subband_line_epochs = (
+                    warmup_change_epochs(subband_warm_values[:shown])
+                    if self._regularizers.subband_on
+                    else None
+                )
+                decorr_line_epochs = (
+                    warmup_change_epochs(decorr_warm_values[:shown])
+                    if self._regularizers.decorr_on
+                    else None
+                )
 
                 visualize_total_loss(
                     train_loss[: epoch + 1],
@@ -2186,6 +2248,8 @@ class LearningAlgorithm:
                     self.noise_sampling_method,
                     save_figures_dir,
                     tag,
+                    subband_warm_epochs=subband_line_epochs,
+                    decorr_warm_epochs=decorr_line_epochs,
                 )
                 visualize_val_criteria(
                     self._val_criteria,
@@ -2230,6 +2294,8 @@ class LearningAlgorithm:
                         if self._monitor_spectrum
                         else None
                     ),
+                    subband_warm_epochs=subband_line_epochs,
+                    decorr_warm_epochs=decorr_line_epochs,
                 )
                 visualize_total_loss(
                     train_loss[: epoch + 1],
@@ -2244,6 +2310,8 @@ class LearningAlgorithm:
                     save_figures_dir,
                     tag,
                     log_scale=True,
+                    subband_warm_epochs=subband_line_epochs,
+                    decorr_warm_epochs=decorr_line_epochs,
                 )
 
                 if self.model_name in ["VRNN", "MT_VRNN"]:
@@ -2259,6 +2327,8 @@ class LearningAlgorithm:
                         self.noise_sampling_method,
                         save_figures_dir,
                         tag,
+                        subband_warm_epochs=subband_line_epochs,
+                        decorr_warm_epochs=decorr_line_epochs,
                     )
                     visualize_recon_loss(
                         train_recon[: epoch + 1],
@@ -2273,6 +2343,8 @@ class LearningAlgorithm:
                         save_figures_dir,
                         tag,
                         log_scale=True,
+                        subband_warm_epochs=subband_line_epochs,
+                        decorr_warm_epochs=decorr_line_epochs,
                     )
                     visualize_kld_loss(
                         train_kl[: epoch + 1],
@@ -2286,6 +2358,8 @@ class LearningAlgorithm:
                         self.noise_sampling_method,
                         save_figures_dir,
                         tag,
+                        subband_warm_epochs=subband_line_epochs,
+                        decorr_warm_epochs=decorr_line_epochs,
                     )
                     visualize_kld_loss(
                         train_kl[: epoch + 1],
@@ -2300,6 +2374,8 @@ class LearningAlgorithm:
                         save_figures_dir,
                         tag,
                         log_scale=True,
+                        subband_warm_epochs=subband_line_epochs,
+                        decorr_warm_epochs=decorr_line_epochs,
                     )
 
                 visualize_combined_metrics(
@@ -2337,6 +2413,28 @@ class LearningAlgorithm:
                         "time_plot": time_plot[: epoch + 1],
                         "time_eval": time_eval[: epoch + 1],
                     },
+                    subband_warm_values=(
+                        subband_warm_values[:shown]
+                        if self._regularizers.subband_on
+                        else None
+                    ),
+                    subband_loss_weight_values=(
+                        subband_loss_weight_values[:shown]
+                        if self._regularizers.subband_on
+                        else None
+                    ),
+                    decorr_warm_values=(
+                        decorr_warm_values[:shown]
+                        if self._regularizers.decorr_on
+                        else None
+                    ),
+                    decorr_loss_weight_values=(
+                        decorr_loss_weight_values[:shown]
+                        if self._regularizers.decorr_on
+                        else None
+                    ),
+                    subband_warm_epochs=subband_line_epochs,
+                    decorr_warm_epochs=decorr_line_epochs,
                 )
 
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
@@ -2357,6 +2455,8 @@ class LearningAlgorithm:
                             else None
                         ),
                         sequence_len_epochs,
+                        subband_warm_epochs=subband_line_epochs,
+                        decorr_warm_epochs=decorr_line_epochs,
                     )
                     visualize_alpha_history(
                         sigmas_history[:, : epoch + 1],
@@ -2375,6 +2475,8 @@ class LearningAlgorithm:
                             else None
                         ),
                         sequence_len_epochs,
+                        subband_warm_epochs=subband_line_epochs,
+                        decorr_warm_epochs=decorr_line_epochs,
                     )
 
                 # Same sigma/alpha history figures for PLRNN / shPLRNN diagonal A.
@@ -2399,6 +2501,8 @@ class LearningAlgorithm:
                     sequence_len_epochs,
                     visualize_sigma_history=visualize_sigma_history,
                     visualize_alpha_history=visualize_alpha_history,
+                    subband_warm_epochs=subband_line_epochs,
+                    decorr_warm_epochs=decorr_line_epochs,
                 )
 
                 # Visualize model parameters

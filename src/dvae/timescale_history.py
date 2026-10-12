@@ -116,6 +116,8 @@ def save_plrnn_timescale_figures(
     *,
     visualize_sigma_history=None,
     visualize_alpha_history=None,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     """Write the same sigma/alpha history figures MT writes, for diagonal A.
 
@@ -147,6 +149,8 @@ def save_plrnn_timescale_figures(
         noise_warm_epochs,
         sequence_len_epochs,
         file_tag=file_tag,
+        subband_warm_epochs=subband_warm_epochs,
+        decorr_warm_epochs=decorr_warm_epochs,
         series_name="A_sigma",
         legend_title="A_sigma values",
         ylabel="A_sigma",
@@ -161,6 +165,8 @@ def save_plrnn_timescale_figures(
         noise_warm_epochs,
         sequence_len_epochs,
         file_tag=file_tag,
+        subband_warm_epochs=subband_warm_epochs,
+        decorr_warm_epochs=decorr_warm_epochs,
         alpha_from_sigma=diagonal_A_from_sigmas,
         series_name="A",
         legend_title="diagonal A",

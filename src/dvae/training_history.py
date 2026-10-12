@@ -55,7 +55,17 @@ Every new history also stores per-epoch wall times (``time_train``,
 ``time_val``, ``time_val_forward``, ``time_spectrum``, ``time_drift``,
 ``time_rosenstein``, ``time_plot``, ``time_eval``) and ``bump_events``,
 the warm-up table ``(epoch, type, old, new, patience)`` the vertical
-lines are rebuilt from.
+lines are rebuilt from. Subband and decorr rows in that table use the
+same columns. Their ``old`` and ``new`` values are the warm-up scale.
+
+When a training run enables subband or decorr, the history also stores
+that term's warm-up scale (``subband_warm_values`` /
+``decorr_warm_values``, the 0–1 progress) and its effective weight
+(``subband_loss_weight_values`` / ``decorr_loss_weight_values``) beside
+the autonomous, KL, noise, window, and patience series.
+``subband_enabled`` and ``decorr_enabled`` say whether the warm-up
+panel should draw them. A disabled term stays out of that panel and
+off the bump lines.
 """
 
 from __future__ import annotations
@@ -148,6 +158,10 @@ HOLD_FILL_KEYS = frozenset(
         "mean_start_shift",
         "patience_threshold_epochs",
         "best_state_epochs",
+        "subband_warm_values",
+        "subband_loss_weight_values",
+        "decorr_warm_values",
+        "decorr_loss_weight_values",
     }
 )
 
@@ -276,6 +290,8 @@ def build_training_history(
     ftle_per_window=None,
     lle_gt_per_window=None,
     bump_events=None,
+    subband_enabled=None,
+    decorr_enabled=None,
 ) -> dict:
     """One dict for the checkpoint ``loss_log`` and for ``loss_model.pckl``.
 
@@ -311,10 +327,23 @@ def build_training_history(
             history[key] = _slice_1d(series[key], end)
     # Subband and decorr are optional. Callers that never pass them
     # (older tests, older checkpoints) keep working. A training run
-    # passes zeros when the term is off.
+    # passes the scale and the effective weight every epoch, and sets
+    # the enabled flags so a redraw can hide a term that was off.
     for key in OPTIONAL_HISTORY_KEYS:
         if key in series:
             history[key] = _slice_1d(series[key], end)
+    if subband_enabled is not None:
+        history["subband_enabled"] = bool(subband_enabled)
+    if decorr_enabled is not None:
+        history["decorr_enabled"] = bool(decorr_enabled)
+    if "subband_warm_values" in history:
+        history["subband_warm_epochs"] = warmup_change_epochs(
+            history["subband_warm_values"]
+        )
+    if "decorr_warm_values" in history:
+        history["decorr_warm_epochs"] = warmup_change_epochs(
+            history["decorr_warm_values"]
+        )
     if drift_horizon is not None:
         history["val_drift_horizon"] = int(drift_horizon)
     if drift_flip is not None:
@@ -715,6 +744,27 @@ def regenerate_training_figures(history, save_figures_dir, tag=None, drift_norm=
     auto_warm_epochs = _markers("auto_warm_epochs", "auto_warm_values")
     noise_warm_epochs = _markers("noise_warm_epochs", "noise_warm_values")
     sequence_len_epochs = _markers("sequence_len_epochs", "sequence_len_values")
+
+    def _enabled_regularizer(prefix):
+        """Scale, effective weight, and bump epochs, or Nones when hidden."""
+        if not history.get(prefix + "_enabled"):
+            return None, None, None
+        scale_key = prefix + "_warm_values"
+        weight_key = prefix + "_loss_weight_values"
+        if scale_key not in history and weight_key not in history:
+            return None, None, None
+        scale = _series(scale_key) if scale_key in history else None
+        weight = _series(weight_key) if weight_key in history else None
+        if prefix + "_warm_epochs" in history:
+            epochs = np.asarray(history[prefix + "_warm_epochs"]).reshape(-1)
+        elif scale_key in history:
+            epochs = warmup_change_epochs(scale)
+        else:
+            epochs = warmup_change_epochs(weight)
+        return scale, weight, epochs
+
+    sub_scale, sub_weight, sub_epochs = _enabled_regularizer("subband")
+    dec_scale, dec_weight, dec_epochs = _enabled_regularizer("decorr")
     delta_threshold = float(history.get("delta_threshold", 1e-4))
     criteria = _criteria_names(history)
     dataset_stats = history.get("dataset_stats")
@@ -733,6 +783,8 @@ def regenerate_training_figures(history, save_figures_dir, tag=None, drift_norm=
         noise_method,
         save_figures_dir,
         file_tag,
+        subband_warm_epochs=sub_epochs,
+        decorr_warm_epochs=dec_epochs,
     )
     visualize_total_loss(
         train_loss,
@@ -747,6 +799,8 @@ def regenerate_training_figures(history, save_figures_dir, tag=None, drift_norm=
         save_figures_dir,
         file_tag,
         log_scale=True,
+        subband_warm_epochs=sub_epochs,
+        decorr_warm_epochs=dec_epochs,
     )
     include_spectrum, spectrum = _spectrum_for_figure(history, criteria)
     if spectrum is not None:
@@ -776,6 +830,8 @@ def regenerate_training_figures(history, save_figures_dir, tag=None, drift_norm=
         recon_k=_recon_k_for_figure(history, n),
         lyapunov=_lyapunov_for_figure(history, n),
         drift_norm=drift_norm,
+        subband_warm_epochs=sub_epochs,
+        decorr_warm_epochs=dec_epochs,
     )
     if model_name in ("VRNN", "MT_VRNN"):
         visualize_recon_loss(
@@ -790,6 +846,8 @@ def regenerate_training_figures(history, save_figures_dir, tag=None, drift_norm=
             noise_method,
             save_figures_dir,
             file_tag,
+            subband_warm_epochs=sub_epochs,
+            decorr_warm_epochs=dec_epochs,
         )
         visualize_recon_loss(
             _series("train_recon"),
@@ -804,6 +862,8 @@ def regenerate_training_figures(history, save_figures_dir, tag=None, drift_norm=
             save_figures_dir,
             file_tag,
             log_scale=True,
+            subband_warm_epochs=sub_epochs,
+            decorr_warm_epochs=dec_epochs,
         )
         visualize_kld_loss(
             _series("train_kl"),
@@ -817,6 +877,8 @@ def regenerate_training_figures(history, save_figures_dir, tag=None, drift_norm=
             noise_method,
             save_figures_dir,
             file_tag,
+            subband_warm_epochs=sub_epochs,
+            decorr_warm_epochs=dec_epochs,
         )
         visualize_kld_loss(
             _series("train_kl"),
@@ -831,6 +893,8 @@ def regenerate_training_figures(history, save_figures_dir, tag=None, drift_norm=
             save_figures_dir,
             file_tag,
             log_scale=True,
+            subband_warm_epochs=sub_epochs,
+            decorr_warm_epochs=dec_epochs,
         )
     patience = history.get("patience_threshold_epochs")
     visualize_combined_metrics(
@@ -859,6 +923,12 @@ def regenerate_training_figures(history, save_figures_dir, tag=None, drift_norm=
         mean_start_shift=_series("mean_start_shift"),
         dataset_stats=dataset_stats,
         timing=_timing_for_figure(history, n),
+        subband_warm_values=sub_scale,
+        subband_loss_weight_values=sub_weight,
+        decorr_warm_values=dec_scale,
+        decorr_loss_weight_values=dec_weight,
+        subband_warm_epochs=sub_epochs,
+        decorr_warm_epochs=dec_epochs,
     )
     sigmas = history.get("sigmas_history")
     a_sigmas = history.get("A_sigmas_history")
@@ -877,6 +947,8 @@ def regenerate_training_figures(history, save_figures_dir, tag=None, drift_norm=
             auto_warm_epochs if auto_method in ("ss", "sm") else None,
             noise_warm_epochs if noise_method in ("ss", "sm") else None,
             sequence_len_epochs,
+            subband_warm_epochs=sub_epochs,
+            decorr_warm_epochs=dec_epochs,
         )
         visualize_alpha_history(
             sigmas,
@@ -887,6 +959,8 @@ def regenerate_training_figures(history, save_figures_dir, tag=None, drift_norm=
             auto_warm_epochs if auto_method in ("ss", "sm") else None,
             noise_warm_epochs if noise_method in ("ss", "sm") else None,
             sequence_len_epochs,
+            subband_warm_epochs=sub_epochs,
+            decorr_warm_epochs=dec_epochs,
         )
     if a_sigmas is not None:
         a_sigmas = np.asarray(a_sigmas)
@@ -903,6 +977,8 @@ def regenerate_training_figures(history, save_figures_dir, tag=None, drift_norm=
             sequence_len_epochs,
             visualize_sigma_history=visualize_sigma_history,
             visualize_alpha_history=visualize_alpha_history,
+            subband_warm_epochs=sub_epochs,
+            decorr_warm_epochs=dec_epochs,
         )
     after = set(os.listdir(save_figures_dir))
     return [

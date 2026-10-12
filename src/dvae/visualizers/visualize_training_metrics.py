@@ -3,6 +3,22 @@ import os
 import numpy as np
 
 
+def draw_regularizer_warmup_lines(ax, subband_warm_epochs=None, decorr_warm_epochs=None):
+    """Vertical markers for subband and decorr scale changes.
+
+    Orange dashed: subband warm-up scale. Purple dotted: decorr warm-up
+    scale. ``None`` draws nothing, which is how a disabled term stays
+    off the figure. A passed list is the same change-epoch set the
+    other warm-up lines use, including the leading 0.
+    """
+    if subband_warm_epochs is not None:
+        for epoch in np.asarray(subband_warm_epochs).reshape(-1):
+            ax.axvline(x=float(epoch), color="tab:orange", linestyle=(0, (2, 2)))
+    if decorr_warm_epochs is not None:
+        for epoch in np.asarray(decorr_warm_epochs).reshape(-1):
+            ax.axvline(x=float(epoch), color="tab:purple", linestyle=(0, (1, 1)))
+
+
 def draw_loss_warmup_lines(
     ax,
     model_name,
@@ -12,12 +28,16 @@ def draw_loss_warmup_lines(
     auto_warm_epochs,
     noise_warm_epochs,
     sequence_len_epochs,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     """Vertical warmup markers used by the loss-over-epochs figure.
 
     Cyan dashed: KL warm-up, VRNN / MT_VRNN only. Red dotted: autonomous
     warm-up when the sampler is ss or sm. Green dash-dot: noise warm-up
     on the same samplers. Magenta dash-dot: sequence-length changes.
+    Orange and purple mark subband and decorr scale changes when those
+    terms are enabled.
     """
     if model_name in ["VRNN", "MT_VRNN"]:
         for kl_warm_epoch in kl_warm_epochs:
@@ -30,6 +50,7 @@ def draw_loss_warmup_lines(
             ax.axvline(x=noise_warm_epoch, color="g", linestyle="-.")
     for sequence_len_epoch in sequence_len_epochs:
         ax.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
+    draw_regularizer_warmup_lines(ax, subband_warm_epochs, decorr_warm_epochs)
 
 
 # Four Appendix B terms. Log figures use a symlog axis so a negative
@@ -274,7 +295,18 @@ def _drift_linthresh(terms) -> float:
     return _symlog_linthresh(list(terms.values()))
 
 
-def _draw_warmup(ax, model_name, auto_sampling_method, noise_sampling_method, kl_warm_epochs, auto_warm_epochs, noise_warm_epochs, sequence_len_epochs):
+def _draw_warmup(
+    ax,
+    model_name,
+    auto_sampling_method,
+    noise_sampling_method,
+    kl_warm_epochs,
+    auto_warm_epochs,
+    noise_warm_epochs,
+    sequence_len_epochs,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
+):
     draw_loss_warmup_lines(
         ax,
         model_name,
@@ -284,6 +316,8 @@ def _draw_warmup(ax, model_name, auto_sampling_method, noise_sampling_method, kl
         auto_warm_epochs,
         noise_warm_epochs,
         sequence_len_epochs,
+        subband_warm_epochs,
+        decorr_warm_epochs,
     )
 
 
@@ -426,6 +460,8 @@ def build_val_criteria_figure(
     lyapunov=None,
     log_scale=False,
     normalized=False,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     """Recon, spectrum, the four drift terms overlaid, then Lyapunov.
 
@@ -498,6 +534,8 @@ def build_val_criteria_figure(
             auto_warm_epochs,
             noise_warm_epochs,
             sequence_len_epochs,
+            subband_warm_epochs,
+            decorr_warm_epochs,
         )
         if kind == "overlay":
             _draw_drift_overlay(
@@ -563,6 +601,8 @@ def build_drift_panels_figure(
     best_epoch=None,
     log_scale=False,
     normalized=False,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     """One subplot per Appendix B term, with one shared y range.
 
@@ -595,6 +635,8 @@ def build_drift_panels_figure(
             auto_warm_epochs,
             noise_warm_epochs,
             sequence_len_epochs,
+            subband_warm_epochs,
+            decorr_warm_epochs,
         )
         selected = _criterion_selected(name, criteria, normalized=normalized)
         ylabel = _DRIFT_PANEL_LABELS[name]
@@ -646,6 +688,8 @@ def visualize_val_criteria(
     recon_k=None,
     lyapunov=None,
     drift_norm="both",
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     """Save both validation layouts, each raw and variance-normalised.
 
@@ -675,6 +719,8 @@ def visualize_val_criteria(
         drift=drift,
         recon_k=recon_k,
         lyapunov=lyapunov,
+        subband_warm_epochs=subband_warm_epochs,
+        decorr_warm_epochs=decorr_warm_epochs,
     )
     modes = []
     if drift_norm in ("raw", "both"):
@@ -708,6 +754,8 @@ def visualize_val_criteria(
             noise_sampling_method=noise_sampling_method,
             criteria=criteria,
             best_epoch=best_epoch,
+            subband_warm_epochs=subband_warm_epochs,
+            decorr_warm_epochs=decorr_warm_epochs,
         )
         for normalized, norm_suffix in modes:
             if _drift_arrays(drift, normalized=normalized) is None:
@@ -737,6 +785,8 @@ def visualize_total_loss(
     save_figures_dir,
     tag,
     log_scale=False,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     plt.clf()
     fig = plt.figure(figsize=(8, 6))
@@ -750,6 +800,8 @@ def visualize_total_loss(
         auto_warm_epochs,
         noise_warm_epochs,
         sequence_len_epochs,
+        subband_warm_epochs,
+        decorr_warm_epochs,
     )
     plt.plot(train_loss, label="training loss")
     plt.plot(val_loss, label="validation loss")
@@ -778,6 +830,8 @@ def visualize_recon_loss(
     save_figures_dir,
     tag,
     log_scale=False,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     plt.clf()
     fig = plt.figure(figsize=(8, 6))
@@ -793,6 +847,9 @@ def visualize_recon_loss(
             plt.axvline(x=noise_warm_epoch, color="g", linestyle="-.")
     for sequence_len_epoch in sequence_len_epochs:
         plt.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
+    draw_regularizer_warmup_lines(
+        plt.gca(), subband_warm_epochs, decorr_warm_epochs
+    )
     plt.plot(train_recon, label="Training")
     plt.plot(val_recon, label="Validation")
     plt.legend(fontsize=16, title=f"{model_name}: Recon. Loss", title_fontsize=20)
@@ -820,6 +877,8 @@ def visualize_kld_loss(
     save_figures_dir,
     tag,
     log_scale=False,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     plt.clf()
     fig = plt.figure(figsize=(8, 6))
@@ -835,6 +894,9 @@ def visualize_kld_loss(
             plt.axvline(x=noise_warm_epoch, color="g", linestyle="-.")
     for sequence_len_epoch in sequence_len_epochs:
         plt.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
+    draw_regularizer_warmup_lines(
+        plt.gca(), subband_warm_epochs, decorr_warm_epochs
+    )
     plt.plot(train_kl, label="Training")
     plt.plot(val_kl, label="Validation")
     plt.legend(fontsize=16, title=f"{model_name}: KL Div. Loss", title_fontsize=20)
@@ -937,6 +999,12 @@ def visualize_combined_metrics(
     mean_start_shift=None,
     dataset_stats=None,
     timing=None,
+    subband_warm_values=None,
+    subband_loss_weight_values=None,
+    decorr_warm_values=None,
+    decorr_loss_weight_values=None,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     """Warm-up, patience, windowing, and, when stored, epoch wall time.
 
@@ -985,6 +1053,25 @@ def visualize_combined_metrics(
             noise_warm_values,
             label="noise_warm",
             color="g",
+        )
+    # Scale is the 0–1 warm-up progress. Weight is that scale times the
+    # configured loss weight. None hides a disabled term.
+    _regularizer_warm_steps = (
+        (subband_warm_values, "subband scale", "tab:orange", "-"),
+        (subband_loss_weight_values, "subband weight", "tab:orange", "--"),
+        (decorr_warm_values, "decorr scale", "tab:purple", "-"),
+        (decorr_loss_weight_values, "decorr weight", "tab:purple", "--"),
+    )
+    for values, label, color, linestyle in _regularizer_warm_steps:
+        if values is None:
+            continue
+        series = np.asarray(values, dtype=float).reshape(-1)
+        axs[1].step(
+            np.arange(series.size),
+            series,
+            label=label,
+            color=color,
+            linestyle=linestyle,
         )
 
     if axs[1].get_legend_handles_labels()[1]:
@@ -1113,6 +1200,11 @@ def visualize_combined_metrics(
         for i in range(len(axs)):
             axs[i].axvline(x=sequence_len_epoch, color="m", linestyle="-.")
 
+    for i in range(len(axs)):
+        draw_regularizer_warmup_lines(
+            axs[i], subband_warm_epochs, decorr_warm_epochs
+        )
+
     fig_file = os.path.join(
         save_figures_dir, f"vis_training_delta_kl_cpt_best_state_{tag}.png"
     )
@@ -1140,6 +1232,8 @@ def _draw_warmup_markers(
     auto_warm_epochs,
     noise_warm_epochs,
     sequence_len_epochs,
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     if model_name in ["VRNN", "MT_VRNN"] and kl_warm_epochs is not None:
         for kl_warm_epoch in kl_warm_epochs:
@@ -1153,6 +1247,9 @@ def _draw_warmup_markers(
     if sequence_len_epochs is not None:
         for sequence_len_epoch in sequence_len_epochs:
             plt.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
+    draw_regularizer_warmup_lines(
+        plt.gca(), subband_warm_epochs, decorr_warm_epochs
+    )
 
 
 def visualize_sigma_history(
@@ -1169,6 +1266,8 @@ def visualize_sigma_history(
     series_name="Sigma",
     legend_title="Sigma values",
     ylabel="sigma",
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     plt.clf()
     fig = plt.figure(figsize=(8, 6))
@@ -1179,6 +1278,8 @@ def visualize_sigma_history(
         auto_warm_epochs,
         noise_warm_epochs,
         sequence_len_epochs,
+        subband_warm_epochs,
+        decorr_warm_epochs,
     )
 
     for i in range(sigmas_history.shape[0]):
@@ -1210,6 +1311,8 @@ def visualize_alpha_history(
     series_name="Alpha",
     legend_title="Alpha values",
     ylabel="alpha",
+    subband_warm_epochs=None,
+    decorr_warm_epochs=None,
 ):
     plt.clf()
     fig = plt.figure(figsize=(8, 6))
@@ -1220,6 +1323,8 @@ def visualize_alpha_history(
         auto_warm_epochs,
         noise_warm_epochs,
         sequence_len_epochs,
+        subband_warm_epochs,
+        decorr_warm_epochs,
     )
 
     transform = mt_alpha_from_sigma if alpha_from_sigma is None else alpha_from_sigma

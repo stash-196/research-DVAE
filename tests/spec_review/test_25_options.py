@@ -581,6 +581,12 @@ def test_subband_and_decorr_are_logged_stored_and_ramped_on_auto_bumps(
         history = pickle.load(handle)
     sub_w = np.asarray(history["subband_loss_weight_values"], dtype=float)
     dec_w = np.asarray(history["decorr_loss_weight_values"], dtype=float)
+    sub_scale = np.asarray(history["subband_warm_values"], dtype=float)
+    dec_scale = np.asarray(history["decorr_warm_values"], dtype=float)
+    assert history["subband_enabled"] is True
+    assert history["decorr_enabled"] is True
+    np.testing.assert_allclose(sub_scale * 2.0, sub_w)
+    np.testing.assert_allclose(dec_scale * 3.0, dec_w)
     sub = np.asarray(history["train_subband"], dtype=float)
     dec = np.asarray(history["train_decorr"], dtype=float)
     assert np.isfinite(sub_w).all()
@@ -588,6 +594,13 @@ def test_subband_and_decorr_are_logged_stored_and_ramped_on_auto_bumps(
     events = history["bump_events"]
     assert any(row["type"] == "window" for row in events)
     assert any(row["type"] == "auto" for row in events)
+    sub_bumps = [row["epoch"] for row in events if row["type"] == "subband"]
+    dec_bumps = [row["epoch"] for row in events if row["type"] == "decorr"]
+    auto_bumps = [row["epoch"] for row in events if row["type"] == "auto"]
+    assert sub_bumps and dec_bumps == sub_bumps
+    assert set(sub_bumps) <= set(auto_bumps)
+    assert "type=subband" in log
+    assert "type=decorr" in log
     done = 0
     auto_total = sum(1 for row in events if row["type"] == "auto")
     # KL is off for an RNN, so the ramp denominator is the auto-bump count.
