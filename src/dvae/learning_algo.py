@@ -48,6 +48,7 @@ from dvae.dataset.xhro_proper_dataset import (
     coarse_dataframe_kwargs,
     optional_config_float,
     optional_config_str,
+    training_initial_sequence_len,
     windowing_from_config,
 )
 from dvae.eval.utils.local_drift_analysis import (
@@ -597,9 +598,7 @@ class LearningAlgorithm:
         optimizer = self.init_optimizer()
 
         # Create initial data loader with the starting sequence length
-        initial_sequence_len = self.cfg.getint(
-            "DataFrame", "initial_sequence_len", fallback=self.sequence_len // 10
-        )
+        initial_sequence_len = training_initial_sequence_len(self.cfg)
 
         # Define DatasetConfig with all parameters
         dataset_config = DatasetConfig(
@@ -626,6 +625,7 @@ class LearningAlgorithm:
             corpus=optional_config_str(self.cfg, "DataFrame", "corpus"),
             crop_start_sec=optional_config_float(self.cfg, "DataFrame", "crop_start_sec"),
             crop_end_sec=optional_config_float(self.cfg, "DataFrame", "crop_end_sec"),
+            segments=optional_config_str(self.cfg, "DataFrame", "segments"),
             max_fill_gap_sec=optional_config_float(
                 self.cfg, "DataFrame", "max_fill_gap_sec"
             ),

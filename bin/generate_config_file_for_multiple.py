@@ -80,6 +80,36 @@ def xhro_proper_coarse_example():
     }
 
 
+def xhro_proper_waveform_segments_example():
+    """Example overrides for a fine-grained XhroProper waveform run.
+
+    Not part of the default grid. ``segments`` is one optional key.
+    Inline form, times in seconds from each subject's first timestamp::
+
+        subject:start-end[,start-end]; subject:start-end
+
+    A ``.yaml``, ``.yml``, or ``.csv`` path is the sidecar alternative
+    (columns ``subject,start,end``). Leave ``segments`` unset, and use
+    ``dataset_label`` plus ``crop_start_sec`` / ``crop_end_sec``, to keep
+    the single-session crop. Do not set the crop keys together with
+    ``segments``. On the cluster, set ``data_root`` to the grok_output
+    folder. ``dataset_label`` here names the same subjects the spec lists.
+    """
+    return {
+        "dataset_name": ["XhroProper"],
+        "dataset_label": ["xhro_04_XH058,xhro_01_XH032"],
+        "mask_label": ["None"],
+        "corpus": ["multi"],
+        "data_root": ["None"],
+        "observation_process": ["raw_ch1"],
+        "x_dim": [1],
+        "sequence_len": [256],
+        "segments": ["xhro_04_XH058:120-480,900-1200; xhro_01_XH032:0-600"],
+        "crop_start_sec": ["None"],
+        "crop_end_sec": ["None"],
+    }
+
+
 if __name__ == "__main__":
 
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
@@ -301,6 +331,11 @@ if __name__ == "__main__":
     data_root = ["None"]
     # Coarse XhroProper only (other datasets ignore these). Single values so
     # the existing grid does not grow. See xhro_proper_coarse_example().
+    # Waveform multi-range runs are also off this grid. See
+    # xhro_proper_waveform_segments_example(): segments is
+    # "subject:start-end[,start-end]; subject:start-end" or a yaml/csv path.
+    # Times are seconds from that subject's first timestamp. Unset segments
+    # keeps dataset_label plus crop_start_sec/crop_end_sec.
     coarse_test_split = ["usable_tail"]
     coarse_eeg_artifact_mask = ["none"]
     coarse_eeg_artifact_k = ["None"]
