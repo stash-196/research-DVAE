@@ -23,6 +23,8 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from .utils.data_utils import _boundary_cuts, longest_unbroken_span
+
 PRESENT_COL = "__present"
 SEGMENT_COL = "__segment_id"
 GROUP_COL = "__window_group"
@@ -257,6 +259,157 @@ def log_window_recut(dataset) -> None:
         f"[{name}] re-cut seq_len={seq_s} windows={n_windows} "
         f"long_filled_windows={long_s} threshold_sec={thr_s}"
     )
+
+
+def filled_gap_frac_cuts(spans, seq_len, frac, num_frames) -> np.ndarray:
+    """Cuts that isolate filled gaps longer than ``frac * seq_len`` samples.
+
+    ``frac`` unset returns no cuts. The comparison is strict, in samples,
+    and uses the sequence length of this re-cut. A qualifying gap is cut
+    at its first row and at the first row after it, same as
+    ``max_fill_gap_sec``.
+    """
+    if frac is None or seq_len is None:
+        return np.asarray([], dtype=np.int64)
+    limit = float(frac) * int(seq_len)
+    n = int(num_frames)
+    cuts = []
+    for span in spans or []:
+        rows = np.asarray(span, dtype=np.int64).ravel()
+        if rows.size == 0 or int(rows.size) <= limit:
+            continue
+        start = int(rows.min())
+        after = int(rows.max()) + 1
+        if 0 < start < n:
+            cuts.append(start)
+        if 0 < after < n:
+            cuts.append(after)
+    if not cuts:
+        return np.asarray([], dtype=np.int64)
+    return np.unique(np.asarray(cuts, dtype=np.int64))
+
+
+def combine_boundaries(base, extra, num_frames):
+    """Union of split indices strictly inside the series. None if there are none."""
+    parts = []
+    if base is not None:
+        parts.append(np.asarray(base, dtype=np.int64).ravel())
+    if extra is not None:
+        extra_arr = np.asarray(extra, dtype=np.int64).ravel()
+        if extra_arr.size:
+            parts.append(extra_arr)
+    if not parts:
+        return None
+    return _boundary_cuts(np.concatenate(parts), num_frames)
+
+
+def resolve_recut_length(num_frames, requested, base_boundaries, spans, frac):
+    """Sequence length and the split indices for this re-cut.
+
+    ``max_gap_window_frac`` depends on the length, so a cap that shortens
+    the window is applied again until the cuts stop changing. No cuts
+    leaves the requested length alone.
+    """
+    n = int(num_frames)
+    seq_len = int(requested)
+    seen = set()
+    boundaries = combine_boundaries(base_boundaries, None, n)
+    while seq_len not in seen:
+        seen.add(seq_len)
+        extra = filled_gap_frac_cuts(spans, seq_len, frac, n)
+        boundaries = combine_boundaries(base_boundaries, extra, n)
+        if boundaries is None:
+            return seq_len, None
+        span = longest_unbroken_span(n, boundaries)
+        if span >= 1 and seq_len > span:
+            seq_len = span
+            continue
+        return seq_len, boundaries
+    return seq_len, boundaries
+
+
+def groups_from_boundaries(num_frames, boundaries) -> np.ndarray:
+    """Contiguous ids. A new id starts at each split index."""
+    n = int(num_frames)
+    group = np.zeros(n, dtype=np.int64)
+    cuts = _boundary_cuts(boundaries, n)
+    if cuts is None:
+        return group
+    change = np.zeros(n, dtype=bool)
+    change[cuts] = True
+    gid = 0
+    for i in range(1, n):
+        if change[i]:
+            gid += 1
+        group[i] = gid
+    return group
+
+
+def observed_row_mask(seq, observed_per_row):
+    """True where a window is allowed to start.
+
+    ``observed_per_row`` is the aligned ``present`` flag when the file has
+    one. Otherwise a row is observed when it is not entirely NaN.
+    """
+    if observed_per_row is not None:
+        return np.asarray(observed_per_row, dtype=bool).reshape(-1)
+    arr = np.asarray(seq.detach().cpu().numpy() if hasattr(seq, "detach") else seq)
+    if arr.ndim <= 1:
+        return np.isfinite(np.reshape(arr, -1))
+    finite = np.isfinite(np.reshape(arr, (arr.shape[0], -1)))
+    return finite.any(axis=1)
+
+
+def _piece_containing(start: int, cuts, num_frames: int):
+    left = 0
+    right = int(num_frames)
+    if cuts is None:
+        return left, right
+    for cut in cuts:
+        cut = int(cut)
+        if cut <= start:
+            left = cut
+        else:
+            right = cut
+            break
+    return left, right
+
+
+def shift_starts_onto_observed(starts, observed, seq_len, boundaries, num_frames):
+    """Move a start that lands on a missing sample to the next observed row.
+
+    The window must still lie inside the piece that contains the original
+    start. A start that cannot move without leaving that piece is dropped.
+    An already observed start is kept. Duplicate landing rows are kept once.
+    """
+    n = int(num_frames)
+    length = int(seq_len)
+    flags = np.asarray(observed, dtype=bool).reshape(-1)
+    if flags.shape[0] != n:
+        raise ValueError(
+            f"observed mask length {flags.shape[0]} != series length {n}"
+        )
+    cuts = _boundary_cuts(boundaries, n)
+    kept = []
+    seen = set()
+    for raw in np.asarray([] if starts is None else starts).ravel():
+        start = int(raw)
+        if start < 0 or start >= n:
+            continue
+        left, right = _piece_containing(start, cuts, n)
+        if flags[start]:
+            landing = start
+        else:
+            landing = start + 1
+            while landing < right and not flags[landing]:
+                landing += 1
+        if landing >= right or landing + length > right:
+            continue
+        if landing in seen:
+            continue
+        seen.add(landing)
+        kept.append(landing)
+    return np.asarray(kept, dtype=np.int64)
 
 
 def _seq_rows(dataset) -> int:

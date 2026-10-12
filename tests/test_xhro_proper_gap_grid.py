@@ -298,3 +298,144 @@ def test_template_has_gap_keys():
     ).read_text()
     assert "max_fill_gap_sec = {max_fill_gap_sec}" in text
     assert "filled_nan_log_sec = {filled_nan_log_sec}" in text
+    assert "max_gap_window_frac = {max_gap_window_frac}" in text
+    assert "start_on_observed = {start_on_observed}" in text
+    assert "max_window_nan_ratio = {max_window_nan_ratio}" in text
+
+
+def test_shift_start_off_a_gap_or_drop_it():
+    from dvae.dataset.gap_grid import shift_starts_onto_observed
+
+    observed = np.ones(20, dtype=bool)
+    observed[0] = False
+    observed[3:6] = False
+    got = shift_starts_onto_observed([0, 3, 8], observed, 4, None, 20)
+    assert list(got.tolist()) == [1, 6, 8]
+    # The gap runs to the segment cut, so the window cannot stay inside it.
+    blocked = np.ones(20, dtype=bool)
+    blocked[6:10] = False
+    dropped = shift_starts_onto_observed([6], blocked, 4, [10], 20)
+    assert list(dropped.tolist()) == []
+    # An observed start is kept even when a later sample in the window is missing.
+    kept = shift_starts_onto_observed([0], blocked, 4, None, 20)
+    assert list(kept.tolist()) == [0]
+
+
+def test_frac_cuts_follow_the_sequence_length():
+    from dvae.dataset.gap_grid import filled_gap_frac_cuts, resolve_recut_length
+
+    span = [np.arange(30, 38)]
+    assert filled_gap_frac_cuts(span, 20, 0.5, 80).size == 0
+    assert list(filled_gap_frac_cuts(span, 10, 0.5, 80).tolist()) == [30, 38]
+    assert filled_gap_frac_cuts(span, 10, None, 80).size == 0
+    # Capping the window re-evaluates the fraction and can add the same cuts.
+    length, bounds = resolve_recut_length(30, 20, None, [np.arange(9, 21)], 0.5)
+    assert length == 12
+    assert list(np.asarray(bounds).tolist()) == [9, 21]
+
+
+def test_start_on_observed_moves_off_present_false(tmp_path):
+    n = 100
+    present = np.ones(n, dtype=bool)
+    present[0] = False
+    present[2] = False
+    _session(tmp_path, n, present=present, segment_id=np.zeros(n, dtype=np.int64))
+    plain = _load(tmp_path, seq_len=10)
+    assert 0 in plain.data_idx
+    assert any(s <= 2 < s + plain.seq_len for s in plain.data_idx)
+    moved = _load(tmp_path, seq_len=10, start_on_observed=True)
+    assert 0 not in moved.data_idx
+    assert 1 in moved.data_idx
+    # The hole at row 2 stays inside the window that now starts at 1.
+    assert any(s <= 2 < s + moved.seq_len for s in moved.data_idx)
+    seq = np.asarray(moved.seq).reshape(-1)
+    for start in moved.data_idx:
+        assert np.isfinite(seq[int(start)])
+
+
+def test_start_on_observed_drops_a_start_that_cannot_fit(tmp_path):
+    n = 100
+    segment = np.zeros(n, dtype=np.int64)
+    segment[40:] = 1
+    present = np.ones(n, dtype=bool)
+    present[24:40] = False
+    _session(tmp_path, n, present=present, segment_id=segment)
+    ds = _load(tmp_path, seq_len=10, start_on_observed=True)
+    _assert_inside(ds)
+    assert 24 not in ds.data_idx
+    assert not any(24 <= int(s) < 40 for s in ds.data_idx)
+    # The window that starts before the hole still contains it.
+    assert any(int(s) < 24 < int(s) + ds.seq_len for s in ds.data_idx)
+
+
+def test_max_gap_window_frac_is_recomputed_on_recut(tmp_path):
+    n = 100
+    present = np.ones(n, dtype=bool)
+    present[30:38] = False
+    _session(
+        tmp_path,
+        n,
+        present=present,
+        segment_id=np.zeros(n, dtype=np.int64),
+        gap_t_start=np.array([30 * 0.004]),
+        gap_n_missing=np.array([8], dtype=np.int64),
+        gap_duration_s=np.array([0.032]),
+        gap_filled=np.array([True]),
+        gap_kind=np.array(["packet_loss"]),
+        gap_index=np.array([30], dtype=np.int64),
+    )
+    ds = _load(tmp_path, seq_len=20, max_gap_window_frac=0.5)
+    # 8 samples is not longer than 0.5 * 20, so the hole stays inside a window.
+    assert ds.split_boundaries is None or len(ds.split_boundaries) == 0
+    assert any(start < 38 and start + ds.seq_len > 30 for start in ds.data_idx)
+    ds.update_sequence_length(10)
+    assert ds.seq_len == 10
+    _assert_inside(ds)
+    assert not any(start < 38 and start + ds.seq_len > 30 for start in ds.data_idx)
+    assert not any(30 <= int(s) < 38 for s in ds.data_idx)
+    ds.update_sequence_length(20)
+    assert any(start < 38 and start + ds.seq_len > 30 for start in ds.data_idx)
+
+
+def test_max_fill_and_frac_both_split(tmp_path):
+    n = 100
+    present = np.ones(n, dtype=bool)
+    present[30:38] = False
+    _session(
+        tmp_path,
+        n,
+        present=present,
+        segment_id=np.zeros(n, dtype=np.int64),
+        gap_t_start=np.array([30 * 0.004]),
+        gap_n_missing=np.array([8], dtype=np.int64),
+        gap_duration_s=np.array([0.032]),
+        gap_filled=np.array([True]),
+        gap_kind=np.array(["packet_loss"]),
+        gap_index=np.array([30], dtype=np.int64),
+    )
+    ds = _load(
+        tmp_path,
+        seq_len=20,
+        max_fill_gap_sec=0.01,
+        max_gap_window_frac=0.9,
+    )
+    assert list(np.asarray(ds.split_boundaries).tolist()) == [30, 38]
+    _assert_inside(ds)
+    assert not any(start < 38 and start + ds.seq_len > 30 for start in ds.data_idx)
+
+
+def test_max_window_nan_ratio_filters_recuts_unless_overridden(tmp_path):
+    n = 100
+    present = np.ones(n, dtype=bool)
+    present[5] = False
+    _session(tmp_path, n, present=present)
+    open_windows = _load(tmp_path, seq_len=10)
+    assert any(s <= 5 < s + open_windows.seq_len for s in open_windows.data_idx)
+    filtered = _load(tmp_path, seq_len=10, max_window_nan_ratio=0.0)
+    assert not any(s <= 5 < s + filtered.seq_len for s in filtered.data_idx)
+    filtered.update_sequence_length(10, minimum_nan_ratio=1.0)
+    assert any(s <= 5 < s + filtered.seq_len for s in filtered.data_idx)
+    text = (
+        Path(__file__).resolve().parents[1] / "src/dvae/learning_algo.py"
+    ).read_text()
+    assert "minimum_nan_ratio=0.3" in text

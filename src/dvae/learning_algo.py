@@ -33,6 +33,7 @@ from dvae.visualizers import (
     visualize_combined_parameters,
     visualize_teacherforcing_2_autonomous,
     visualize_total_loss,
+    visualize_val_criteria,
     visualize_recon_loss,
     visualize_kld_loss,
     visualize_combined_metrics,
@@ -43,6 +44,7 @@ from dvae.visualizers import (
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
 from dvae.dataset.xhro_proper_dataset import (
     coarse_dataframe_kwargs,
+    optional_config_bool,
     optional_config_float,
     optional_config_str,
 )
@@ -455,6 +457,15 @@ class LearningAlgorithm:
             ),
             filled_nan_log_sec=optional_config_float(
                 self.cfg, "DataFrame", "filled_nan_log_sec"
+            ),
+            max_gap_window_frac=optional_config_float(
+                self.cfg, "DataFrame", "max_gap_window_frac"
+            ),
+            start_on_observed=optional_config_bool(
+                self.cfg, "DataFrame", "start_on_observed"
+            ),
+            max_window_nan_ratio=optional_config_float(
+                self.cfg, "DataFrame", "max_window_nan_ratio"
             ),
             **coarse_dataframe_kwargs(self.cfg),
         )
@@ -1446,6 +1457,21 @@ class LearningAlgorithm:
                 visualize_total_loss(
                     train_loss[: epoch + 1],
                     val_loss[: epoch + 1],
+                    kl_warm_epochs,
+                    auto_warm_epochs,
+                    noise_warm_epochs,
+                    sequence_len_epochs,
+                    self.model_name,
+                    self.autonomous_sampling_method,
+                    self.noise_sampling_method,
+                    save_figures_dir,
+                    tag,
+                )
+                visualize_val_criteria(
+                    self._val_criteria,
+                    val_loss[: epoch + 1],
+                    val_spectrum[: epoch + 1],
+                    val_criteria_score[: epoch + 1],
                     kl_warm_epochs,
                     auto_warm_epochs,
                     noise_warm_epochs,

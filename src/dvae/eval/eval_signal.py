@@ -73,6 +73,7 @@ from dataclasses import replace
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
 from dvae.dataset.xhro_proper_dataset import (
     coarse_dataframe_kwargs,
+    optional_config_bool,
     optional_config_float,
     optional_config_str,
 )
@@ -653,6 +654,15 @@ if __name__ == "__main__":
         max_fill_gap_sec=optional_config_float(cfg, "DataFrame", "max_fill_gap_sec"),
         filled_nan_log_sec=optional_config_float(
             cfg, "DataFrame", "filled_nan_log_sec"
+        ),
+        max_gap_window_frac=optional_config_float(
+            cfg, "DataFrame", "max_gap_window_frac"
+        ),
+        start_on_observed=optional_config_bool(
+            cfg, "DataFrame", "start_on_observed"
+        ),
+        max_window_nan_ratio=optional_config_float(
+            cfg, "DataFrame", "max_window_nan_ratio"
         ),
         **coarse_dataframe_kwargs(cfg),
     )

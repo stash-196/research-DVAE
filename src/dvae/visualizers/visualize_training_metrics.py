@@ -3,6 +3,152 @@ import os
 import numpy as np
 
 
+def draw_loss_warmup_lines(
+    ax,
+    model_name,
+    auto_sampling_method,
+    noise_sampling_method,
+    kl_warm_epochs,
+    auto_warm_epochs,
+    noise_warm_epochs,
+    sequence_len_epochs,
+):
+    """Vertical warmup markers used by the loss-over-epochs figure.
+
+    Cyan dashed: KL warm-up, VRNN / MT_VRNN only. Red dotted: autonomous
+    warm-up when the sampler is ss or sm. Green dash-dot: noise warm-up
+    on the same samplers. Magenta dash-dot: sequence-length changes.
+    """
+    if model_name in ["VRNN", "MT_VRNN"]:
+        for kl_warm_epoch in kl_warm_epochs:
+            ax.axvline(x=kl_warm_epoch, color="c", linestyle="--")
+    if auto_sampling_method in ["ss", "sm"]:
+        for auto_warm_epoch in auto_warm_epochs:
+            ax.axvline(x=auto_warm_epoch, color="r", linestyle=":")
+    if noise_sampling_method in ["ss", "sm"]:
+        for noise_warm_epoch in noise_warm_epochs:
+            ax.axvline(x=noise_warm_epoch, color="g", linestyle="-.")
+    for sequence_len_epoch in sequence_len_epochs:
+        ax.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
+
+
+def val_criteria_plot_series(criteria, val_loss, val_spectrum, val_criteria_score):
+    """One validation series per selected criterion, then the combined score.
+
+    ``recon`` is the validation loss. ``spectrum`` is the free-run spectral
+    error. The normalised sum is included only when more than one criterion
+    is selected. Arrays are used as given (already sliced to the current epoch).
+    """
+    names = tuple(criteria)
+    series = []
+    for name in names:
+        if name == "recon":
+            series.append(("recon", np.asarray(val_loss, dtype=float)))
+        elif name == "spectrum":
+            series.append(("spectrum", np.asarray(val_spectrum, dtype=float)))
+        else:
+            raise ValueError(f"no validation plot series for criterion {name!r}")
+    if len(names) > 1:
+        series.append(
+            ("combined", np.asarray(val_criteria_score, dtype=float))
+        )
+    return series
+
+
+def _style_loss_panel(ax, values, label, title, ylabel):
+    ax.plot(values, label=label)
+    ax.legend(fontsize=16, title=title, title_fontsize=20)
+    ax.set_xlabel("epochs", fontdict={"size": 16})
+    ax.set_ylabel(ylabel, fontdict={"size": 16})
+    ax.grid(True)
+
+
+def build_val_criteria_figure(
+    criteria,
+    val_loss,
+    val_spectrum,
+    val_criteria_score,
+    kl_warm_epochs,
+    auto_warm_epochs,
+    noise_warm_epochs,
+    sequence_len_epochs,
+    model_name,
+    auto_sampling_method,
+    noise_sampling_method,
+):
+    """Figure of validation criteria. One axes per series, loss-plot markers."""
+    series = val_criteria_plot_series(
+        criteria, val_loss, val_spectrum, val_criteria_score
+    )
+    n_panels = max(len(series), 1)
+    fig, axes = plt.subplots(
+        n_panels, 1, figsize=(8, 6 * n_panels), squeeze=False
+    )
+    plt.rcParams["font.size"] = 12
+    ylabel = {
+        "recon": "loss",
+        "spectrum": "spectrum error",
+        "combined": "normalised sum",
+    }
+    for ax, (name, values) in zip(axes[:, 0], series):
+        draw_loss_warmup_lines(
+            ax,
+            model_name,
+            auto_sampling_method,
+            noise_sampling_method,
+            kl_warm_epochs,
+            auto_warm_epochs,
+            noise_warm_epochs,
+            sequence_len_epochs,
+        )
+        _style_loss_panel(
+            ax,
+            values,
+            "validation",
+            f"{model_name}: {name}",
+            ylabel.get(name, name),
+        )
+    if n_panels > 1:
+        fig.tight_layout()
+    return fig
+
+
+def visualize_val_criteria(
+    criteria,
+    val_loss,
+    val_spectrum,
+    val_criteria_score,
+    kl_warm_epochs,
+    auto_warm_epochs,
+    noise_warm_epochs,
+    sequence_len_epochs,
+    model_name,
+    auto_sampling_method,
+    noise_sampling_method,
+    save_figures_dir,
+    tag,
+):
+    """Save validation criteria over epochs at the loss-figure cadence."""
+    plt.clf()
+    fig = build_val_criteria_figure(
+        criteria,
+        val_loss,
+        val_spectrum,
+        val_criteria_score,
+        kl_warm_epochs,
+        auto_warm_epochs,
+        noise_warm_epochs,
+        sequence_len_epochs,
+        model_name,
+        auto_sampling_method,
+        noise_sampling_method,
+    )
+    fig_file = os.path.join(save_figures_dir, f"vis_training_val_criteria_{tag}.png")
+    fig.savefig(fig_file)
+    plt.close(fig)
+    return fig_file
+
+
 def visualize_total_loss(
     train_loss,
     val_loss,
@@ -20,17 +166,16 @@ def visualize_total_loss(
     plt.clf()
     fig = plt.figure(figsize=(8, 6))
     plt.rcParams["font.size"] = 12
-    if model_name in ["VRNN", "MT_VRNN"]:
-        for kl_warm_epoch in kl_warm_epochs:
-            plt.axvline(x=kl_warm_epoch, color="c", linestyle="--")
-    if auto_sampling_method in ["ss", "sm"]:
-        for auto_warm_epoch in auto_warm_epochs:
-            plt.axvline(x=auto_warm_epoch, color="r", linestyle=":")
-    if noise_sampling_method in ["ss", "sm"]:
-        for noise_warm_epoch in noise_warm_epochs:
-            plt.axvline(x=noise_warm_epoch, color="g", linestyle="-.")
-    for sequence_len_epoch in sequence_len_epochs:
-        plt.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
+    draw_loss_warmup_lines(
+        plt.gca(),
+        model_name,
+        auto_sampling_method,
+        noise_sampling_method,
+        kl_warm_epochs,
+        auto_warm_epochs,
+        noise_warm_epochs,
+        sequence_len_epochs,
+    )
     plt.plot(train_loss, label="training loss")
     plt.plot(val_loss, label="validation loss")
     plt.legend(fontsize=16, title=f"{model_name}: Total Loss", title_fontsize=20)

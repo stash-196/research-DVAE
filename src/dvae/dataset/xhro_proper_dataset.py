@@ -31,6 +31,12 @@ subject. ``[DataFrame] max_fill_gap_sec`` (unset by default) additionally
 splits filled gaps longer than that many seconds. Those split sample
 indices stay on the dataset and are applied again whenever
 ``update_sequence_length`` rebuilds windows (curriculum resizes included).
+``[DataFrame] max_gap_window_frac`` (unset) splits a filled gap whose
+sample count is longer than that fraction of the current sequence length,
+and is recomputed on every re-cut. ``[DataFrame] start_on_observed``
+(false) moves a start that lands on ``present=False`` forward to the next
+observed sample in the same segment. ``[DataFrame] max_window_nan_ratio``
+(unset) is the existing NaN-fraction filter on every re-cut.
 ``filled_nan_log_sec`` is the re-cut log cutoff when ``max_fill_gap_sec``
 is unset. Crop stays time-based.
 
@@ -159,12 +165,16 @@ import torch
 from .gap_grid import (
     FILLED_RUN_COL,
     GROUP_COL,
+    PRESENT_COL,
     attach_gap_grid,
     combine_gap_grid,
     gap_load_stats,
+    groups_from_boundaries,
     log_window_recut,
+    resolve_recut_length,
     split_boundaries_from_ids,
 )
+from .utils.data_utils import _boundary_cuts
 from .xhro_dataset import (
     Xhro,
     _resolve_original_observation_process,
@@ -742,6 +752,29 @@ def _normalize_coarse_test_split(value) -> str:
             f"{_COARSE_TEST_SPLITS}, got {value!r}."
         )
     return key
+
+
+def _optional_bool(value, name: str, default: bool = False) -> bool:
+    """Blank and ``None`` take ``default``. ``true`` / ``false`` / ``off`` parse."""
+    if _is_unset(value):
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "y", "on"):
+        return True
+    if text in ("0", "false", "no", "n", "off"):
+        return False
+    raise ValueError(f"{name} must be true or false, got {value!r}.")
+
+
+def optional_config_bool(cfg, section: str, option: str, default: bool = False) -> bool:
+    """Optional ini bool. Missing, blank, and ``None`` take ``default``."""
+    return _optional_bool(
+        optional_config_str(cfg, section, option),
+        f"[{section}] {option}",
+        default,
+    )
 
 
 def _optional_nonnegative_float(value, name: str) -> float | None:
@@ -1480,6 +1513,15 @@ class XhroProper(Xhro):
         inside windows. When set, a filled gap with ``gap_duration_s``
         greater than this becomes a window split, like a segment boundary.
         The split indices are stored and reused on every re-cut.
+      - max_gap_window_frac: waveform only. Unset does not add splits.
+        A filled gap with more samples than this fraction of the current
+        sequence length is a split for that re-cut only.
+      - start_on_observed: waveform only. False keeps today's starts.
+        True moves a start on a missing sample forward to the next
+        observed sample that still fits in the segment.
+      - max_window_nan_ratio: waveform and coarse re-cuts. Unset means
+        no NaN-fraction filtering. An explicit ``minimum_nan_ratio``
+        argument overrides it.
       - filled_nan_log_sec: waveform log only. When ``max_fill_gap_sec``
         is unset, a re-cut reports how many windows contain a filled NaN
         run longer than this. Unset means that count is ``na``.
@@ -1514,6 +1556,9 @@ class XhroProper(Xhro):
         crop_end_sec=None,
         max_fill_gap_sec=None,
         filled_nan_log_sec=None,
+        max_gap_window_frac=None,
+        start_on_observed=False,
+        max_window_nan_ratio=None,
         **kwargs,
     ):
         self.path_to_data = data_dir
@@ -1547,9 +1592,20 @@ class XhroProper(Xhro):
         self.filled_nan_log_sec = _optional_nonnegative_float(
             filled_nan_log_sec, "filled_nan_log_sec"
         )
+        self.max_gap_window_frac = _optional_nonnegative_float(
+            max_gap_window_frac, "max_gap_window_frac"
+        )
+        self.start_on_observed = _optional_bool(
+            start_on_observed, "start_on_observed"
+        )
+        self.max_window_nan_ratio = _optional_nonnegative_float(
+            max_window_nan_ratio, "max_window_nan_ratio"
+        )
         self.segment_index_per_row = None
         self.split_boundaries = None
         self.filled_run_sec = None
+        self.filled_gap_spans = []
+        self.observed_per_row = None
         self.coarse_mode = False
         base, _suffix = _split_process(self.observation_process)
         if base in COARSE_OBS_COLUMNS:
@@ -1663,6 +1719,12 @@ class XhroProper(Xhro):
         self.filled_run_sec = self._aligned_float_column(
             self.full_sequence, FILLED_RUN_COL, len(self.seq)
         )
+        self.observed_per_row = self._aligned_bool_column(
+            self.full_sequence, PRESENT_COL, len(self.seq)
+        )
+        self.filled_gap_spans = self._filled_gap_spans(
+            self.full_sequence, len(self.seq)
+        )
         if self.segment_index_per_row is not None:
             self.split_boundaries = split_boundaries_from_ids(
                 self.segment_index_per_row
@@ -1719,6 +1781,60 @@ class XhroProper(Xhro):
             )
             return None
         return values
+
+    def _aligned_bool_column(self, frame: pd.DataFrame, column: str, n_seq: int):
+        """One bool per ``seq`` row, or None when the frame has no such column."""
+        if column not in frame.columns:
+            return None
+        values = frame[column].to_numpy(dtype=bool)
+        values = values[self._apply_keep_positions(frame)]
+        if len(values) != int(n_seq):
+            warnings.warn(
+                f"[XhroProper] {column} length {len(values)} does not match "
+                f"seq ({n_seq}); start_on_observed cannot use it.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return None
+        return values
+
+    def _filled_gap_spans(self, frame: pd.DataFrame, n_seq: int):
+        """Contiguous ``present=False`` runs, in ``seq`` row indices.
+
+        These are the filled NaN gaps. ``max_gap_window_frac`` decides
+        which of them split a given re-cut. A length mismatch yields no
+        spans, so the re-cut keeps the baked boundaries only.
+        """
+        if PRESENT_COL not in frame.columns:
+            return []
+        present = frame[PRESENT_COL].to_numpy(dtype=bool)
+        keep = self._apply_keep_positions(frame)
+        loc = np.full(len(frame), -1, dtype=np.int64)
+        loc[keep] = np.arange(len(keep), dtype=np.int64)
+        if int((loc >= 0).sum()) != int(n_seq):
+            warnings.warn(
+                f"[XhroProper] filled-gap rows do not match seq ({n_seq}); "
+                "max_gap_window_frac will not add splits.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return []
+        spans = []
+        i = 0
+        n = len(present)
+        while i < n:
+            if present[i]:
+                i += 1
+                continue
+            j = i + 1
+            while j < n and not present[j]:
+                j += 1
+            rows = loc[i:j]
+            rows = rows[rows >= 0]
+            if rows.size:
+                spans.append(rows.astype(np.int64, copy=False))
+            i = j
+        return spans
 
     def _value_frame(self, sequence: pd.DataFrame) -> pd.DataFrame:
         base, _ = _split_process(self.observation_process)
@@ -1913,15 +2029,32 @@ class XhroProper(Xhro):
 
     def update_sequence_length(self, new_seq_len=None, minimum_nan_ratio=None):
         if not getattr(self, "coarse_mode", False):
-            # Overlapping waveform windows use the per-segment stride.
+            # Overlapping waveform windows use the per-segment stride when
+            # this re-cut has any split (segment, max_fill, or frac).
             # Non-overlapping windows, including curriculum resizes, go
-            # through ``Xhro.update_sequence_length`` → ``find_indices``,
-            # which reads ``split_boundaries`` on every call.
-            bounds = getattr(self, "split_boundaries", None)
-            grouped = getattr(self, "segment_index_per_row", None) is not None
-            if grouped and bounds is not None and len(bounds) > 0 and self.overlap:
+            # through ``Xhro.update_sequence_length`` → ``find_indices``.
+            if new_seq_len is None:
+                return super().update_sequence_length(None, minimum_nan_ratio)
+            num_frames = int(self.seq.shape[0])
+            requested = int(new_seq_len)
+            seq_len, boundaries = resolve_recut_length(
+                num_frames,
+                requested,
+                getattr(self, "split_boundaries", None),
+                getattr(self, "filled_gap_spans", None),
+                getattr(self, "max_gap_window_frac", None),
+            )
+            if (
+                self.overlap
+                and _boundary_cuts(boundaries, num_frames) is not None
+            ):
+                if seq_len < requested:
+                    print(
+                        f"[XhroProper] seq_len {requested} exceeds the longest "
+                        f"unbroken span {seq_len}; using {seq_len}."
+                    )
                 return self._update_waveform_segment_windows(
-                    new_seq_len, minimum_nan_ratio
+                    seq_len, minimum_nan_ratio, boundaries
                 )
             return super().update_sequence_length(new_seq_len, minimum_nan_ratio)
         if new_seq_len is None:
@@ -1960,6 +2093,8 @@ class XhroProper(Xhro):
             self.seq_len,
             overlap=bool(self.overlap),
         )
+        starts = self._window_starts(starts, self.split_boundaries)
+        minimum_nan_ratio = self._minimum_nan_ratio(minimum_nan_ratio)
         if minimum_nan_ratio is not None:
             seq_np = (
                 self.seq.detach().cpu().numpy()
@@ -1996,7 +2131,9 @@ class XhroProper(Xhro):
         log_window_recut(self)
         return
 
-    def _update_waveform_segment_windows(self, new_seq_len, minimum_nan_ratio):
+    def _update_waveform_segment_windows(
+        self, new_seq_len, minimum_nan_ratio, boundaries=None
+    ):
         """Starts that lie inside one segment. Same split rule as coarse windows."""
         if new_seq_len is None:
             self.data_idx = [0]
@@ -2006,7 +2143,12 @@ class XhroProper(Xhro):
         new_seq_len = int(new_seq_len)
         if new_seq_len < 1:
             raise ValueError(f"seq_len must be >= 1, got {new_seq_len}.")
-        group = np.asarray(self.segment_index_per_row)
+        if boundaries is not None:
+            n_rows = int(self.seq.shape[0])
+            group = groups_from_boundaries(n_rows, boundaries)
+        else:
+            group = np.asarray(self.segment_index_per_row)
+            boundaries = self.split_boundaries
         span = max_group_span(group, len(group))
         if span < 1:
             self.seq_len = new_seq_len
@@ -2024,6 +2166,8 @@ class XhroProper(Xhro):
         starts = intra_subject_window_starts(
             group, self.seq_len, overlap=bool(self.overlap)
         )
+        starts = self._window_starts(starts, boundaries)
+        minimum_nan_ratio = self._minimum_nan_ratio(minimum_nan_ratio)
         if minimum_nan_ratio is not None:
             kept = []
             for idx in starts:

@@ -7,7 +7,12 @@ from torch.utils.data import Dataset
 import os
 import numpy as np
 import pandas as pd
-from .gap_grid import log_window_recut
+from .gap_grid import (
+    log_window_recut,
+    observed_row_mask,
+    resolve_recut_length,
+    shift_starts_onto_observed,
+)
 from .utils import data_utils
 from .utils.visualize_nans import plot_nan_heatmap, plot_segment_length_hist
 
@@ -74,6 +79,13 @@ class Xhro(Dataset):
         self.shuffle = shuffle
         self.device = device
         self.sampling_freq = None
+        # Optional window rules. XhroProper sets the parsed values; a plain
+        # Xhro run stores whatever the config passed and leaves them off.
+        self.start_on_observed = bool(kwargs.get("start_on_observed", False))
+        self.max_gap_window_frac = kwargs.get("max_gap_window_frac", None)
+        self.max_window_nan_ratio = kwargs.get("max_window_nan_ratio", None)
+        self.filled_gap_spans = kwargs.get("filled_gap_spans", None)
+        self.observed_per_row = kwargs.get("observed_per_row", None)
 
         original_base = _resolve_original_observation_process(self.observation_process)
 
@@ -414,26 +426,48 @@ class Xhro(Dataset):
         end_frame = min(start_frame + self.seq_len, len(self.seq))
         return self.seq[start_frame:end_frame]
 
+    def _minimum_nan_ratio(self, minimum_nan_ratio):
+        """Explicit argument wins. Otherwise the config threshold, or None."""
+        if minimum_nan_ratio is not None:
+            return minimum_nan_ratio
+        return getattr(self, "max_window_nan_ratio", None)
+
+    def _window_starts(self, starts, boundaries):
+        """Honor ``start_on_observed``. Off leaves the starts unchanged."""
+        if not getattr(self, "start_on_observed", False):
+            return starts
+        observed = observed_row_mask(
+            self.seq, getattr(self, "observed_per_row", None)
+        )
+        return shift_starts_onto_observed(
+            starts,
+            observed,
+            self.seq_len,
+            boundaries,
+            int(self.seq.shape[0]),
+        )
+
     def update_sequence_length(self, new_seq_len=None, minimum_nan_ratio=None):
         # Only one index representing the start of each sequence.
         # ``split_boundaries`` (sample indices) are kept on the dataset and
         # applied on every re-cut, including curriculum resizes.
+        # ``max_gap_window_frac`` adds cuts for this length only.
         if new_seq_len is not None:
             num_frames = self.seq.shape[0]
-            boundaries = getattr(self, "split_boundaries", None)
-            span = data_utils.longest_unbroken_span(num_frames, boundaries)
-            new_seq_len = int(new_seq_len)
-            if (
-                data_utils._boundary_cuts(boundaries, num_frames) is not None
-                and span >= 1
-                and new_seq_len > span
-            ):
+            requested = int(new_seq_len)
+            seq_len, boundaries = resolve_recut_length(
+                num_frames,
+                requested,
+                getattr(self, "split_boundaries", None),
+                getattr(self, "filled_gap_spans", None),
+                getattr(self, "max_gap_window_frac", None),
+            )
+            if boundaries is not None and seq_len < requested:
                 print(
-                    f"[{type(self).__name__}] seq_len {new_seq_len} exceeds the "
-                    f"longest unbroken span {span}; using {span}."
+                    f"[{type(self).__name__}] seq_len {requested} exceeds the "
+                    f"longest unbroken span {seq_len}; using {seq_len}."
                 )
-                new_seq_len = span
-            self.seq_len = new_seq_len
+            self.seq_len = seq_len
             # Recalculate data_idx based on the new sequence length.
             # Each span uses the local RandomState inside find_indices.
             all_indices = data_utils.find_indices(
@@ -442,6 +476,8 @@ class Xhro(Dataset):
                 num_frames // self.seq_len,
                 boundaries=boundaries,
             )
+            all_indices = self._window_starts(all_indices, boundaries)
+            minimum_nan_ratio = self._minimum_nan_ratio(minimum_nan_ratio)
 
             if minimum_nan_ratio is not None:
                 total_frames_before = len(all_indices)  # Total frames before filtering

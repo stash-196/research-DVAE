@@ -202,3 +202,96 @@ def test_spectrum_score_ignores_teacher_forced_half():
     # is NaN in power_spectrum_error (the +1e-10 sits outside the normalizer).
     assert np.isnan(same) and np.isnan(head)
     assert np.isfinite(tail) and tail > 0.02
+
+
+def _vertical_line_colors(ax):
+    colors = []
+    for line in ax.lines:
+        x = np.asarray(line.get_xdata(), dtype=float)
+        if x.size >= 2 and np.allclose(x, x[0]):
+            colors.append(line.get_color())
+    return colors
+
+
+def test_val_criteria_figure_matches_loss_plot_markers(tmp_path):
+    from dvae.visualizers.visualize_training_metrics import (
+        build_val_criteria_figure,
+        val_criteria_plot_series,
+        visualize_val_criteria,
+    )
+
+    recon_only = val_criteria_plot_series(("recon",), [1.0, 0.5], [9.0], [3.0])
+    assert [name for name, _ in recon_only] == ["recon"]
+    both = val_criteria_plot_series(
+        ("recon", "spectrum"),
+        [1.0, 0.5],
+        [4.0, 2.0],
+        [2.0, 1.0],
+    )
+    assert [name for name, _ in both] == ["recon", "spectrum", "combined"]
+
+    kl = [0, 3]
+    auto = [0, 4]
+    noise = [0, 5]
+    seq = [0, 6]
+    fig = build_val_criteria_figure(
+        ("recon", "spectrum"),
+        [1.0, 0.5],
+        [4.0, 2.0],
+        [2.0, 1.0],
+        kl,
+        auto,
+        noise,
+        seq,
+        "VRNN",
+        "ss",
+        "ss",
+    )
+    assert len(fig.axes) == 3
+    assert [ax.get_ylabel() for ax in fig.axes] == [
+        "loss",
+        "spectrum error",
+        "normalised sum",
+    ]
+    for ax in fig.axes:
+        colors = _vertical_line_colors(ax)
+        assert colors.count("c") == len(kl)
+        assert colors.count("r") == len(auto)
+        assert colors.count("g") == len(noise)
+        assert colors.count("m") == len(seq)
+        assert ax.get_xlabel() == "epochs"
+    rnn = build_val_criteria_figure(
+        ("recon",),
+        [1.0, 0.4],
+        None,
+        None,
+        kl,
+        auto,
+        noise,
+        seq,
+        "RNN",
+        "none",
+        "none",
+    )
+    assert len(rnn.axes) == 1
+    rnn_colors = _vertical_line_colors(rnn.axes[0])
+    assert "c" not in rnn_colors
+    assert "r" not in rnn_colors
+    assert rnn_colors.count("m") == len(seq)
+    path = visualize_val_criteria(
+        ("recon",),
+        [1.0, 0.4],
+        None,
+        None,
+        kl,
+        [],
+        [],
+        seq,
+        "RNN",
+        "none",
+        "none",
+        str(tmp_path),
+        "unit",
+    )
+    assert path.endswith("vis_training_val_criteria_unit.png")
+    assert (tmp_path / "vis_training_val_criteria_unit.png").stat().st_size > 0

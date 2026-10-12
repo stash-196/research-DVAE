@@ -59,6 +59,10 @@ class DatasetConfig:
     # filled_nan_log_sec is the re-cut log cutoff when max_fill is unset.
     max_fill_gap_sec: float | None = None
     filled_nan_log_sec: float | None = None
+    # Waveform re-cut options. Unset / false keeps today's windows.
+    max_gap_window_frac: float | None = None
+    start_on_observed: bool = False
+    max_window_nan_ratio: float | None = None
 
 
 def build_dataloader(

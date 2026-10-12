@@ -277,6 +277,7 @@ class PhysioNet2012(Dataset):
         self.shuffle = shuffle
         self.device = device
         self.sampling_freq = SAMPLING_FREQ_HZ
+        self.max_window_nan_ratio = kwargs.get("max_window_nan_ratio", None)
 
         parquet = processed_parquet_path(data_dir, dataset_label)
         if not parquet.is_file():
@@ -440,6 +441,8 @@ class PhysioNet2012(Dataset):
                 f"No intra-stay windows of length {self.seq_len} "
                 f"(max stay length {max_stay})."
             )
+        if minimum_nan_ratio is None:
+            minimum_nan_ratio = getattr(self, "max_window_nan_ratio", None)
         if minimum_nan_ratio is not None:
             valid_frames = []
             for idx in all_indices:
