@@ -9,6 +9,7 @@ License agreement in LICENSE.txt
 """
 
 import os
+import sys
 import shutil
 import socket
 import datetime
@@ -791,8 +792,6 @@ class LearningAlgorithm:
             if any(name in ("ftle", "rosenstein_lle") for name in self._val_criteria):
                 logger.info("Lyapunov criteria use |estimate - GT LLE|.")
             if self._needs_gt_lle:
-                import time
-
                 started = time.perf_counter()
                 self._lle_gt, _gt_std, self._lle_gt_per_window = rosenstein_on_free_run(
                     self._spectrum_windows,
@@ -2683,7 +2682,7 @@ class LearningAlgorithm:
         eval_file = os.path.join(project_root, "src", "dvae", "eval", "eval_signal.py")
         sync_cuda(self.device)
         eval_t0 = time.perf_counter()
-        subprocess.run(["python", eval_file, "--saved_dict", save_file])
+        subprocess.run([sys.executable, eval_file, "--saved_dict", save_file])
         sync_cuda(self.device)
         if ran_epoch:
             time_eval[epoch] = time.perf_counter() - eval_t0

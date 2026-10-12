@@ -1917,6 +1917,7 @@ class XhroProper(Xhro):
         max_fill_gap_sec=None,
         filled_nan_log_sec=None,
         legacy_windowing=_WINDOW_DEFAULT,
+        legacy_defaults=_WINDOW_DEFAULT,
         max_gap_window_frac=_WINDOW_DEFAULT,
         start_on_observed=_WINDOW_DEFAULT,
         strict_non_overlap=_WINDOW_DEFAULT,
@@ -1960,6 +1961,7 @@ class XhroProper(Xhro):
         )
         windowing = resolve_windowing(
             legacy_windowing=legacy_windowing,
+            legacy_defaults=legacy_defaults,
             start_on_observed=start_on_observed,
             strict_non_overlap=strict_non_overlap,
             max_window_nan_ratio=max_window_nan_ratio,
@@ -1968,6 +1970,7 @@ class XhroProper(Xhro):
             gap_split_quantile=gap_split_quantile,
         )
         self.legacy_windowing = windowing["legacy_windowing"]
+        self.legacy_defaults = windowing["legacy_defaults"]
         self.max_gap_window_frac = windowing["max_gap_window_frac"]
         self.start_on_observed = windowing["start_on_observed"]
         self.strict_non_overlap = windowing["strict_non_overlap"]
