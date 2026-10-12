@@ -40,6 +40,7 @@ from dvae.visualizers import (
     visualize_combined_metrics,
     visualize_sigma_history,
     visualize_alpha_history,
+    save_drift_timestep_figures,
 )
 
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
@@ -408,6 +409,19 @@ class LearningAlgorithm:
                 self._ftle_per_window[epoch] = np.asarray(
                     scored["ftle_per_window"], dtype=float
                 )
+            # Full-window traces for the checkpoint figure. The scalar
+            # series above stay the post-flip means. These arrays are
+            # replaced every epoch and are not stored in the checkpoint.
+            self._latest_drift_steps = {
+                "e2": np.asarray(scored["e2_per_step"], dtype=np.float64),
+                "ed": np.asarray(scored["ed_per_step"], dtype=np.float64),
+                "d2": np.asarray(scored["d2_per_step"], dtype=np.float64),
+            }
+            self._latest_drift_steps_varnorm = {
+                "e2": np.asarray(scored["e2_per_step_varnorm"], dtype=np.float64),
+                "ed": np.asarray(scored["ed_per_step_varnorm"], dtype=np.float64),
+                "d2": np.asarray(scored["d2_per_step_varnorm"], dtype=np.float64),
+            }
             self.logger.info(
                 "Val spectrum error (free-run half): {:.6f}".format(
                     val_spectrum[epoch]
@@ -668,6 +682,10 @@ class LearningAlgorithm:
         self._lle_gt_per_window = None
         self._lle_per_window = None
         self._ftle_per_window = None
+        # Latest epoch's per-timestep traces, kept only until the
+        # checkpoint figure is drawn. Not written into the history.
+        self._latest_drift_steps = None
+        self._latest_drift_steps_varnorm = None
         self._embed_tau, self._embed_dim = _get_delay_params(self.dataset_name)
         if self._monitor_spectrum:
             n_windows = parse_optional_int(
@@ -2297,6 +2315,22 @@ class LearningAlgorithm:
                     subband_warm_epochs=subband_line_epochs,
                     decorr_warm_epochs=decorr_line_epochs,
                 )
+                # Drawn on every save_frequency checkpoint, whenever the
+                # fixed windows were scored, including when drift is not
+                # a selection criterion. The arrays are not checkpointed.
+                if self._latest_drift_steps is not None:
+                    drift_figures = save_drift_timestep_figures(
+                        self._latest_drift_steps,
+                        save_figures_dir,
+                        epoch,
+                        flip=self._spectrum_tf_steps,
+                        varnorm_terms=self._latest_drift_steps_varnorm,
+                    )
+                    logger.info(
+                        "Epoch: {} ===> drift timestep figures {}".format(
+                            epoch, ", ".join(drift_figures)
+                        )
+                    )
                 visualize_total_loss(
                     train_loss[: epoch + 1],
                     val_loss[: epoch + 1],

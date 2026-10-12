@@ -2,6 +2,12 @@ import matplotlib.pyplot as plt
 import os
 import numpy as np
 
+from dvae.eval.aggregate_plot_style import (
+    apply_paper_ready_line_style,
+    save_figure,
+    setup_plot_y_axis,
+)
+
 
 def draw_regularizer_warmup_lines(ax, subband_warm_epochs=None, decorr_warm_epochs=None):
     """Vertical markers for subband and decorr scale changes.
@@ -1343,3 +1349,140 @@ def visualize_alpha_history(
     )
     plt.savefig(fig_file)
     plt.close(fig)
+
+
+# One row per fixed window, one column per timestep of that window.
+_DRIFT_STEP_PANELS = (
+    ("e2", r"$e_t^{2}$", "tab:blue"),
+    ("ed", r"$e_t d_t$", "tab:green"),
+    ("d2", r"$d_t^{2}$", "tab:orange"),
+)
+
+
+def build_drift_timestep_figure(terms, flip=None, normalized=False):
+    """Three stacked panels of per-window drift trajectories.
+
+    ``terms`` maps ``e2``, ``ed``, and ``d2`` to arrays shaped
+    ``(window, time)``. Each panel draws every window faintly and the
+    mean across windows as a solid line. The time axis is shared.
+    ``flip`` marks the teacher-forced boundary when it is known.
+    Styling follows ``aggregate_plot_style``.
+    """
+    saved_style = plt.rcParams.copy()
+    apply_paper_ready_line_style()
+    try:
+        fig, axes = plt.subplots(
+            3, 1, sharex=True, figsize=(12, 14), squeeze=True
+        )
+        time = None
+        for ax, (key, label, color) in zip(axes, _DRIFT_STEP_PANELS):
+            values = np.asarray(terms[key], dtype=float)
+            if values.ndim != 2:
+                raise ValueError(
+                    f"drift timestep {key} must have shape (window, time), "
+                    f"got {values.shape}."
+                )
+            if time is None:
+                time = np.arange(values.shape[1])
+            elif values.shape[1] != time.size:
+                raise ValueError(
+                    "drift timestep panels must share a time axis, "
+                    f"got {time.size} and {values.shape[1]}."
+                )
+            for index in range(values.shape[0]):
+                ax.plot(
+                    time,
+                    values[index],
+                    color=color,
+                    alpha=0.2,
+                    linewidth=1.0,
+                    label="window" if index == 0 else "_nolegend_",
+                    zorder=1,
+                )
+            with np.errstate(all="ignore"):
+                mean = np.nanmean(values, axis=0)
+            ax.plot(
+                time,
+                mean,
+                color=color,
+                alpha=1.0,
+                linestyle="-",
+                label="mean",
+                zorder=3,
+            )
+            if flip is not None:
+                ax.axvline(
+                    float(flip),
+                    color="0.35",
+                    linestyle="--",
+                    linewidth=1.0,
+                    label="_nolegend_",
+                    zorder=2,
+                )
+            ylabel = label + (r" / var" if normalized else "")
+            ax.set_ylabel(ylabel)
+            setup_plot_y_axis(ax, values)
+            ax.legend(loc="upper right")
+        axes[-1].set_xlabel(r"$t$")
+        return fig
+    finally:
+        plt.rcParams.update(saved_style)
+
+
+def save_drift_timestep_figure(terms, path, flip=None, normalized=False):
+    """Write the three-panel drift trajectory figure."""
+    fig = build_drift_timestep_figure(terms, flip=flip, normalized=normalized)
+    try:
+        save_figure(fig, path)
+    finally:
+        plt.close(fig)
+
+
+# Own folder under vis_during_training, same layout as
+# sequence_reconstruction/half_half, even_bursts, and training_mode.
+# The epoch is in the filename so each checkpoint keeps its own figure.
+DRIFT_TIMESTEP_SUBDIR = "drift_timestep"
+
+
+def drift_timestep_figure_path(save_figures_dir, epoch, normalized=False):
+    """Path of the checkpoint drift-trajectory figure.
+
+    Raw:
+    ``{save_figures_dir}/drift_timestep/vis_drift_timestep_epoch_{epoch}.png``
+
+    Variance-normalised:
+    ``{save_figures_dir}/drift_timestep/vis_drift_timestep_varnorm_epoch_{epoch}.png``
+
+    ``save_figures_dir`` is the run's ``vis_during_training`` directory.
+    """
+    stem = (
+        "vis_drift_timestep_varnorm_epoch_{}.png"
+        if normalized
+        else "vis_drift_timestep_epoch_{}.png"
+    )
+    return os.path.join(
+        save_figures_dir, DRIFT_TIMESTEP_SUBDIR, stem.format(int(epoch))
+    )
+
+
+def save_drift_timestep_figures(
+    terms, save_figures_dir, epoch, flip=None, varnorm_terms=None
+):
+    """Draw the checkpoint drift trajectories into their own subdirectory.
+
+    ``terms`` and ``varnorm_terms`` are the current epoch only. Nothing
+    here is written into the training history. Returns the paths written.
+    """
+    path = drift_timestep_figure_path(save_figures_dir, epoch, normalized=False)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    save_drift_timestep_figure(terms, path, flip=flip, normalized=False)
+    written = [path]
+    if varnorm_terms is not None:
+        var_path = drift_timestep_figure_path(
+            save_figures_dir, epoch, normalized=True
+        )
+        save_drift_timestep_figure(
+            varnorm_terms, var_path, flip=flip, normalized=True
+        )
+        written.append(var_path)
+    return written

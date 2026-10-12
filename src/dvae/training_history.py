@@ -44,7 +44,11 @@ Rosenstein is on ``val_lle_mean`` / ``val_lle_std`` plus the scalar
 one value per fixed window; ``val_lle_gt_per_window`` is that same
 ground-truth exponent per window, computed once. The plotted Rosenstein
 band is ``val_lle_std``. Drift figures are written raw and as
-``*_varnorm``. The chosen window starts and their teacher-forced
+``*_varnorm``. The per-timestep trajectories of ``e^2``, ``e d``, and
+``d^2`` are drawn at each ``save_frequency`` checkpoint into
+``vis_during_training/drift_timestep/`` (epoch in the filename). Those
+arrays are not stored here; they can be recomputed from the saved
+model. The chosen window starts and their teacher-forced
 observed fraction, longest missing run, and qualified flag are stored
 once. ``drift_monitored`` is false when the windows were not built, and
 the figure then omits those panels. Older files that still use
@@ -696,8 +700,9 @@ def _spectrum_for_figure(history, criteria):
 def regenerate_training_figures(history, save_figures_dir, tag=None, drift_norm="both"):
     """Redraw the training figures from a history dict. No data and no model.
 
-    Parameter heatmaps and the long-sequence batch figure need a model and
-    a batch, so they are not part of this redraw. Everything else the
+    Parameter heatmaps, the long-sequence batch figure, and the
+    per-timestep drift trajectories need a model, so they are not part
+    of this redraw. Everything else the
     training loop saves at ``save_frequency`` is: total loss, validation
     criteria, reconstruction and KL when the model is a VRNN, the combined
     warm-up / patience / windowing figure, and sigma / alpha history when
