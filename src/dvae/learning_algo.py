@@ -2821,7 +2821,7 @@ class LearningAlgorithm:
                     )
 
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
-                    alphas = 1 / (1 + np.exp(-sigmas_history[:, epoch]))
+                    alphas = sigmoid_10(sigmas_history[:, epoch])
                     logger.info(
                         "alphas: {}".format([f"{alpha:.5f}" for alpha in alphas])
                     )
@@ -2892,7 +2892,7 @@ class LearningAlgorithm:
 
         # Log all final alpha values
         if self.model_name in ["MT_RNN", "MT_VRNN"]:
-            alphas = 1 / (1 + np.exp(-sigmas_history[:, -1]))
+            alphas = sigmoid_10(sigmas_history[:, -1])
             logger.info("Final alphas: {}".format([f"{alpha:.5f}" for alpha in alphas]))
         log_plrnn_timescales(
             logger,

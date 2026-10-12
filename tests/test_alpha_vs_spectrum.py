@@ -77,8 +77,8 @@ def test_eval_signal_calls_alpha_vs_spectrum_on_first_window():
     assert "save_alpha_vs_spectrum_figures(" in text
     assert "if save_metric_figures and i == 0:" in text
     plotter = PLOTTER.read_text()
-    assert "1 / (1 + np.exp(-np.max(sigmas_history))) / 10" in plotter
-    assert "alphas = 1 / (1 + np.exp(-sigmas_history[i]))" in plotter
+    assert "mt_alpha_from_sigma" in plotter
+    assert "np.exp(-" not in plotter
 
 
 def test_tracks_keep_mt_sigmas_separate_from_diagonal_a():
@@ -234,6 +234,34 @@ def test_xhro_channels_are_not_lorenz_gated(tmp_path):
         )
         assert wrote, name
         assert wrote[0].endswith("vis_alpha_vs_power_spectrum_.png")
+
+
+def test_default_mt_figure_annotates_the_base10_sigmoid(tmp_path, monkeypatch):
+    import matplotlib.pyplot as plt
+
+    texts = []
+    real_close = plt.close
+
+    def _close(*args, **kwargs):
+        texts.extend(text.get_text() for text in plt.gcf().axes[0].texts)
+        return real_close(*args, **kwargs)
+
+    monkeypatch.setattr(plt, "close", _close)
+    benchmarks = _benchmarks()
+    power, frequencies, colors, names = gt_power_spectra(benchmarks)
+    visualize_alpha_history_and_spectrums(
+        sigmas_history=np.array([[1.0, 1.0]], dtype=np.float64),
+        power_spectrum_lst=power,
+        spectrum_color_lst=colors,
+        spectrum_name_lst=names,
+        frequencies=frequencies,
+        save_dir=tmp_path,
+        dt=0.01,
+        true_alphas=[0.02],
+    )
+    joined = "\n".join(texts)
+    assert f"{1.0 / (1.0 + 10.0 ** (-1.0)):.4g}" in joined
+    assert f"{1.0 / (1.0 + np.exp(-1.0)):.4g}" not in joined
 
 
 def test_default_mt_figure_still_renders(tmp_path):
