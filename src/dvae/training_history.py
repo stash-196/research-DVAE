@@ -32,6 +32,14 @@ and spectrum values. ``spectrum_monitored`` is false only when the legacy
 switch skipped the spectrum windows. The validation figure is redrawn
 from those fields: raw recon, raw spectrum error when monitoring was on,
 and the stored selection score when more than one criterion was selected.
+
+When those windows were built, the history also stores the Appendix B
+terms ``val_base_error``, ``val_drift``, ``val_cross``, and
+``val_auto_total``, the same terms divided by the per-channel variance
+of ``x_true`` (``*_varnorm``), drift on the first 1, 5, and K steps,
+``val_x_true_var``, and the fixed flip and horizon. ``drift_monitored``
+is false when the windows were not built, and the figure then omits
+those panels.
 """
 
 from __future__ import annotations
@@ -41,6 +49,21 @@ import os
 import pickle
 
 import numpy as np
+
+# Appendix B series. Stored when the fixed windows were scored.
+DRIFT_SERIES_KEYS = (
+    "val_base_error",
+    "val_drift",
+    "val_cross",
+    "val_auto_total",
+    "val_base_error_varnorm",
+    "val_drift_varnorm",
+    "val_cross_varnorm",
+    "val_auto_total_varnorm",
+    "val_drift_k1",
+    "val_drift_k5",
+    "val_drift_k",
+)
 
 # Epoch series the training figures read. Present in every new history file.
 EPOCH_SERIES_KEYS = (
@@ -189,6 +212,10 @@ def build_training_history(
     a_sigmas_history=None,
     metric_reference=None,
     spectrum_monitored=True,
+    drift_monitored=False,
+    drift_horizon=None,
+    drift_flip=None,
+    x_true_var=None,
 ) -> dict:
     """One dict for the checkpoint ``loss_log`` and for ``loss_model.pckl``.
 
@@ -218,6 +245,16 @@ def build_training_history(
     )
     history["delta_threshold"] = float(delta_threshold)
     history["spectrum_monitored"] = bool(spectrum_monitored)
+    history["drift_monitored"] = bool(drift_monitored)
+    for key in DRIFT_SERIES_KEYS:
+        if key in series:
+            history[key] = _slice_1d(series[key], end)
+    if drift_horizon is not None:
+        history["val_drift_horizon"] = int(drift_horizon)
+    if drift_flip is not None:
+        history["val_drift_flip"] = int(drift_flip)
+    if x_true_var is not None:
+        history["val_x_true_var"] = np.asarray(x_true_var, dtype=float).reshape(-1)
     metric = _float_reference(metric_reference)
     if metric is None:
         metric = _float_reference(val_reference)
@@ -352,6 +389,27 @@ def _best_epoch_index(history, n):
     return None
 
 
+def _drift_for_figure(history, n):
+    """Raw and variance-normalised Appendix B series, or None when absent.
+
+    A file with ``drift_monitored`` false does not grow zero panels.
+    Older pickles without the series stay on recon and spectrum only.
+    """
+    if "drift_monitored" in history and not bool(history["drift_monitored"]):
+        return None
+    if "val_base_error" not in history:
+        return None
+    from dvae.eval.utils.local_drift_analysis import DRIFT_PLOT_NAMES
+
+    out = {}
+    for name in DRIFT_PLOT_NAMES:
+        key = "val_" + name
+        if key not in history:
+            continue
+        out[name] = np.asarray(history[key], dtype=float).reshape(-1)[: int(n)]
+    return out or None
+
+
 def _spectrum_for_figure(history, criteria):
     """Whether the redraw includes spectrum, and the raw series or None.
 
@@ -477,6 +535,7 @@ def regenerate_training_figures(history, save_figures_dir, tag=None):
         file_tag,
         best_epoch=_best_epoch_index(history, n),
         include_spectrum=include_spectrum,
+        drift=_drift_for_figure(history, n),
     )
     if model_name in ("VRNN", "MT_VRNN"):
         visualize_recon_loss(

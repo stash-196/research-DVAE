@@ -184,9 +184,16 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
     def _fig_save(self, fig_path, *args, **kwargs):
         name = str(fig_path)
         if "val_criteria" in name:
-            key = "legacy" if "val_criteria_legacy" in name else (
-                "recon" if "val_criteria_recononly" in name else "both"
-            )
+            if "val_criteria_legacy" in name:
+                key = "legacy"
+            elif "val_criteria_recononly" in name:
+                key = "recon"
+            elif "val_criteria_nodrift" in name:
+                key = "nodrift"
+            elif "val_criteria_drift" in name:
+                key = "drift"
+            else:
+                key = "both"
             captured[key] = {
                 "titles": [
                     ax.get_legend().get_title().get_text() for ax in self.axes
@@ -301,6 +308,113 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
     regenerate_training_figures(legacy, tmp_path / "legacy_figs")
     assert captured["legacy"]["titles"] == ["RNN: recon (selected)"]
     assert captured["legacy"]["best"] == [2.5]
+
+    drift_series = _series()
+    drift_series.update(
+        {
+            "val_base_error": np.array([1.0, 1.5, 2.0, 2.5]),
+            "val_drift": np.array([0.4, 0.4, 0.2, 0.2]),
+            "val_cross": np.array([0.1, 0.0, -0.1, 0.05]),
+            "val_auto_total": np.array([1.5, 1.9, 2.1, 2.75]),
+            "val_base_error_varnorm": np.array([0.5, 0.75, 1.0, 1.25]),
+            "val_drift_varnorm": np.array([0.2, 0.2, 0.1, 0.1]),
+            "val_cross_varnorm": np.array([0.05, 0.0, -0.05, 0.025]),
+            "val_auto_total_varnorm": np.array([0.75, 0.95, 1.05, 1.375]),
+            "val_drift_k1": np.array([0.1, 0.1, 0.05, 0.05]),
+            "val_drift_k5": np.array([0.2, 0.2, 0.1, 0.1]),
+            "val_drift_k": np.array([0.4, 0.4, 0.2, 0.2]),
+        }
+    )
+    drift_history = build_training_history(
+        end=4,
+        model_name="MT_VRNN",
+        tag="drift",
+        auto_sampling_method="ss",
+        noise_sampling_method="none",
+        delta_threshold=1e-4,
+        val_criteria=("recon", "drift"),
+        val_reference={"recon": 0.5, "drift": 0.4},
+        metric_reference={
+            "recon": 0.5,
+            "spectrum": 0.3,
+            "base_error": 1.0,
+            "drift": 0.4,
+            "cross": 0.1,
+            "auto_total": 1.5,
+        },
+        spectrum_monitored=True,
+        drift_monitored=True,
+        drift_horizon=60,
+        drift_flip=1000,
+        x_true_var=np.array([0.5, 2.0]),
+        series=drift_series,
+        dataset_stats=_stats(),
+    )
+    drift_path = tmp_path / "drift.pckl"
+    save_training_history(drift_path, drift_history)
+    drift_loaded = load_training_history(drift_path)
+    np.testing.assert_allclose(drift_loaded["val_base_error"], [1.0, 1.5, 2.0, 2.5])
+    np.testing.assert_allclose(
+        drift_loaded["val_base_error_varnorm"], [0.5, 0.75, 1.0, 1.25]
+    )
+    np.testing.assert_allclose(drift_loaded["val_drift"], drift_loaded["val_drift_k"])
+    np.testing.assert_allclose(drift_loaded["val_drift_k1"], [0.1, 0.1, 0.05, 0.05])
+    np.testing.assert_allclose(drift_loaded["val_drift_k5"], [0.2, 0.2, 0.1, 0.1])
+    assert drift_loaded["val_base_error"][0] == 1.0
+    assert drift_loaded["val_metric_reference"]["base_error"] == 1.0
+    assert drift_loaded["val_metric_reference"]["drift"] == 0.4
+    np.testing.assert_allclose(drift_loaded["val_x_true_var"], [0.5, 2.0])
+    assert drift_loaded["val_drift_horizon"] == 60
+    assert drift_loaded["val_drift_flip"] == 1000
+    assert drift_loaded["drift_monitored"] is True
+    assert drift_loaded["val_criteria_reference"]["drift"] == 0.4
+    regenerate_training_figures(drift_loaded, tmp_path / "drift_figs")
+    assert captured["drift"]["titles"] == [
+        "MT_VRNN: recon (selected)",
+        "MT_VRNN: spectrum error",
+        "MT_VRNN: base_error",
+        "MT_VRNN: drift (selected)",
+        "MT_VRNN: cross",
+        "MT_VRNN: auto_total",
+        "MT_VRNN: base_error / var",
+        "MT_VRNN: drift / var",
+        "MT_VRNN: cross / var",
+        "MT_VRNN: auto_total / var",
+        "MT_VRNN: selection score",
+    ]
+    assert captured["drift"]["best"] == [
+        2.5,
+        2.3,
+        2.0,
+        0.2,
+        -0.1,
+        2.1,
+        1.0,
+        0.1,
+        -0.05,
+        1.05,
+        4.0,
+    ]
+    for colors in captured["drift"]["warmup"]:
+        assert "c" in colors and "r" in colors and "m" in colors
+
+    hidden = build_training_history(
+        end=4,
+        model_name="RNN",
+        tag="nodrift",
+        auto_sampling_method="none",
+        noise_sampling_method="none",
+        delta_threshold=1e-4,
+        val_criteria=("recon",),
+        val_reference=None,
+        metric_reference={"recon": 0.5},
+        spectrum_monitored=False,
+        drift_monitored=False,
+        series=drift_series,
+        dataset_stats=_stats(),
+    )
+    regenerate_training_figures(hidden, tmp_path / "nodrift_figs")
+    assert captured["nodrift"]["titles"] == ["RNN: recon (selected)"]
 
     # The same redraw from a checkpoint loss_log, without using the weights.
     checkpoint = tmp_path / "MT_VRNN_checkpoint.pt"

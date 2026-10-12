@@ -2,13 +2,17 @@
 
 ``val_criteria`` defaults to recon and spectrum. A blank key keeps that
 pair: each term is divided by its first validation epoch and the sum is
-the selection score. The validation figure still plots raw recon and the
-spectrum error every epoch; the list only chooses the checkpoint.
+the selection score. The validation figure still plots raw recon, the
+spectrum error, and the Appendix B drift terms every epoch; the list
+only chooses the checkpoint. ``base_error``, ``drift``, ``cross``, and
+``auto_total`` are optional extra selection terms with that same
+first-epoch normalisation.
 ``[DataFrame] legacy_defaults`` true, or the same switch under its old
 name ``legacy_windowing``, keeps reconstruction-only selection when
 ``val_criteria`` is blank, and then skips the spectrum windows unless
-spectrum is explicitly selected. An explicit ``val_criteria = recon``
-selects on raw ``val_loss`` and still records the spectrum error.
+spectrum or a drift term is explicitly selected. An explicit
+``val_criteria = recon`` selects on raw ``val_loss`` and still records
+the spectrum error and the drift terms.
 Checkpoint cadence and the in-domain eval path stay off unless set.
 """
 
@@ -19,8 +23,10 @@ import re
 
 _OFF = {"", "none", "null", "off", "false", "no"}
 _VAL_UNSET = {"", "none", "null"}
-_VAL_CRITERIA = ("recon", "spectrum")
+_DRIFT_CRITERIA = ("base_error", "drift", "cross", "auto_total")
+_VAL_CRITERIA = ("recon", "spectrum") + _DRIFT_CRITERIA
 DEFAULT_VAL_CRITERIA = ("recon", "spectrum")
+DEFAULT_VAL_DRIFT_HORIZON = 60
 
 
 def _text(raw) -> str:
@@ -60,11 +66,13 @@ def parse_val_criteria(raw, legacy_windowing=False) -> tuple[str, ...]:
     explicit list is kept as written.
 
     ``recon`` is the reconstruction validation loss. ``spectrum`` is the
-    free-run spectral error. One entry is used raw, so ``recon`` keeps
-    the historical ``val_loss`` comparison. Two entries are added after
-    each is divided by its own value at the first validation epoch. That
-    sum is lower-is-better. Each first-epoch value must be finite and
-    non-zero.
+    free-run spectral error. ``base_error``, ``drift``, ``cross``, and
+    ``auto_total`` are the Appendix B terms on the same windows. One
+    entry is used raw, so ``recon`` keeps the historical ``val_loss``
+    comparison and a single drift term stays raw. Two entries are added
+    after each is divided by its own value at the first validation
+    epoch. That sum is lower-is-better. Each first-epoch value must be
+    finite and non-zero.
     """
     text = _text(raw)
     lowered = text.lower()
@@ -83,8 +91,8 @@ def parse_val_criteria(raw, legacy_windowing=False) -> tuple[str, ...]:
     unknown = [part for part in parts if part not in _VAL_CRITERIA]
     if unknown:
         raise ValueError(
-            "val_criteria entries must be 'recon' and/or 'spectrum', "
-            f"got {raw!r}."
+            "val_criteria entries must be recon, spectrum, base_error, "
+            f"drift, cross, and/or auto_total, got {raw!r}."
         )
     if len(parts) != len(set(parts)):
         raise ValueError(f"val_criteria repeats an entry, got {raw!r}.")
@@ -138,12 +146,25 @@ def normalised_criterion_sum(components: dict, reference: dict) -> float:
 def spectrum_monitoring_enabled(criteria, legacy: bool = False) -> bool:
     """Score the fixed spectrum windows even when selection ignores them.
 
-    The legacy switch is the exception: with it on, the windows are built
-    only when ``spectrum`` is one of the selection criteria.
+    Drift uses those same windows. The legacy switch is the exception:
+    with it on, the windows are built only when ``spectrum`` or one of
+    ``base_error``, ``drift``, ``cross``, ``auto_total`` is selected.
     """
-    if "spectrum" in tuple(criteria):
+    names = tuple(criteria)
+    if "spectrum" in names or any(name in names for name in _DRIFT_CRITERIA):
         return True
     return not bool(legacy)
+
+
+def parse_val_drift_horizon(raw) -> int:
+    """Blank keeps 60. The value must be >= 5 so k=1, 5, and K all exist."""
+    value = parse_optional_int(raw, DEFAULT_VAL_DRIFT_HORIZON, "val_drift_horizon")
+    if value < 5:
+        raise ValueError(
+            "val_drift_horizon must be an integer >= 5 so drift is logged "
+            f"at k=1, 5, and K, got {value}."
+        )
+    return value
 
 
 def criteria_log_fields(criteria, val_spectrum, val_criteria_score, reference, end):

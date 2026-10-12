@@ -47,10 +47,14 @@ from dvae.dataset.xhro_proper_dataset import (
     optional_config_str,
     windowing_from_config,
 )
-from dvae.eval.utils.spectrum_validation import (
-    capture_fixed_spectrum_windows,
-    score_spectrum_windows,
+from dvae.eval.utils.local_drift_analysis import (
+    DRIFT_METRIC_NAMES,
+    DRIFT_PLOT_NAMES,
+    enforce_drift_span,
+    score_fixed_validation_windows,
+    x_true_variance,
 )
+from dvae.eval.utils.spectrum_validation import capture_fixed_spectrum_windows
 from dvae.eval.window_length import cap_eval_seq_len
 from dvae.warmup_curriculum import (
     WarmupCurriculum,
@@ -62,6 +66,7 @@ from dvae.run_options import (
     normalised_criterion_sum,
     parse_checkpoint_every_n_epochs,
     parse_optional_int,
+    parse_val_drift_horizon,
     legacy_defaults_from_config,
     resolve_val_criteria,
     spectrum_monitoring_enabled,
@@ -294,45 +299,91 @@ class LearningAlgorithm:
             return True
         return False
 
-    def _score_spectrum_validation(self) -> float:
-        """Score the fixed free-run windows. Does not resize the live loader."""
+    def _score_fixed_validation(self) -> dict:
+        """Spectrum error and Appendix B drift on the fixed windows.
+
+        Does not resize the live loader. The flip and the horizon are the
+        values stored at training start.
+        """
         was_training = self.model.training
         self.model.eval()
         try:
             with torch.no_grad():
-                return float(
-                    score_spectrum_windows(
-                        self.model,
-                        self._spectrum_windows,
-                        tf_steps=self._spectrum_tf_steps,
-                        observation_process=self._spectrum_observation,
-                        device=self.device,
-                    )
+                return score_fixed_validation_windows(
+                    self.model,
+                    self._spectrum_windows,
+                    tf_steps=self._spectrum_tf_steps,
+                    horizon=self._drift_horizon,
+                    variance=self._x_true_var,
+                    observation_process=self._spectrum_observation,
+                    device=self.device,
                 )
         finally:
             if was_training:
                 self.model.train()
 
-    def _epoch_selection_value(self, epoch, val_loss, val_spectrum, val_criteria_score):
+    def _raw_criterion(self, name, epoch, val_loss, val_spectrum, drift_arrays):
+        if name == "recon":
+            return float(val_loss[epoch])
+        if name == "spectrum":
+            return float(val_spectrum[epoch])
+        return float(drift_arrays["val_" + name][epoch])
+
+    def _epoch_selection_value(
+        self, epoch, val_loss, val_spectrum, val_criteria_score, drift_arrays
+    ):
         """Score used for best-model selection and early stopping.
 
-        ``recon`` alone returns ``val_loss[epoch]``. ``spectrum`` alone
-        returns the free-run spectral error. Several criteria return the
+        ``recon`` alone returns ``val_loss[epoch]``. Any other single
+        criterion returns that raw series. Several criteria return the
         sum of each value divided by its value at the first validation
         epoch. Every selected component is logged on that multi-criterion
-        path.
+        path. Spectrum and the Appendix B terms are filled whenever the
+        fixed windows exist, including when they are not selected.
         """
         if self._spectrum_windows is not None:
-            val_spectrum[epoch] = self._score_spectrum_validation()
+            scored = self._score_fixed_validation()
+            val_spectrum[epoch] = float(scored["spectrum"])
+            for name in DRIFT_METRIC_NAMES:
+                drift_arrays["val_" + name][epoch] = float(scored[name])
             self.logger.info(
                 "Val spectrum error (free-run half): {:.6f}".format(
                     val_spectrum[epoch]
+                )
+            )
+            self.logger.info(
+                "Val drift horizon {}: base_error {:.6f} drift {:.6f} "
+                "cross {:.6f} auto_total {:.6f}".format(
+                    self._drift_horizon,
+                    scored["base_error"],
+                    scored["drift"],
+                    scored["cross"],
+                    scored["auto_total"],
+                )
+            )
+            self.logger.info(
+                "Val drift / var: base_error {:.6f} drift {:.6f} "
+                "cross {:.6f} auto_total {:.6f}".format(
+                    scored["base_error_varnorm"],
+                    scored["drift_varnorm"],
+                    scored["cross_varnorm"],
+                    scored["auto_total_varnorm"],
+                )
+            )
+            self.logger.info(
+                "Val drift at k=1 {:.6f}, k=5 {:.6f}, k={} {:.6f}".format(
+                    scored["drift_k1"],
+                    scored["drift_k5"],
+                    self._drift_horizon,
+                    scored["drift_k"],
                 )
             )
         if self._metric_reference is None:
             reference = {"recon": float(val_loss[epoch])}
             if self._spectrum_windows is not None:
                 reference["spectrum"] = float(val_spectrum[epoch])
+                for name in ("base_error", "drift", "cross", "auto_total"):
+                    reference[name] = float(drift_arrays["val_" + name][epoch])
             self._metric_reference = reference
             self.logger.info(
                 "Val metric reference (first validation epoch {}): {}".format(
@@ -340,13 +391,14 @@ class LearningAlgorithm:
                 )
             )
         if len(self._val_criteria) == 1:
-            if self._val_criteria[0] == "recon":
-                return float(val_loss[epoch])
-            return float(val_spectrum[epoch])
+            return self._raw_criterion(
+                self._val_criteria[0], epoch, val_loss, val_spectrum, drift_arrays
+            )
         components = {}
         for name in self._val_criteria:
-            raw = val_loss[epoch] if name == "recon" else val_spectrum[epoch]
-            components[name] = float(raw)
+            components[name] = self._raw_criterion(
+                name, epoch, val_loss, val_spectrum, drift_arrays
+            )
             self.logger.info(
                 "Val criterion {}: {:.6f}".format(name, components[name])
             )
@@ -522,6 +574,8 @@ class LearningAlgorithm:
         self._spectrum_windows = None
         self._spectrum_tf_steps = None
         self._spectrum_observation = dataset_config.observation_process
+        self._drift_horizon = None
+        self._x_true_var = None
         if self._monitor_spectrum:
             n_windows = parse_optional_int(
                 self.cfg.get("Training", "val_spectrum_n_windows", fallback=None),
@@ -544,16 +598,35 @@ class LearningAlgorithm:
                     f"got tf_steps={tf_steps}, window_len={window_len}."
                 )
             self._spectrum_tf_steps = tf_steps
+            self._drift_horizon = parse_val_drift_horizon(
+                self.cfg.get("Training", "val_drift_horizon", fallback=None)
+            )
+            enforce_drift_span(window_len, tf_steps, self._drift_horizon)
             self._spectrum_windows = capture_fixed_spectrum_windows(
                 val_dataloader.dataset,
                 n_windows=n_windows,
                 window_len=window_len,
+            )
+            for window in self._spectrum_windows:
+                enforce_drift_span(
+                    np.asarray(window).shape[0], tf_steps, self._drift_horizon
+                )
+            self._x_true_var = x_true_variance(
+                self._spectrum_windows, self._spectrum_observation
             )
             logger.info(
                 "Spectrum validation: {} fixed window(s) of length {}, "
                 "teacher-forced {}, free-run the rest. "
                 "These copies are not passed to update_sequence_length.".format(
                     len(self._spectrum_windows), window_len, tf_steps
+                )
+            )
+            logger.info(
+                "Drift validation fixed at start: flip {}, horizon {}, "
+                "variance over {} channel(s).".format(
+                    tf_steps,
+                    self._drift_horizon,
+                    int(self._x_true_var.shape[0]),
                 )
             )
 
@@ -704,6 +777,10 @@ class LearningAlgorithm:
         warm_up_happened = False
         val_spectrum = series_or_new(loss_log, "val_spectrum", epochs)
         val_criteria_score = series_or_new(loss_log, "val_criteria_score", epochs)
+        drift_arrays = {
+            "val_" + name: series_or_new(loss_log, "val_" + name, epochs)
+            for name in DRIFT_METRIC_NAMES
+        }
         if self.params["reload"] and isinstance(loss_log, dict):
             saved_ref = loss_log.get("val_criteria_reference")
             if isinstance(saved_ref, dict):
@@ -718,6 +795,36 @@ class LearningAlgorithm:
                 self._metric_reference = {
                     str(name): float(saved_metrics[name]) for name in saved_metrics
                 }
+            if self._monitor_spectrum:
+                saved_horizon = loss_log.get("val_drift_horizon")
+                if saved_horizon is not None and int(saved_horizon) != int(
+                    self._drift_horizon
+                ):
+                    raise ValueError(
+                        "val_drift_horizon is fixed at training start "
+                        f"({int(saved_horizon)}); this resume parsed "
+                        f"{int(self._drift_horizon)}."
+                    )
+                saved_flip = loss_log.get("val_drift_flip")
+                if saved_flip is not None and int(saved_flip) != int(
+                    self._spectrum_tf_steps
+                ):
+                    raise ValueError(
+                        "drift flip is fixed at training start "
+                        f"({int(saved_flip)}); this resume parsed "
+                        f"{int(self._spectrum_tf_steps)}."
+                    )
+                saved_var = loss_log.get("val_x_true_var")
+                if saved_var is not None:
+                    saved_var = np.asarray(saved_var, dtype=float).reshape(-1)
+                    if saved_var.shape != self._x_true_var.shape or not np.allclose(
+                        saved_var, self._x_true_var, equal_nan=True
+                    ):
+                        raise ValueError(
+                            "val_x_true_var is fixed from the validation "
+                            "windows at training start and does not match "
+                            "this resume."
+                        )
 
         # Blank warmup_order is window_first. A blank warmup_patience_start
         # is max(1, round(frac * early_stop_patience)), frac 0.2.
@@ -763,6 +870,18 @@ class LearningAlgorithm:
         dataset_stats = snapshot_window_stats(train_dataloader.dataset)
 
         def history_at(end):
+            logged = {
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "train_recon": train_recon,
+                "train_kl": train_kl,
+                "val_recon": val_recon,
+                "val_kl": val_kl,
+                "val_spectrum": val_spectrum,
+                "val_criteria_score": val_criteria_score,
+            }
+            if self._monitor_spectrum:
+                logged.update(drift_arrays)
             return build_training_history(
                 end=end,
                 model_name=self.model_name,
@@ -774,15 +893,12 @@ class LearningAlgorithm:
                 val_reference=self._val_reference,
                 metric_reference=self._metric_reference,
                 spectrum_monitored=self._monitor_spectrum,
+                drift_monitored=self._monitor_spectrum,
+                drift_horizon=self._drift_horizon,
+                drift_flip=self._spectrum_tf_steps,
+                x_true_var=self._x_true_var,
                 series={
-                    "train_loss": train_loss,
-                    "val_loss": val_loss,
-                    "train_recon": train_recon,
-                    "train_kl": train_kl,
-                    "val_recon": val_recon,
-                    "val_kl": val_kl,
-                    "val_spectrum": val_spectrum,
-                    "val_criteria_score": val_criteria_score,
+                    **logged,
                     "kl_warm_values": kl_warm_values,
                     "auto_warm_values": auto_warm_values,
                     "noise_warm_values": noise_warm_values,
@@ -1365,7 +1481,7 @@ class LearningAlgorithm:
             )
 
             selection_value = self._epoch_selection_value(
-                epoch, val_loss, val_spectrum, val_criteria_score
+                epoch, val_loss, val_spectrum, val_criteria_score, drift_arrays
             )
 
             # Save the best model
@@ -1604,6 +1720,14 @@ class LearningAlgorithm:
                         else None
                     ),
                     include_spectrum=self._monitor_spectrum,
+                    drift=(
+                        {
+                            name: drift_arrays["val_" + name][: epoch + 1]
+                            for name in DRIFT_PLOT_NAMES
+                        }
+                        if self._monitor_spectrum
+                        else None
+                    ),
                 )
                 visualize_total_loss(
                     train_loss[: epoch + 1],

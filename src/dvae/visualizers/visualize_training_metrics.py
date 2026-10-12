@@ -32,22 +32,38 @@ def draw_loss_warmup_lines(
         ax.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
 
 
+_DRIFT_PANEL_LABELS = {
+    "base_error": "base_error",
+    "drift": "drift",
+    "cross": "cross",
+    "auto_total": "auto_total",
+    "base_error_varnorm": "base_error / var",
+    "drift_varnorm": "drift / var",
+    "cross_varnorm": "cross / var",
+    "auto_total_varnorm": "auto_total / var",
+}
+_DRIFT_PANEL_ORDER = tuple(_DRIFT_PANEL_LABELS)
+
+
 def val_criteria_plot_series(
     criteria,
     val_loss,
     val_spectrum,
     val_criteria_score,
     include_spectrum=None,
+    drift=None,
 ):
-    """Raw recon, spectrum error when it was computed, then the selection score.
+    """Raw recon, spectrum, Appendix B drift terms, then the selection score.
 
     Checkpoint selection does not decide the panels. ``recon`` is always
     the raw validation loss. ``spectrum`` is the raw free-run spectral
     error, included when ``include_spectrum`` is true. The default is true
     when ``val_spectrum`` is an array, so passing ``None`` does not invent
-    a zero series. The selection score is included only when more than one
-    criterion is selected. Each entry is ``(name, values, selected)``.
-    Arrays are used as given (already sliced to the current epoch).
+    a zero series. ``drift`` is a dict of raw and variance-normalised
+    Appendix B series; each present key is its own panel. The selection
+    score is included only when more than one criterion is selected.
+    Each entry is ``(name, values, selected)``. Arrays are used as given
+    (already sliced to the current epoch).
     """
     names = tuple(criteria)
     if include_spectrum is None:
@@ -67,6 +83,17 @@ def val_criteria_plot_series(
                 "spectrum" in names,
             )
         )
+    if drift:
+        for name in _DRIFT_PANEL_ORDER:
+            if name not in drift or drift[name] is None:
+                continue
+            series.append(
+                (
+                    name,
+                    np.asarray(drift[name], dtype=float),
+                    name in names,
+                )
+            )
     if len(names) > 1 and val_criteria_score is not None:
         series.append(
             ("combined", np.asarray(val_criteria_score, dtype=float), True)
@@ -78,7 +105,9 @@ def _criteria_panel_title(model_name, name, selected):
     """Legend title. Selected metrics are marked; the score panel is not."""
     if name == "combined":
         return f"{model_name}: selection score"
-    label = "spectrum error" if name == "spectrum" else name
+    label = _DRIFT_PANEL_LABELS.get(name)
+    if label is None:
+        label = "spectrum error" if name == "spectrum" else name
     if selected:
         return f"{model_name}: {label} (selected)"
     return f"{model_name}: {label}"
@@ -130,10 +159,12 @@ def build_val_criteria_figure(
     noise_sampling_method,
     best_epoch=None,
     include_spectrum=None,
+    drift=None,
 ):
     """One axes per plotted metric, with warm-up lines and a best-epoch marker.
 
     Recon is always drawn. Spectrum is drawn when it was computed.
+    Appendix B terms are drawn when ``drift`` supplies them.
     The selection score is drawn when more than one criterion is selected.
     ``best_epoch`` is a point on each series, not another vertical line.
     """
@@ -143,6 +174,7 @@ def build_val_criteria_figure(
         val_spectrum,
         val_criteria_score,
         include_spectrum=include_spectrum,
+        drift=drift,
     )
     n_panels = max(len(series), 1)
     fig, axes = plt.subplots(
@@ -154,6 +186,7 @@ def build_val_criteria_figure(
         "spectrum": "spectrum error",
         "combined": "normalised sum",
     }
+    ylabel.update(_DRIFT_PANEL_LABELS)
     for ax, (name, values, selected) in zip(axes[:, 0], series):
         draw_loss_warmup_lines(
             ax,
@@ -194,6 +227,7 @@ def visualize_val_criteria(
     tag,
     best_epoch=None,
     include_spectrum=None,
+    drift=None,
 ):
     """Save validation criteria over epochs at the loss-figure cadence."""
     plt.clf()
@@ -211,6 +245,7 @@ def visualize_val_criteria(
         noise_sampling_method,
         best_epoch=best_epoch,
         include_spectrum=include_spectrum,
+        drift=drift,
     )
     fig_file = os.path.join(save_figures_dir, f"vis_training_val_criteria_{tag}.png")
     fig.savefig(fig_file)
