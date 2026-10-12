@@ -96,9 +96,9 @@ class BaseRNN(BaseModel):
 
     def generation_x(self, h_t):
         dec_output = self.mlp_h_x(h_t)
-        # Empty dense_h_x leaves gen_out reading the hidden state. The
-        # block mask zeros heart→EEG and brain→ECG. It is applied in the
-        # multiply, not written into the parameter.
+        # Empty dense_h_x leaves gen_out reading the hidden state. Cross
+        # terms are 0 in the stored weight and multiplied by decoder_mask
+        # on every step, so an optimizer step cannot refill them.
         decoder_mask = getattr(self, "decoder_mask", None)
         if decoder_mask is not None:
             return torch.nn.functional.linear(

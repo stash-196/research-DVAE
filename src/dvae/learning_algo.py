@@ -1607,7 +1607,9 @@ class LearningAlgorithm:
                 optimizer.step()
                 # profiler.step()
 
-                train_loss[epoch] += loss_tot_avg.item() * bs
+                # tot is the tensor that was backward'd: recon + KL plus the
+                # weighted subband and decorr terms. recon and KL stay separate.
+                train_loss[epoch] += loss_backward.item() * bs
                 train_recon[epoch] += loss_recon_avg.item() * bs
                 train_kl[epoch] += loss_kl_avg.item() * bs
                 train_subband[epoch] += float(sub_loss.detach()) * bs
@@ -1851,13 +1853,18 @@ class LearningAlgorithm:
                 "Epoch: {} training time {}".format(epoch, str(interval).split(".")[0])
             )
             logger.info(
-                "Train => tot: {:.4f} recon {:.4f} KL {:.4f} Val => tot: {:.4f} recon {:.4f} KL {:.4f}".format(
+                "Train => tot: {:.4f} recon {:.4f} KL {:.4f} subband {:.4f} decorr {:.4f} "
+                "Val => tot: {:.4f} recon {:.4f} KL {:.4f} subband {:.4f} decorr {:.4f}".format(
                     train_loss[epoch],
                     train_recon[epoch],
                     train_kl[epoch],
+                    train_subband[epoch],
+                    train_decorr[epoch],
                     val_loss[epoch],
                     val_recon[epoch],
                     val_kl[epoch],
+                    val_subband[epoch],
+                    val_decorr[epoch],
                 )
             )
             if self._regularizers.subband_on:
@@ -2072,6 +2079,9 @@ class LearningAlgorithm:
                         logger.info("Resetting KL & auto & noise warm-ups")
                 else:
                     logger.info("Unknown early stop condition")
+                # Window bumps do not advance this count. The increment is
+                # after this epoch's loss, so the trigger epoch keeps the
+                # previous subband and decorr scale.
                 if bumped.kind in ("auto", "kl"):
                     auto_kl_done += 1
                 patience_after = warmup.active_patience(

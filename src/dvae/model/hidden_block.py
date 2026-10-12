@@ -21,6 +21,8 @@ import torch.nn.functional as F
 
 DEFAULT_WEAK_COUPLING = 0.01
 _OFF = {"", "none", "null", "off", "false", "no", "n", "0"}
+# Channel lists: blank, off, and none are unset. "0" is channel 0.
+_CHANNEL_UNSET = {"", "off", "none"}
 _HALF = {"true", "yes", "y", "on", "half", "1"}
 _COUPLING_ON = {"true", "yes", "y", "on"}
 
@@ -103,7 +105,7 @@ def _coupling(raw) -> float:
 
 def _index_list(raw, name: str, n_channels: int) -> tuple[int, ...]:
     text = _text(raw)
-    if text.lower() in _OFF:
+    if text.lower() in _CHANNEL_UNSET:
         raise ValueError(
             f"{name} is required when hidden_block_split is on, got {raw!r}."
         )
@@ -298,9 +300,12 @@ def apply_block_alphas(shared: torch.Tensor, split: HiddenBlockSplit) -> torch.T
 def masked_vanilla_step(cell, kind: str, feature_xt, h_t, c_t, block_mask):
     """One RNN or LSTM step with ``weight_hh`` multiplied by the block mask.
 
-    ``weight_ih`` is left dense. The parameters themselves are not written,
-    so an optimizer step cannot refill the off-block entries that the
-    forward never reads.
+    The mask reads the hidden state that enters the step (``h_t``). It does
+    not zero the updated state afterwards, and it does not touch ``weight_ih``
+    or the bias, so an empty block can still move through the input. The
+    parameters are multiplied in the forward rather than overwritten each
+    step, so an optimizer cannot refill a hard-zeroed entry. Those entries
+    are also written to 0 once at init.
     """
     x = feature_xt[0]
     h = h_t[0]
@@ -327,6 +332,38 @@ def masked_vanilla_step(cell, kind: str, feature_xt, h_t, c_t, block_mask):
         h_new = torch.sigmoid(out_gate) * torch.tanh(c_new)
         return h_new.unsqueeze(0), c_new.unsqueeze(0)
     raise ValueError(f"masked step supports RNN and LSTM, got {kind!r}.")
+
+
+def _zero_where_mask_is_hard_zero(parameter, mask) -> None:
+    """Store 0 where the forward mask is exactly 0. Leave a weak coupling."""
+    parameter.data.masked_fill_(mask == 0, 0)
+
+
+def _zero_hard_masked_weights(module) -> None:
+    """Init-time copy of the hard mask, so a checkpoint shows the structure.
+
+    The forward still multiplies by the mask. A hard zero therefore stays
+    zero under Adam, including AdamW, because the gradient on that entry
+    is zero and weight decay of zero is zero. A weak-coupling factor is
+    not a hard zero: those entries stay at their init and the forward
+    scales them.
+    """
+    kind = module.type_rnn
+    if kind == "PLRNN":
+        # W_mask already zeros the diagonal. The block mask zeros the
+        # off-block when coupling is 0. Multiply, do not replace W_mask.
+        combined = module.rnn.W_mask * module.rnn.block_hh_mask
+        _zero_where_mask_is_hard_zero(module.rnn.W, combined)
+    elif kind == "shPLRNN":
+        _zero_where_mask_is_hard_zero(module.rnn.W1, module.rnn.block_w1_mask)
+        _zero_where_mask_is_hard_zero(module.rnn.W2, module.rnn.block_w2_mask)
+    elif kind == "LSTM":
+        _zero_where_mask_is_hard_zero(
+            module.rnn.weight_hh_l0, module.block_hh_mask.repeat(4, 1)
+        )
+    elif kind == "RNN":
+        _zero_where_mask_is_hard_zero(module.rnn.weight_hh_l0, module.block_hh_mask)
+    _zero_where_mask_is_hard_zero(module.gen_out.weight, module.decoder_mask)
 
 
 def install_hidden_block(module) -> None:
@@ -371,3 +408,4 @@ def install_hidden_block(module) -> None:
         module.rnn.register_buffer("block_w2_mask", w2)
         module.rnn.heart_sh = heart_sh
         module.rnn.brain_sh = brain_sh
+    _zero_hard_masked_weights(module)

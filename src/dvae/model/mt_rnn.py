@@ -146,8 +146,12 @@ class MT_RNN(BaseRNN):
         return apply_block_alphas(per_unit, block)
 
     def recurrence(self, feature_xt, h_t, c_t=None):
-        # BaseRNN applies the block mask on RNN/LSTM. PLRNN and shPLRNN
-        # apply it inside the cell. The mix below is unchanged.
+        # ``h_t`` is the hidden state entering this step. The block mask,
+        # when it is on, multiplies the recurrent map that reads that
+        # entering state. It does not project the updated state onto the
+        # blocks afterwards.
+        # The mix keeps that same entering state: (1 - alpha) * h_entering
+        # + alpha * h_cell. Alpha is not applied inside the cell.
         h_tp1, c_tp1 = super().recurrence(feature_xt, h_t, c_t)
         alphas = self.alphas_per_unit()
         h_tp1 = (1 - alphas) * h_t + alphas * h_tp1

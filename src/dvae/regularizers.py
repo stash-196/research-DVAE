@@ -5,8 +5,14 @@ the weight with the autonomous and KL bumps:
 
     done / (autonomous_steps + kl_steps)
 
-That ratio is 1 when the warm-up flag is off or the denominator is 0.
-The trigger epoch still sees the count from before the bump.
+``done`` is how many of those bumps have already finished before this
+epoch's loss. The bump that fires at the end of an epoch increments the
+count afterwards, so the trigger epoch still uses the previous scale.
+Window-length bumps do not advance ``done``. The ratio is 1 when the
+warm-up flag is off or the denominator is 0.
+
+Channel lists and ``subband_low_hz`` do not treat ``0`` as off. Blank,
+``off``, and ``none`` are the unset tokens. ``0`` is channel 0 or 0 Hz.
 """
 
 from __future__ import annotations
@@ -16,6 +22,8 @@ from dataclasses import dataclass
 import torch
 
 _OFF = {"", "none", "null", "off", "false", "no", "n", "0", "0.0"}
+# Channel lists and band edges. "0" is a real index or 0 Hz, not off.
+_UNSET = {"", "off", "none"}
 _ON = {"1", "true", "yes", "y", "on"}
 
 
@@ -58,6 +66,8 @@ def _flag(raw, name: str) -> bool:
 
 def _channels(raw, name: str, n_channels: int) -> tuple[int, ...]:
     text = _text(raw)
+    if text.lower() in _UNSET:
+        raise ValueError(f"{name} is required when the loss weight is on.")
     parts = [part.strip() for part in text.split(",") if part.strip()]
     if not parts:
         raise ValueError(f"{name} is required when the loss weight is on.")
@@ -77,7 +87,7 @@ def _channels(raw, name: str, n_channels: int) -> tuple[int, ...]:
 
 def _optional_float(raw, name: str) -> float | None:
     text = _text(raw).lower()
-    if text in _OFF:
+    if text in _UNSET:
         return None
     try:
         value = float(text)
