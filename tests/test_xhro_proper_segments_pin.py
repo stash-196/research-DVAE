@@ -370,27 +370,42 @@ def test_pin_fixed_spectrum_windows_do_not_cross_segment_joins(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# (4) per-subject non-test norm; tail is per subject, in written order
+# (4) per-subject non-test norm; each segment holds out its own tail
 # ---------------------------------------------------------------------------
 
 
-def test_pin_g2_five_equal_pieces_put_the_last_piece_in_test(tmp_path):
-    """5 equal pieces: the 20% tail is the last piece, not 20% of each piece.
+def _piece_index(n_piece: int, n_pieces: int, *, head: bool) -> np.ndarray:
+    cut = _waveform_head_length(n_piece)
+    parts = []
+    for i in range(n_pieces):
+        lo = i * n_piece
+        if head:
+            parts.append(np.arange(lo, lo + cut))
+        else:
+            parts.append(np.arange(lo + cut, lo + n_piece))
+    return np.concatenate(parts)
 
-    At 250 Hz a 2 minute piece is 30_000 samples. Five of those are
-    divisible by 5, so the same cut holds: the last piece is the test set
-    and the first four are entirely non-test. ``seq_len`` below one piece
-    keeps every piece.
+
+def test_pin_g2_each_piece_contributes_its_own_tail(tmp_path):
+    """Each segment holds out its own last 20% of rows.
+
+    At 250 Hz a 2 minute piece is 30_000 samples, so that piece's tail is
+    6_000 rows. Five pieces contribute five tails. The scale is fit on
+    every non-test head of the subject, not on one piece's own rows.
+    Eval with ``seq_len`` unset keeps the same tails.
     """
     fs = 250
     piece_rows = fs * 120
     assert piece_rows == 30000
-    total = 5 * piece_rows
-    assert _waveform_head_length(total) == 4 * piece_rows
-    assert total - _waveform_head_length(total) == piece_rows
+    piece_head = _waveform_head_length(piece_rows)
+    assert piece_head == 24000
+    assert piece_rows - piece_head == 6000
 
     n_piece = 40
     n = 5 * n_piece
+    head = _waveform_head_length(n_piece)
+    tail = n_piece - head
+    assert head == 32 and tail == 8
     elapsed = _elapsed(n)
     _write_subject(tmp_path, "g.2", np.linspace(-5.0, 5.0, n))
     ranges = []
@@ -401,27 +416,32 @@ def test_pin_g2_five_equal_pieces_put_the_last_piece_in_test(tmp_path):
     spec = "g.2:" + ",".join(ranges)
     train = _load(tmp_path, segments=spec, split="train", seq_len=16)
     held = _load(tmp_path, segments=spec, split="test", seq_len=16)
-    assert len(train.full_sequence) == 4 * n_piece
-    assert len(held.full_sequence) == n_piece
-    # The last piece is one group, so the strict test loader uses
-    # Xhro.split_dataset. val_indices=0 keeps none of those windows.
-    assert held.data_idx == []
+    eval_like = _load(
+        tmp_path, segments=spec, split="test", seq_len=None, segment_min_len=16
+    )
+    assert len(train.full_sequence) == 5 * head
+    assert len(held.full_sequence) == 5 * tail
     clock = _clock(n)
-    _same_clock(held.full_sequence["datetime"], clock[-n_piece:])
-    _same_clock(train.full_sequence["datetime"], clock[: 4 * n_piece])
-    # Early pieces contribute no test rows. The subject still has a test set.
-    assert held.waveform_segments[-1]["n_samples"] == n_piece
-    assert held.waveform_segments[-1]["row_lo"] == 0
-    assert held.waveform_segments[0]["row_lo"] is None
+    _same_clock(train.full_sequence["datetime"], clock[_piece_index(n_piece, 5, head=True)])
+    _same_clock(held.full_sequence["datetime"], clock[_piece_index(n_piece, 5, head=False)])
+    _same_clock(
+        eval_like.full_sequence["datetime"], clock[_piece_index(n_piece, 5, head=False)]
+    )
+    _same(held.seq, eval_like.seq, atol=1e-5)
+    for i, row in enumerate(held.waveform_segments):
+        assert row["n_samples"] == n_piece
+        assert row["row_lo"] == i * tail
+        assert row["row_hi"] == (i + 1) * tail
     raw = np.linspace(-5.0, 5.0, n)
-    head = raw[: 4 * n_piece]
-    tail = raw[4 * n_piece :]
-    mean = head.mean()
-    std = head.std()
-    _same(np.asarray(held.seq)[:, 0], (tail - mean) / std, atol=1e-5)
-    # The test piece's own mean is not the scale (that would be per segment).
-    own = (tail - tail.mean()) / tail.std()
-    assert not np.allclose(np.asarray(held.seq)[:, 0], own, atol=1e-3)
+    heads = raw[_piece_index(n_piece, 5, head=True)]
+    tails = raw[_piece_index(n_piece, 5, head=False)]
+    mean = heads.mean()
+    std = heads.std()
+    _same(np.asarray(held.seq)[:, 0], (tails - mean) / std, atol=1e-5)
+    # One piece's own tail is not the scale.
+    own = tails[-tail:]
+    own_scaled = (own - own.mean()) / own.std()
+    assert not np.allclose(np.asarray(held.seq)[-tail:, 0], own_scaled, atol=1e-3)
 
 
 def test_pin_valid_windows_come_from_the_non_test_head_only(tmp_path):
@@ -451,9 +471,9 @@ def test_pin_valid_windows_come_from_the_non_test_head_only(tmp_path):
         shuffle=True,
         seq_len=16,
     )
-    head_end = _clock(n)[4 * n_piece - 1]
+    heads = _clock(n)[_piece_index(n_piece, 5, head=True)]
     for dataset in (train, valid):
-        assert dataset.full_sequence["datetime"].max() <= head_end
+        _same_clock(dataset.full_sequence["datetime"], heads)
         _windows_one_segment(dataset)
         _windows_stay_inside_boundaries(dataset)
     assert set(train.data_idx).isdisjoint(valid.data_idx)
@@ -461,25 +481,39 @@ def test_pin_valid_windows_come_from_the_non_test_head_only(tmp_path):
 
 
 def test_pin_fail_tail_follows_written_order_not_clock_order(tmp_path):
-    """The 20% tail is the end of the written concatenation.
+    """Each segment contributes its own tail, in the order written.
 
-    Listing the later interval first puts that later interval in train and
-    the earlier interval in test.
+    Listing the later interval first still holds out that interval's own
+    last 20%, then the earlier interval's last 20%. The earlier interval
+    is not the whole test set.
     """
     n = 100
     elapsed = _elapsed(n)
     values = np.arange(n, dtype=np.float64)
     _write_subject(tmp_path, "subj_a", values)
-    # 80 later samples, then 20 earlier ones. 100 is divisible by 5, so the
-    # written tail is exactly the earlier interval.
+    # 80 later samples, then 20 earlier ones.
     early = f"{_fmt(float(elapsed[0]))}-{_fmt(float(elapsed[19]))}"
     late = f"{_fmt(float(elapsed[20]))}-{_fmt(float(elapsed[99]))}"
     spec = f"subj_a:{late},{early}"
-    held = _load(tmp_path, segments=spec, split="test", seq_len=16)
+    late_head = _waveform_head_length(80)
+    early_head = _waveform_head_length(20)
+    assert late_head == 64 and early_head == 16
     clock = _clock(n)
-    _same_clock(held.full_sequence["datetime"], clock[:20])
+    test_idx = np.concatenate(
+        [np.arange(20 + late_head, 100), np.arange(early_head, 20)]
+    )
+    train_idx = np.concatenate(
+        [np.arange(20, 20 + late_head), np.arange(0, early_head)]
+    )
+    held = _load(tmp_path, segments=spec, split="test", seq_len=16)
+    _same_clock(held.full_sequence["datetime"], clock[test_idx])
     train = _load(tmp_path, segments=spec, split="train", seq_len=16)
-    _same_clock(train.full_sequence["datetime"], clock[20:])
+    _same_clock(train.full_sequence["datetime"], clock[train_idx])
+    eval_like = _load(
+        tmp_path, segments=spec, split="test", seq_len=None, segment_min_len=16
+    )
+    _same_clock(eval_like.full_sequence["datetime"], clock[test_idx])
+    _same(held.seq, eval_like.seq)
 
 
 def test_pin_head_cut_matches_single_session_iloc(tmp_path):
@@ -569,7 +603,7 @@ def test_pin_nans_stay_and_no_samples_are_inserted(tmp_path):
     spec = f"subj_a:0-{a1},{b0}-{b1}"
     with pytest.warns(UserWarning, match="resample_hz is ignored"):
         dataset = _load(tmp_path, segments=spec, resample_hz=50.0, split="train")
-    # 50 + 40 samples, then the 20% cut. 90 % 5 == 0, so train keeps 72.
+    # Heads are 40 and 32, so train keeps 72.
     assert len(dataset.full_sequence) == 72
     clock = _clock(n)
     # The join is the original gap, not a filled sample.
@@ -605,25 +639,28 @@ def test_pin_interpolate_does_not_cross_the_join(tmp_path):
         gap_split_quantile="none",
         max_gap_window_frac="off",
     )
-    # Z-score runs on the raw non-test rows. Interpolation then fills
-    # inside the already sliced piece, so the first segment cannot borrow
+    # Z-score runs on both segments' heads. Interpolation then fills
+    # inside the already sliced piece, so the first head cannot borrow
     # a value from the second.
     raw = np.linspace(0.0, 1.0, n)
     raw[30:40] = np.nan
-    head_n = _waveform_head_length(80)
-    assert head_n == 64
-    non_test = raw[:head_n]
+    head = _waveform_head_length(40)
+    assert head == 32
+    non_test = np.concatenate([raw[:head], raw[40 : 40 + head]])
     mean = np.nanmean(non_test)
     std = np.nanstd(non_test)
-    scaled = (raw[:40] - mean) / std
-    idx = np.arange(40)
+    scaled = (raw[:head] - mean) / std
+    idx = np.arange(head)
     missing = np.isnan(scaled)
     valid = ~missing
     scaled[missing] = np.interp(idx[missing], idx[valid], scaled[valid])
-    got = np.asarray(dataset.seq)[:40, 0]
+    got = np.asarray(dataset.seq)[:head, 0]
     np.testing.assert_allclose(got, scaled, atol=1e-5)
     assert not np.isnan(got).any()
-    assert abs(float(scaled[-1]) - float((raw[29] - mean) / std)) < 1e-6
+    # NaNs at the end of the head take the last observed sample.
+    assert abs(float(got[-1]) - float((raw[29] - mean) / std)) < 1e-6
+    second = float(np.asarray(dataset.seq)[head, 0])
+    assert abs(second - float((raw[40] - mean) / std)) < 1e-6
 
 
 # ---------------------------------------------------------------------------
@@ -774,11 +811,14 @@ def test_pin_gap_split_inside_a_segment_and_not_across_the_join(tmp_path):
         gap_split_quantile="none",
         max_gap_window_frac=0.25,
     )
-    # 160 rows, divisible by 5, train keeps 128. The join at 80 is stored
-    # on split_boundaries. The hole is applied at re-cut time: no window
-    # covers rows 30:38, and none crosses the join.
+    # Each segment of 80 holds out 16 rows, so train keeps 64 + 64.
+    # The join of those heads is the split. The hole is applied at re-cut
+    # time: no window covers rows 30:38, and none crosses the join.
+    join = _waveform_head_length(80)
+    assert join == 64
+    assert len(dataset.full_sequence) == 128
     bounds = {int(cut) for cut in np.asarray(dataset.split_boundaries).tolist()}
-    assert bounds == {80}
+    assert bounds == {join}
     covered = np.zeros(len(dataset.seq), dtype=bool)
     length = int(dataset.seq_len)
     for start in dataset.data_idx:

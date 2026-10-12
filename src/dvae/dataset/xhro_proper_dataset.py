@@ -78,10 +78,12 @@ Times are inclusive seconds from that subject's first timestamp. Ranges
 on one subject may not share a timestamp, including a shared endpoint.
 Each range is loaded and cropped on its own, then concatenated in the
 order written. The join does not resample and does not insert or delete
-samples to close a gap, so missing values stay NaN. Normalisation is
-per subject: nanmean / nanstd on that subject's non-test rows (the same
-last-20% row cut as one waveform), applied to every row of that
-subject. A non-test std below ``1e-8`` sets that column to NaN for the
+samples to close a gap, so missing values stay NaN. Each segment holds
+out its own last 20% of rows, the same ``iloc[: -n // 5]`` head as one
+waveform. Normalisation is per subject: nanmean / nanstd on all of that
+subject's non-test rows (those heads), applied to every row of that
+subject, including each tail. A non-test std below ``1e-8`` sets that
+column to NaN for the
 subject. Segment edges are window splits, in addition to the existing
 gap splits, so a window stays inside one segment. A range shorter than
 ``seq_len`` is warned and dropped; eval leaves ``seq_len`` unset and
@@ -2384,7 +2386,8 @@ class XhroProper(Xhro):
         ``.yaml`` / ``.yml`` / ``.csv`` path resolved inside ``data_dir``.
         Subject tokens are session ids, not paths. Times are inclusive
         seconds from that subject's first timestamp. Each range is cropped
-        on its own; normalisation is per subject. See "Waveform segments".
+        on its own and holds out its own last 20% of rows. Normalisation
+        is per subject, on all non-test rows. See "Waveform segments".
       - segment_min_len: waveform segments only. Unset uses ``seq_len`` as
         the short-range cutoff. Eval sets this to the training
         ``initial_sequence_len`` and leaves ``seq_len`` unset.
@@ -3081,10 +3084,10 @@ class XhroProper(Xhro):
     def _init_waveform_segments(self, base: str, suffix: str | None) -> None:
         """Load each configured range on its own and split windows at the joins.
 
-        Normalisation uses each subject's non-test rows (the waveform
-        last-20% cut on that subject's ranges, in the order written) and
-        is applied to every row of that subject. Gap-split rules still
-        run later, on top of these segment edges.
+        Each kept segment holds out its own last 20% of rows. Normalisation
+        uses all of a subject's non-test rows (those heads) and is applied
+        to every row of that subject. Gap-split rules still run later, on
+        top of these segment edges.
         """
         if not _is_unset(self.crop_start_sec) or not _is_unset(self.crop_end_sec):
             raise ValueError(
@@ -3236,16 +3239,12 @@ class XhroProper(Xhro):
         frame_parts = []
         reports = []
         for seg in kept:
-            offset = int(seg["subject_offset"])
             n_seg = len(seg["values"])
-            cut = int(seg["subject_cut"])
-            n_sub = int(seg["subject_n"])
+            cut = int(seg["segment_cut"])
             if self.split == "test":
-                keep_lo, keep_hi = cut, n_sub
+                local_lo, local_hi = cut, n_seg
             else:
-                keep_lo, keep_hi = 0, cut
-            local_lo = max(keep_lo, offset) - offset
-            local_hi = min(keep_hi, offset + n_seg) - offset
+                local_lo, local_hi = 0, cut
             report = {
                 "subject": seg["subject"],
                 "start": seg["start"],
@@ -3378,24 +3377,34 @@ class XhroProper(Xhro):
 
     @staticmethod
     def _zscore_segment_subjects(segments: list[dict]) -> None:
-        """Fit each subject on its own non-test rows, in written order."""
+        """Fit each subject on the heads of its segments.
+
+        Each segment's test tail is its own last 20% of rows. The scale
+        uses every non-test row of that subject and is applied to the
+        tails as well.
+        """
         by_subject: dict[str, list[dict]] = {}
         for seg in segments:
             by_subject.setdefault(seg["subject"], []).append(seg)
         for subject, segs in by_subject.items():
-            stacked = np.concatenate([seg["values"] for seg in segs], axis=0)
-            n = int(stacked.shape[0])
-            cut = _waveform_head_length(n)
-            non_test = np.zeros(n, dtype=bool)
-            non_test[:cut] = True
+            parts = []
+            mask_parts = []
+            for seg in segs:
+                values = seg["values"]
+                n_seg = int(len(values))
+                cut = _waveform_head_length(n_seg)
+                seg["segment_cut"] = cut
+                parts.append(values)
+                mask = np.zeros(n_seg, dtype=bool)
+                mask[:cut] = True
+                mask_parts.append(mask)
+            stacked = np.concatenate(parts, axis=0)
+            non_test = np.concatenate(mask_parts)
             scaled = _zscore_waveform_subject(stacked, non_test, subject)
             offset = 0
             for seg in segs:
-                n_seg = len(seg["values"])
+                n_seg = int(len(seg["values"]))
                 seg["scaled"] = scaled[offset : offset + n_seg]
-                seg["subject_offset"] = offset
-                seg["subject_cut"] = cut
-                seg["subject_n"] = n
                 offset += n_seg
 
     def _log_waveform_segments(self) -> None:
