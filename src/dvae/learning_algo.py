@@ -12,7 +12,6 @@ import os
 import shutil
 import socket
 import datetime
-import pickle
 import numpy as np
 from typing import Optional
 import torch
@@ -60,7 +59,6 @@ from dvae.warmup_curriculum import (
     warmup_settings_from_config,
 )
 from dvae.run_options import (
-    criteria_log_fields,
     normalised_criterion_sum,
     parse_checkpoint_every_n_epochs,
     parse_optional_int,
@@ -72,8 +70,15 @@ from dvae.model import (
     build_MT_RNN,
     build_MT_VRNN,
 )
+from dvae.dataset.gap_grid import snapshot_window_stats
+from dvae.training_history import (
+    build_training_history,
+    restore_matrix,
+    save_training_history,
+    series_or_new,
+    warmup_change_epochs,
+)
 from dvae.timescale_history import (
-    attach_timescale_history,
     init_A_sigmas_history,
     log_plrnn_timescales,
     save_plrnn_timescale_figures,
@@ -545,6 +550,8 @@ class LearningAlgorithm:
         beta = self.cfg.getfloat("Training", "beta")
 
         # Create python list for loss
+        loss_log = None
+        sigmas_history = None
         if not self.params["reload"]:
             train_loss = np.zeros((epochs,))
             val_loss = np.zeros((epochs,))
@@ -577,43 +584,15 @@ class LearningAlgorithm:
             optimizer.load_state_dict(checkpoint["optim_state_dict"])
             start_epoch = checkpoint["epoch"]
             loss_log = checkpoint["loss_log"]
+            if not isinstance(loss_log, dict):
+                loss_log = {}
             logger.info("Resuming trainning: epoch: {}".format(start_epoch))
-            train_loss = np.pad(
-                loss_log["train_loss"],
-                (0, epochs - start_epoch),
-                mode="constant",
-                constant_values=0,
-            )
-            val_loss = np.pad(
-                loss_log["val_loss"],
-                (0, epochs - start_epoch),
-                mode="constant",
-                constant_values=0,
-            )
-            train_recon = np.pad(
-                loss_log["train_recon"],
-                (0, epochs - start_epoch),
-                mode="constant",
-                constant_values=0,
-            )
-            train_kl = np.pad(
-                loss_log["train_kl"],
-                (0, epochs - start_epoch),
-                mode="constant",
-                constant_values=0,
-            )
-            val_recon = np.pad(
-                loss_log["val_recon"],
-                (0, epochs - start_epoch),
-                mode="constant",
-                constant_values=0,
-            )
-            val_kl = np.pad(
-                loss_log["val_kl"],
-                (0, epochs - start_epoch),
-                mode="constant",
-                constant_values=0,
-            )
+            train_loss = series_or_new(loss_log, "train_loss", epochs)
+            val_loss = series_or_new(loss_log, "val_loss", epochs)
+            train_recon = series_or_new(loss_log, "train_recon", epochs)
+            train_kl = series_or_new(loss_log, "train_kl", epochs)
+            val_recon = series_or_new(loss_log, "val_recon", epochs)
+            val_kl = series_or_new(loss_log, "val_kl", epochs)
             best_val_loss = checkpoint["best_val_loss"]
             cpt_patience = 0
             cur_best_epoch = start_epoch
@@ -631,13 +610,24 @@ class LearningAlgorithm:
 
         # PLRNN / shPLRNN diagonal A. Independent of MT mixing sigmas.
         a_sigmas_history = init_A_sigmas_history(self.model, epochs)
+        if isinstance(loss_log, dict):
+            if sigmas_history is not None and "sigmas_history" in loss_log:
+                sigmas_history = restore_matrix(
+                    loss_log["sigmas_history"], sigmas_history.shape
+                )
+            if a_sigmas_history is not None and "A_sigmas_history" in loss_log:
+                a_sigmas_history = restore_matrix(
+                    loss_log["A_sigmas_history"], a_sigmas_history.shape
+                )
 
         current_auto_warm = (
             self.auto_warm_start
             if self.enable_autonomous_warmup
             else self.auto_warm_limit
         )
-        auto_warm_values = np.zeros((epochs,))
+        auto_warm_values = series_or_new(
+            loss_log, "auto_warm_values", epochs, fill="hold"
+        )
 
         # if model is vrnn or mt_vrnn, then kl_warm is used
         if self.enable_kl_warmup:
@@ -656,22 +646,46 @@ class LearningAlgorithm:
         current_noise_warm = (
             self.noise_warm_start if self.enable_noise_warmup else self.noise_warm_limit
         )
-        noise_warm_values = np.zeros((epochs,))
+        noise_warm_values = series_or_new(
+            loss_log, "noise_warm_values", epochs, fill="hold"
+        )
 
         # stores the value of kl_warm at the epoch
-        kl_warm_values = np.zeros((epochs,))
-        best_state_epochs = np.zeros((epochs,))
-        cpt_patience_epochs = np.zeros((epochs,))
-        patience_threshold_epochs = np.zeros((epochs,))
-        delta_per_epoch = np.zeros((epochs,))
-        sequence_len_values = np.full((epochs,), initial_sequence_len)
+        kl_warm_values = series_or_new(
+            loss_log, "kl_warm_values", epochs, fill="hold"
+        )
+        best_state_epochs = series_or_new(
+            loss_log, "best_state_epochs", epochs, fill="hold"
+        )
+        cpt_patience_epochs = series_or_new(loss_log, "cpt_patience_epochs", epochs)
+        patience_threshold_epochs = series_or_new(
+            loss_log, "patience_threshold_epochs", epochs, fill="hold"
+        )
+        delta_per_epoch = series_or_new(loss_log, "delta_per_epoch", epochs)
+        if isinstance(loss_log, dict) and "sequence_len_values" in loss_log:
+            sequence_len_values = series_or_new(
+                loss_log, "sequence_len_values", epochs, fill="hold"
+            )
+        else:
+            sequence_len_values = np.full((epochs,), initial_sequence_len)
+        windows_kept = series_or_new(loss_log, "windows_kept", epochs, fill="hold")
+        windows_dropped_nan = series_or_new(
+            loss_log, "windows_dropped_nan", epochs, fill="hold"
+        )
+        windows_dropped_shift = series_or_new(
+            loss_log, "windows_dropped_shift", epochs, fill="hold"
+        )
+        gap_split_counts = series_or_new(loss_log, "gap_splits", epochs, fill="hold")
+        mean_start_shift = series_or_new(
+            loss_log, "mean_start_shift", epochs, fill="hold"
+        )
         delta_rolling_window_size = 6
         kl_delta_threshold = -1e-4
         auto_delta_threshold = 1e-4
         delta_threshold = 1e-4
         warm_up_happened = False
-        val_spectrum = np.zeros((epochs,))
-        val_criteria_score = np.zeros((epochs,))
+        val_spectrum = series_or_new(loss_log, "val_spectrum", epochs)
+        val_criteria_score = series_or_new(loss_log, "val_criteria_score", epochs)
         if self.params["reload"] and isinstance(loss_log, dict):
             saved_ref = loss_log.get("val_criteria_reference")
             if isinstance(saved_ref, dict):
@@ -723,6 +737,49 @@ class LearningAlgorithm:
             )
         )
         auto_kl_done = 0
+        dataset_stats = snapshot_window_stats(train_dataloader.dataset)
+
+        def history_at(end):
+            return build_training_history(
+                end=end,
+                model_name=self.model_name,
+                tag=tag,
+                auto_sampling_method=self.autonomous_sampling_method,
+                noise_sampling_method=self.noise_sampling_method,
+                delta_threshold=delta_threshold,
+                val_criteria=self._val_criteria,
+                val_reference=self._val_reference,
+                series={
+                    "train_loss": train_loss,
+                    "val_loss": val_loss,
+                    "train_recon": train_recon,
+                    "train_kl": train_kl,
+                    "val_recon": val_recon,
+                    "val_kl": val_kl,
+                    "val_spectrum": val_spectrum,
+                    "val_criteria_score": val_criteria_score,
+                    "kl_warm_values": kl_warm_values,
+                    "auto_warm_values": auto_warm_values,
+                    "noise_warm_values": noise_warm_values,
+                    "sequence_len_values": sequence_len_values,
+                    "cpt_patience_epochs": cpt_patience_epochs,
+                    "patience_threshold_epochs": patience_threshold_epochs,
+                    "delta_per_epoch": delta_per_epoch,
+                    "best_state_epochs": best_state_epochs,
+                    "windows_kept": windows_kept,
+                    "windows_dropped_nan": windows_dropped_nan,
+                    "windows_dropped_shift": windows_dropped_shift,
+                    "gap_splits": gap_split_counts,
+                    "mean_start_shift": mean_start_shift,
+                },
+                dataset_stats=dataset_stats,
+                sigmas_history=(
+                    sigmas_history
+                    if self.model_name in ("MT_RNN", "MT_VRNN")
+                    else None
+                ),
+                a_sigmas_history=a_sigmas_history,
+            )
 
         self.model.to(self.device)
 
@@ -1337,6 +1394,13 @@ class LearningAlgorithm:
             auto_warm_values[epoch] = current_auto_warm
             noise_warm_values[epoch] = current_noise_warm
             sequence_len_values[epoch] = current_sequence_len
+            window_snap = snapshot_window_stats(train_dataloader.dataset)
+            windows_kept[epoch] = window_snap["windows_kept"]
+            windows_dropped_nan[epoch] = window_snap["windows_dropped_nan"]
+            windows_dropped_shift[epoch] = window_snap["windows_dropped_shift"]
+            gap_split_counts[epoch] = window_snap["gap_splits"]
+            mean_start_shift[epoch] = window_snap["mean_start_shift"]
+            dataset_stats = window_snap
             # Stop traning if early-stop triggers
             # Only stop when all enabled warm-ups are finished AND the sequence
             # length has already been increased to the requested maximum. This
@@ -1370,7 +1434,10 @@ class LearningAlgorithm:
             action = warmup_action(
                 cpt_patience, active_patience, warmups_finished
             )
+            patience_threshold_epochs[epoch] = active_patience
             if action == "stop":
+                cpt_patience_epochs[epoch] = cpt_patience
+                best_state_epochs[epoch] = cur_best_epoch
                 logger.info("Early stop patience achieved")
                 break
             if action == "bump":
@@ -1436,7 +1503,6 @@ class LearningAlgorithm:
                     logger.info("Unknown early stop condition")
                 if bumped.kind in ("auto", "kl"):
                     auto_kl_done += 1
-            patience_threshold_epochs[epoch] = active_patience
             if self.tie_noise_to_auto:
                 current_noise_warm = current_auto_warm
             cpt_patience_epochs[epoch] = cpt_patience
@@ -1444,23 +1510,12 @@ class LearningAlgorithm:
 
             # Save model parameters regularly
             if epoch % save_frequency == 0:
-                loss_log = {
-                    "train_loss": train_loss[: cur_best_epoch + 1],
-                    "val_loss": val_loss[: cur_best_epoch + 1],
-                    "train_recon": train_recon[: cur_best_epoch + 1],
-                    "train_kl": train_kl[: cur_best_epoch + 1],
-                    "val_recon": val_recon[: cur_best_epoch + 1],
-                    "val_kl": val_kl[: cur_best_epoch + 1],
-                }
-                loss_log.update(
-                    criteria_log_fields(
-                        self._val_criteria,
-                        val_spectrum,
-                        val_criteria_score,
-                        self._val_reference,
-                        cur_best_epoch + 1,
-                    )
-                )
+                # Full prefix through this epoch, not only up to the best
+                # epoch, so the file matches the figure just drawn and a
+                # reload can restore every series.
+                loss_log = history_at(epoch + 1)
+                history_path = os.path.join(save_dir, "loss_model.pckl")
+                save_training_history(history_path, loss_log)
                 save_file = os.path.join(save_dir, self.model_name + "_checkpoint.pt")
                 torch.save(
                     {
@@ -1484,17 +1539,12 @@ class LearningAlgorithm:
                 if not os.path.exists(save_figures_dir):
                     os.makedirs(save_figures_dir)
 
-                # Calculate the epochs at which kl_warm_values and auto_warm_values change
-                kl_warm_epochs = np.where(np.diff(kl_warm_values) != 0)[0] + 1
-                kl_warm_epochs = np.insert(kl_warm_epochs, 0, 0)  # Prepend 0
-                auto_warm_epochs = np.where(np.diff(auto_warm_values) != 0)[0] + 1
-                auto_warm_epochs = np.insert(auto_warm_epochs, 0, 0)  # Prepend 0
-
-                noise_warm_epochs = np.where(np.diff(noise_warm_values) != 0)[0] + 1
-                noise_warm_epochs = np.insert(noise_warm_epochs, 0, 0)  # Prepend 0
-
-                sequence_len_epochs = np.where(np.diff(sequence_len_values) != 0)[0] + 1
-                sequence_len_epochs = np.insert(sequence_len_epochs, 0, 0)
+                # Markers from the saved prefix. The unfilled tail is not a change.
+                shown = epoch + 1
+                kl_warm_epochs = warmup_change_epochs(kl_warm_values[:shown])
+                auto_warm_epochs = warmup_change_epochs(auto_warm_values[:shown])
+                noise_warm_epochs = warmup_change_epochs(noise_warm_values[:shown])
+                sequence_len_epochs = warmup_change_epochs(sequence_len_values[:shown])
 
                 visualize_total_loss(
                     train_loss[: epoch + 1],
@@ -1549,6 +1599,7 @@ class LearningAlgorithm:
                         sequence_len_epochs,
                         self.model_name,
                         self.autonomous_sampling_method,
+                        self.noise_sampling_method,
                         save_figures_dir,
                         tag,
                     )
@@ -1561,6 +1612,7 @@ class LearningAlgorithm:
                         sequence_len_epochs,
                         self.model_name,
                         self.autonomous_sampling_method,
+                        self.noise_sampling_method,
                         save_figures_dir,
                         tag,
                         log_scale=True,
@@ -1612,6 +1664,12 @@ class LearningAlgorithm:
                     save_figures_dir,
                     tag,
                     patience_threshold_epochs[: epoch + 1],
+                    windows_kept=windows_kept[: epoch + 1],
+                    windows_dropped_nan=windows_dropped_nan[: epoch + 1],
+                    windows_dropped_shift=windows_dropped_shift[: epoch + 1],
+                    gap_splits=gap_split_counts[: epoch + 1],
+                    mean_start_shift=mean_start_shift[: epoch + 1],
+                    dataset_stats=dataset_stats,
                 )
 
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
@@ -2000,7 +2058,12 @@ class LearningAlgorithm:
         )
         torch.save(best_state_dict, save_file)
 
-        # Save the training loss and validation loss
+        # Save the training loss and validation loss, including every series
+        # the training figures use. Slice after the copy so the final alpha
+        # log still reads the last trained epoch.
+        loss_file = os.path.join(save_dir, "loss_model.pckl")
+        save_training_history(loss_file, history_at(epoch + 1))
+        logger.info("Loss saved in: {}".format(loss_file))
         train_loss = train_loss[: epoch + 1]
         val_loss = val_loss[: epoch + 1]
         train_recon = train_recon[: epoch + 1]
@@ -2011,40 +2074,6 @@ class LearningAlgorithm:
             sigmas_history = sigmas_history[:, : epoch + 1]
         if a_sigmas_history is not None:
             a_sigmas_history = a_sigmas_history[:, : epoch + 1]
-        loss_file = os.path.join(save_dir, "loss_model.pckl")
-
-        # create dictionary to save(pickle) the loss
-        pickle_dict = {
-            "train_loss": train_loss,
-            "val_loss": val_loss,
-            "train_recon": train_recon,
-            "train_kl": train_kl,
-            "val_recon": val_recon,
-            "val_kl": val_kl,
-            "kl_warm_epochs": kl_warm_epochs,
-        }
-        pickle_dict.update(
-            criteria_log_fields(
-                self._val_criteria,
-                val_spectrum,
-                val_criteria_score,
-                self._val_reference,
-                epoch + 1,
-            )
-        )
-        attach_timescale_history(
-            pickle_dict,
-            sigmas_history=(
-                sigmas_history
-                if self.model_name in ("MT_RNN", "MT_VRNN")
-                else None
-            ),
-            a_sigmas_history=a_sigmas_history,
-        )
-
-        with open(loss_file, "wb") as f:
-            pickle.dump(pickle_dict, f)
-            logger.info("Loss saved in: {}".format(loss_file))
 
         # Log all final alpha values
         if self.model_name in ["MT_RNN", "MT_VRNN"]:

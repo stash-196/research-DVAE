@@ -10,11 +10,13 @@ import pandas as pd
 from .gap_grid import (
     PRESENT_COL,
     apply_nan_window_kwargs,
+    begin_window_recut,
     dataset_missing_rate,
     filter_window_starts,
     log_current_nan_window_rule,
     log_gap_split_recut,
     log_window_recut,
+    note_shift_stats,
     observed_row_mask,
     resolve_recut_length,
     shift_starts_onto_observed,
@@ -469,9 +471,14 @@ class Xhro(Dataset):
         end_frame = min(start_frame + self.seq_len, len(self.seq))
         return self.seq[start_frame:end_frame]
 
-    def _window_starts(self, starts, boundaries):
+    def _window_starts(self, starts, boundaries, shift_stats=None):
         """Honor ``start_on_observed``. Off leaves the starts unchanged."""
         if not getattr(self, "start_on_observed", False):
+            if shift_stats is not None:
+                n = 0 if starts is None else int(np.asarray(starts).size)
+                shift_stats["dropped_unfit"] = int(shift_stats.get("dropped_unfit", 0))
+                shift_stats["shift_sum"] = float(shift_stats.get("shift_sum", 0.0))
+                shift_stats["shift_count"] = int(shift_stats.get("shift_count", 0)) + n
             return starts
         observed = observed_row_mask(
             self.seq, getattr(self, "observed_per_row", None)
@@ -482,6 +489,7 @@ class Xhro(Dataset):
             self.seq_len,
             boundaries,
             int(self.seq.shape[0]),
+            shift_stats=shift_stats,
         )
 
     def update_sequence_length(self, new_seq_len=None, minimum_nan_ratio=None):
@@ -489,6 +497,7 @@ class Xhro(Dataset):
         # ``split_boundaries`` (sample indices) are kept on the dataset and
         # applied on every re-cut, including curriculum resizes.
         # ``max_gap_window_frac`` adds cuts for this length only.
+        begin_window_recut(self)
         if new_seq_len is not None:
             num_frames = self.seq.shape[0]
             requested = int(new_seq_len)
@@ -514,6 +523,7 @@ class Xhro(Dataset):
             # Each span uses the local RandomState inside find_indices.
             strict = bool(getattr(self, "strict_non_overlap", False))
             observed = None
+            shift_stats = {}
             if strict and getattr(self, "start_on_observed", False):
                 observed = observed_row_mask(
                     self.seq, getattr(self, "observed_per_row", None)
@@ -525,8 +535,17 @@ class Xhro(Dataset):
                 boundaries=boundaries,
                 strict_non_overlap=strict,
                 observed=observed,
+                shift_stats=shift_stats if observed is not None else None,
             )
-            all_indices = self._window_starts(all_indices, boundaries)
+            # Strict mode already shifted inside find_indices. A second pass
+            # would count those windows again at shift 0.
+            if observed is not None:
+                all_indices = self._window_starts(all_indices, boundaries)
+            else:
+                all_indices = self._window_starts(
+                    all_indices, boundaries, shift_stats=shift_stats
+                )
+            note_shift_stats(self, shift_stats)
             valid_frames = filter_window_starts(self, all_indices, minimum_nan_ratio)
 
             train_indices, validation_indices = self.split_dataset(
@@ -543,6 +562,7 @@ class Xhro(Dataset):
             print("[Dataset] Using entire sequence (seq_len is None). Total frames: 1")
             log_gap_split_recut(self, None, getattr(self.seq, "shape", [0])[0])
             log_current_nan_window_rule(self, 0, minimum_nan_ratio)
+            self.window_recut_stats["windows_kept"] = 1
 
         log_window_recut(self)
         return

@@ -196,6 +196,7 @@ from .gap_grid import (
     attach_gap_grid,
     combine_gap_grid,
     contiguous_run_lengths,
+    begin_window_recut,
     dataset_missing_rate,
     filter_window_starts,
     gap_length_quantile,
@@ -205,6 +206,7 @@ from .gap_grid import (
     groups_from_boundaries,
     log_current_nan_window_rule,
     log_window_recut,
+    note_shift_stats,
     resolve_recut_length,
     split_boundaries_from_ids,
 )
@@ -1593,6 +1595,7 @@ def apply_block_mask(frame: pd.DataFrame, path, mode) -> pd.DataFrame:
     _blank_absent_rows(frame, present)
     n_masked = int(masked.sum())
     frac = (n_masked / n) if n else 0.0
+    frame.attrs["block_mask_fraction"] = float(frac)
     print(
         f"[XhroProper] block mask mode={chosen} file={mask_path} "
         f"masked={n_masked}/{n} ({frac:.3f}) "
@@ -1979,6 +1982,7 @@ class XhroProper(Xhro):
             None if _is_unset(block_mask_file) else str(block_mask_file).strip()
         )
         self.block_mask_mode = parse_block_mask_mode(block_mask_mode)
+        self.block_mask_fraction = None
         self.segment_index_per_row = None
         self.split_boundaries = None
         self.filled_run_sec = None
@@ -2030,6 +2034,10 @@ class XhroProper(Xhro):
         the_sequence = apply_block_mask(
             the_sequence, self.block_mask_file, self.block_mask_mode
         )
+        if self.block_mask_file is not None:
+            self.block_mask_fraction = the_sequence.attrs.get("block_mask_fraction")
+        else:
+            self.block_mask_fraction = None
         the_sequence = crop_proper_frame(
             the_sequence, self.crop_start_sec, self.crop_end_sec
         )
@@ -2515,11 +2523,13 @@ class XhroProper(Xhro):
                         f"[XhroProper] seq_len {requested} exceeds the longest "
                         f"unbroken span {seq_len}; using {seq_len}."
                     )
+                begin_window_recut(self)
                 log_gap_split_recut(self, seq_len, num_frames)
                 return self._update_waveform_segment_windows(
                     seq_len, minimum_nan_ratio, boundaries
                 )
             return super().update_sequence_length(new_seq_len, minimum_nan_ratio)
+        begin_window_recut(self)
         if new_seq_len is None:
             self.data_idx = [0]
             if len(self.subject_per_row):
@@ -2530,6 +2540,7 @@ class XhroProper(Xhro):
                 "[XhroProper][coarse] seq_len is None; one placeholder window at 0."
             )
             log_current_nan_window_rule(self, 0, minimum_nan_ratio)
+            self.window_recut_stats["windows_kept"] = 1
             log_window_recut(self)
             return
         new_seq_len = int(new_seq_len)
@@ -2544,6 +2555,7 @@ class XhroProper(Xhro):
             self.window_subject = []
             print("[XhroProper][coarse] no subject rows; window set is empty.")
             log_current_nan_window_rule(self, 0, minimum_nan_ratio)
+            self.window_recut_stats["windows_kept"] = 0
             log_window_recut(self)
             return
         if new_seq_len > span:
@@ -2558,7 +2570,9 @@ class XhroProper(Xhro):
             self.seq_len,
             overlap=bool(self.overlap),
         )
-        starts = self._window_starts(starts, self.split_boundaries)
+        shift_stats = {}
+        starts = self._window_starts(starts, self.split_boundaries, shift_stats=shift_stats)
+        note_shift_stats(self, shift_stats)
         starts = filter_window_starts(self, starts, minimum_nan_ratio)
         if self.split == "test":
             chosen = starts
@@ -2585,6 +2599,7 @@ class XhroProper(Xhro):
             self.data_idx = [0]
             print("[XhroProper] seq_len is None; one placeholder window at 0.")
             log_current_nan_window_rule(self, 0, minimum_nan_ratio)
+            self.window_recut_stats["windows_kept"] = 1
             log_window_recut(self)
             return
         new_seq_len = int(new_seq_len)
@@ -2602,6 +2617,7 @@ class XhroProper(Xhro):
             self.data_idx = []
             print("[XhroProper] no rows; window set is empty.")
             log_current_nan_window_rule(self, 0, minimum_nan_ratio)
+            self.window_recut_stats["windows_kept"] = 0
             log_window_recut(self)
             return
         if new_seq_len > span:
@@ -2614,7 +2630,9 @@ class XhroProper(Xhro):
         starts = intra_subject_window_starts(
             group, self.seq_len, overlap=bool(self.overlap)
         )
-        starts = self._window_starts(starts, boundaries)
+        shift_stats = {}
+        starts = self._window_starts(starts, boundaries, shift_stats=shift_stats)
+        note_shift_stats(self, shift_stats)
         starts = filter_window_starts(self, starts, minimum_nan_ratio)
         if self.split == "test":
             chosen = starts

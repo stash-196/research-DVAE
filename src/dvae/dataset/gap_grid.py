@@ -309,6 +309,81 @@ def nan_window_threshold(dataset, minimum_nan_ratio=None):
     return thr, f"{thr:.6g} ({kind})", rate
 
 
+def begin_window_recut(dataset) -> None:
+    """Clear the per-re-cut window stats this ``update_sequence_length`` will fill."""
+    dataset.window_recut_stats = {
+        "windows_kept": 0,
+        "windows_dropped_nan": 0,
+        "windows_dropped_shift": 0,
+        "gap_splits": 0,
+        "mean_start_shift": 0.0,
+        "dataset_missing_rate": getattr(dataset, "dataset_missing_rate", None),
+        "nan_ratio_threshold": None,
+        "nan_ratio_threshold_state": "na",
+        "gap_quantile_len": getattr(dataset, "dataset_gap_quantile", None),
+        "gap_split_threshold": None,
+        "gap_split_threshold_state": "na",
+        "block_mask_fraction": getattr(dataset, "block_mask_fraction", None),
+    }
+
+
+def _window_recut_stats(dataset) -> dict:
+    stats = getattr(dataset, "window_recut_stats", None)
+    if stats is None:
+        begin_window_recut(dataset)
+        stats = dataset.window_recut_stats
+    return stats
+
+
+def note_shift_stats(dataset, shift_stats) -> None:
+    """Record unfit-start drops and the mean sample shift of kept windows."""
+    stats = _window_recut_stats(dataset)
+    if not shift_stats:
+        stats["windows_dropped_shift"] = 0
+        stats["mean_start_shift"] = 0.0
+        return
+    count = int(shift_stats.get("shift_count", 0))
+    stats["windows_dropped_shift"] = int(shift_stats.get("dropped_unfit", 0))
+    if count:
+        stats["mean_start_shift"] = float(shift_stats.get("shift_sum", 0.0)) / count
+    else:
+        stats["mean_start_shift"] = 0.0
+
+
+def snapshot_window_stats(dataset) -> dict:
+    """Copy the latest re-cut stats. Missing datasets report zeros and ``na``."""
+    raw = getattr(dataset, "window_recut_stats", None) or {}
+
+    def _optional(key):
+        if key not in raw or raw[key] is None:
+            return None
+        number = float(raw[key])
+        if not np.isfinite(number):
+            return None
+        return number
+
+    def _count(key):
+        value = raw.get(key, 0)
+        if value is None:
+            return 0.0
+        return float(value)
+
+    return {
+        "windows_kept": _count("windows_kept"),
+        "windows_dropped_nan": _count("windows_dropped_nan"),
+        "windows_dropped_shift": _count("windows_dropped_shift"),
+        "gap_splits": _count("gap_splits"),
+        "mean_start_shift": _count("mean_start_shift"),
+        "dataset_missing_rate": _optional("dataset_missing_rate"),
+        "nan_ratio_threshold": _optional("nan_ratio_threshold"),
+        "nan_ratio_threshold_state": str(raw.get("nan_ratio_threshold_state", "na")),
+        "gap_quantile_len": _optional("gap_quantile_len"),
+        "gap_split_threshold": _optional("gap_split_threshold"),
+        "gap_split_threshold_state": str(raw.get("gap_split_threshold_state", "na")),
+        "block_mask_fraction": _optional("block_mask_fraction"),
+    }
+
+
 def log_nan_window_filter(dataset, threshold_label, dropped, rate) -> None:
     """One re-cut line: missing rate, threshold, and how many windows dropped."""
     name = type(dataset).__name__
@@ -320,7 +395,19 @@ def log_nan_window_filter(dataset, threshold_label, dropped, rate) -> None:
 
 
 def log_current_nan_window_rule(dataset, dropped, minimum_nan_ratio=None) -> None:
-    _threshold, label, rate = nan_window_threshold(dataset, minimum_nan_ratio)
+    threshold, label, rate = nan_window_threshold(dataset, minimum_nan_ratio)
+    stats = _window_recut_stats(dataset)
+    if rate is None:
+        stats["dataset_missing_rate"] = None
+    else:
+        stats["dataset_missing_rate"] = float(rate)
+    if threshold is None:
+        stats["nan_ratio_threshold"] = None
+        stats["nan_ratio_threshold_state"] = "off"
+    else:
+        stats["nan_ratio_threshold"] = float(threshold)
+        stats["nan_ratio_threshold_state"] = "value"
+    stats["windows_dropped_nan"] = int(dropped)
     log_nan_window_filter(dataset, label, dropped, rate)
 
 
@@ -340,7 +427,16 @@ def filter_window_starts(dataset, starts, minimum_nan_ratio=None):
     """
     starts_arr = np.asarray([] if starts is None else list(starts), dtype=np.int64)
     threshold, label, rate = nan_window_threshold(dataset, minimum_nan_ratio)
-    if threshold is None or starts_arr.size == 0:
+    stats = _window_recut_stats(dataset)
+    if rate is None:
+        stats["dataset_missing_rate"] = None
+    else:
+        stats["dataset_missing_rate"] = float(rate)
+    if threshold is None:
+        stats["nan_ratio_threshold"] = None
+        stats["nan_ratio_threshold_state"] = "off"
+        stats["windows_dropped_nan"] = 0
+        stats["windows_kept"] = int(starts_arr.size)
         log_nan_window_filter(dataset, label, 0, rate)
         return starts_arr
     seq = _seq_as_array(dataset.seq)
@@ -353,7 +449,12 @@ def filter_window_starts(dataset, starts, minimum_nan_ratio=None):
         nan_ratio = np.float16(np.isnan(window)).mean()
         if nan_ratio <= threshold:
             kept.append(int(idx))
-    log_nan_window_filter(dataset, label, int(starts_arr.size - len(kept)), rate)
+    dropped = int(starts_arr.size - len(kept))
+    stats["nan_ratio_threshold"] = float(threshold)
+    stats["nan_ratio_threshold_state"] = "value"
+    stats["windows_dropped_nan"] = dropped
+    stats["windows_kept"] = int(len(kept))
+    log_nan_window_filter(dataset, label, dropped, rate)
     return np.asarray(kept, dtype=np.int64)
 
 
@@ -488,7 +589,12 @@ def log_gap_split_recut(dataset, seq_len, num_frames) -> None:
     name = type(dataset).__name__
     q_s = "na" if qlen is None else f"{float(qlen):.6g}"
     limit = gap_split_limit(seq_len, frac, qlen)
+    stats = _window_recut_stats(dataset)
+    stats["gap_quantile_len"] = None if qlen is None else float(qlen)
     if limit is None:
+        stats["gap_split_threshold"] = None
+        stats["gap_split_threshold_state"] = "off"
+        stats["gap_splits"] = 0
         print(
             f"[{name}] gap_quantile_len={q_s} "
             f"gap_split_threshold=off gap_splits=0"
@@ -500,6 +606,9 @@ def log_gap_split_recut(dataset, seq_len, num_frames) -> None:
     cuts = filled_gap_frac_cuts(
         spans, seq_len, frac, num_frames, gap_quantile=qlen
     )
+    stats["gap_split_threshold"] = float(limit)
+    stats["gap_split_threshold_state"] = "value"
+    stats["gap_splits"] = int(cuts.size)
     print(
         f"[{name}] gap_quantile_len={q_s} "
         f"gap_split_threshold={float(limit):.6g} gap_splits={int(cuts.size)}"
@@ -597,12 +706,18 @@ def _piece_containing(start: int, cuts, num_frames: int):
     return left, right
 
 
-def shift_starts_onto_observed(starts, observed, seq_len, boundaries, num_frames):
+def shift_starts_onto_observed(
+    starts, observed, seq_len, boundaries, num_frames, shift_stats=None
+):
     """Move a start that lands on a missing sample to the next observed row.
 
     The window must still lie inside the piece that contains the original
     start. A start that cannot move without leaving that piece is dropped.
     An already observed start is kept. Duplicate landing rows are kept once.
+
+    ``shift_stats``, when passed, receives ``dropped_unfit`` (starts that
+    could not fit in the piece), ``shift_sum`` and ``shift_count`` for the
+    kept landings (shift of 0 included).
     """
     n = int(num_frames)
     length = int(seq_len)
@@ -614,6 +729,9 @@ def shift_starts_onto_observed(starts, observed, seq_len, boundaries, num_frames
     cuts = _boundary_cuts(boundaries, n)
     kept = []
     seen = set()
+    dropped_unfit = 0
+    shift_sum = 0.0
+    shift_count = 0
     for raw in np.asarray([] if starts is None else starts).ravel():
         start = int(raw)
         if start < 0 or start >= n:
@@ -626,11 +744,20 @@ def shift_starts_onto_observed(starts, observed, seq_len, boundaries, num_frames
             while landing < right and not flags[landing]:
                 landing += 1
         if landing >= right or landing + length > right:
+            dropped_unfit += 1
             continue
         if landing in seen:
             continue
         seen.add(landing)
+        shift_sum += float(landing - start)
+        shift_count += 1
         kept.append(landing)
+    if shift_stats is not None:
+        shift_stats["dropped_unfit"] = (
+            int(shift_stats.get("dropped_unfit", 0)) + dropped_unfit
+        )
+        shift_stats["shift_sum"] = float(shift_stats.get("shift_sum", 0.0)) + shift_sum
+        shift_stats["shift_count"] = int(shift_stats.get("shift_count", 0)) + shift_count
     return np.asarray(kept, dtype=np.int64)
 
 

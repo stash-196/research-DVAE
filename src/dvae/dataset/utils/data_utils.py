@@ -262,7 +262,9 @@ def _find_indices_span(num_frames, seq_len, num_indices):
     return listf
 
 
-def _find_indices_strict(num_frames, seq_len, boundaries=None, observed=None):
+def _find_indices_strict(
+    num_frames, seq_len, boundaries=None, observed=None, shift_stats=None
+):
     """Abutting windows inside each piece. The only uncovered tail is the remainder.
 
     ``observed`` is set when starts must not land on a missing sample. A
@@ -272,6 +274,10 @@ def _find_indices_strict(num_frames, seq_len, boundaries=None, observed=None):
     """
     n = int(num_frames)
     length = int(seq_len)
+    if shift_stats is not None:
+        shift_stats.setdefault("dropped_unfit", 0)
+        shift_stats.setdefault("shift_sum", 0.0)
+        shift_stats.setdefault("shift_count", 0)
     if length < 1:
         raise ValueError(f"seq_len must be >= 1, got {seq_len}.")
     flags = None
@@ -294,7 +300,16 @@ def _find_indices_strict(num_frames, seq_len, boundaries=None, observed=None):
                 while start < right and not flags[start]:
                     start += 1
                 if start + length > right:
+                    if shift_stats is not None:
+                        shift_stats["dropped_unfit"] = (
+                            int(shift_stats.get("dropped_unfit", 0)) + 1
+                        )
                     break
+            if shift_stats is not None:
+                shift_stats["shift_sum"] = float(shift_stats.get("shift_sum", 0.0)) + float(
+                    start - pos
+                )
+                shift_stats["shift_count"] = int(shift_stats.get("shift_count", 0)) + 1
             starts.append(start)
             pos = start + length
     if not starts:
@@ -309,6 +324,7 @@ def find_indices(
     boundaries=None,
     strict_non_overlap=False,
     observed=None,
+    shift_stats=None,
 ):
     """Window starts. ``boundaries`` are sample indices a window must not cross.
 
@@ -321,7 +337,9 @@ def find_indices(
     is not used. ``observed`` is only read in that strict mode.
     """
     if strict_non_overlap:
-        return _find_indices_strict(num_frames, seq_len, boundaries, observed)
+        return _find_indices_strict(
+            num_frames, seq_len, boundaries, observed, shift_stats=shift_stats
+        )
     cuts = _boundary_cuts(boundaries, num_frames)
     if cuts is None:
         return _find_indices_span(num_frames, seq_len, num_indices)

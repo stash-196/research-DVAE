@@ -28,6 +28,7 @@ from torch.utils.data import Dataset
 
 from .gap_grid import (
     apply_nan_window_kwargs,
+    begin_window_recut,
     dataset_missing_rate,
     filter_window_starts,
     log_current_nan_window_rule,
@@ -434,9 +435,11 @@ class PhysioNet2012(Dataset):
         return torch.as_tensor(item, dtype=torch.float32)
 
     def update_sequence_length(self, new_seq_len=None, minimum_nan_ratio=None):
+        begin_window_recut(self)
         if new_seq_len is None:
             self.data_idx = [0]
             log_current_nan_window_rule(self, 0, minimum_nan_ratio)
+            self.window_recut_stats["windows_kept"] = 1
             return
         stay_lens = np.diff(
             np.r_[

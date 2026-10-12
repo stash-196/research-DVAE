@@ -195,6 +195,7 @@ def visualize_recon_loss(
     val_recon,
     kl_warm_epochs,
     auto_warm_epochs,
+    noise_warm_epochs,
     sequence_len_epochs,
     model_name,
     auto_sampling_method,
@@ -273,6 +274,68 @@ def visualize_kld_loss(
     plt.close(fig)
 
 
+def _align_epoch_series(values, n):
+    """Length-``n`` float series. Missing input is zeros."""
+    if values is None:
+        return np.zeros(n, dtype=float)
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    if arr.size == n:
+        return arr
+    out = np.full(n, np.nan, dtype=float)
+    m = min(n, arr.size)
+    if m:
+        out[:m] = arr[:m]
+    return out
+
+
+def _format_window_stat(stats, key, state_key=None):
+    """``off`` / ``na`` / a short float for the windowing text box."""
+    if not stats:
+        return "na"
+    if state_key is not None and stats.get(state_key) == "off":
+        return "off"
+    value = stats.get(key)
+    if value is None:
+        return "na"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "na"
+    if not np.isfinite(number):
+        return "na"
+    return f"{number:.6g}"
+
+
+def _windowing_reference_text(dataset_stats):
+    lines = [
+        (
+            "dataset missing rate",
+            _format_window_stat(dataset_stats, "dataset_missing_rate"),
+        ),
+        (
+            "NaN-ratio threshold",
+            _format_window_stat(
+                dataset_stats, "nan_ratio_threshold", "nan_ratio_threshold_state"
+            ),
+        ),
+        (
+            "p99 gap length",
+            _format_window_stat(dataset_stats, "gap_quantile_len"),
+        ),
+        (
+            "gap split threshold",
+            _format_window_stat(
+                dataset_stats, "gap_split_threshold", "gap_split_threshold_state"
+            ),
+        ),
+        (
+            "block mask fraction",
+            _format_window_stat(dataset_stats, "block_mask_fraction"),
+        ),
+    ]
+    return "\n".join(f"{name}: {value}" for name, value in lines)
+
+
 def visualize_combined_metrics(
     delta_per_epoch,
     delta_threshold,
@@ -292,10 +355,17 @@ def visualize_combined_metrics(
     save_figures_dir,
     tag,
     patience_threshold_epochs=None,
+    windows_kept=None,
+    windows_dropped_nan=None,
+    windows_dropped_shift=None,
+    gap_splits=None,
+    mean_start_shift=None,
+    dataset_stats=None,
 ):
     plt.clf()
-    fig, axs = plt.subplots(6, 1, figsize=(12, 18))  # Updated to 6 subplots
+    fig, axs = plt.subplots(7, 1, figsize=(12, 21))
     plt.rcParams["font.size"] = 12
+    n_epochs = len(np.asarray(delta_per_epoch).reshape(-1))
 
     # Plot delta
     delta_above_threshold = np.where(
@@ -334,7 +404,8 @@ def visualize_combined_metrics(
             color="g",
         )
 
-    axs[1].legend(fontsize=16, title="warm values", title_fontsize=20)
+    if axs[1].get_legend_handles_labels()[1]:
+        axs[1].legend(fontsize=16, title="warm values", title_fontsize=20)
     axs[1].set_xlabel("epochs", fontdict={"size": 16})
     axs[1].set_ylabel("warm values", fontdict={"size": 16})
     axs[1].grid(True)
@@ -375,6 +446,48 @@ def visualize_combined_metrics(
     axs[4].set_xlabel("epochs", fontdict={"size": 16})
     axs[4].set_ylabel("best_state", fontdict={"size": 16})
     axs[4].grid(True)
+
+    # Windowing counts from each re-cut, held as steps between bumps.
+    # Same step style as sequence_len. The text box is the one-time
+    # dataset reference (missing rate, NaN threshold, p99 gap, split
+    # threshold, block-mask fraction).
+    count_series = (
+        ("windows kept", _align_epoch_series(windows_kept, n_epochs), "k"),
+        ("dropped NaN", _align_epoch_series(windows_dropped_nan, n_epochs), "tab:orange"),
+        (
+            "dropped shift",
+            _align_epoch_series(windows_dropped_shift, n_epochs),
+            "tab:brown",
+        ),
+        ("gap splits", _align_epoch_series(gap_splits, n_epochs), "tab:blue"),
+    )
+    for label, values, color in count_series:
+        axs[5].step(np.arange(n_epochs), values, label=label, color=color)
+    axs[5].legend(fontsize=16, title="windows", title_fontsize=20, loc="upper left")
+    axs[5].text(
+        0.99,
+        0.98,
+        _windowing_reference_text(dataset_stats),
+        transform=axs[5].transAxes,
+        va="top",
+        ha="right",
+        fontsize=12,
+        bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.85},
+    )
+    axs[5].set_xlabel("epochs", fontdict={"size": 16})
+    axs[5].set_ylabel("windows", fontdict={"size": 16})
+    axs[5].grid(True)
+
+    axs[6].step(
+        np.arange(n_epochs),
+        _align_epoch_series(mean_start_shift, n_epochs),
+        label="mean start shift",
+        color="tab:purple",
+    )
+    axs[6].legend(fontsize=16, title="start shift", title_fontsize=20)
+    axs[6].set_xlabel("epochs", fontdict={"size": 16})
+    axs[6].set_ylabel("samples", fontdict={"size": 16})
+    axs[6].grid(True)
 
     if model_name in ["VRNN", "MT_VRNN"]:
         for kl_warm_epoch in kl_warm_epochs:
