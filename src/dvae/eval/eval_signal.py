@@ -667,6 +667,8 @@ if __name__ == "__main__":
         max_window_nan_ratio=optional_config_float(
             cfg, "DataFrame", "max_window_nan_ratio"
         ),
+        block_mask_file=optional_config_str(cfg, "DataFrame", "block_mask_file"),
+        block_mask_mode=optional_config_str(cfg, "DataFrame", "block_mask_mode"),
         **coarse_dataframe_kwargs(cfg),
     )
 

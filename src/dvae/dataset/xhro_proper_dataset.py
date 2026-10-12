@@ -40,6 +40,8 @@ observed sample in the same segment. ``[DataFrame] strict_non_overlap``
 local ``RandomState(1234567890)``. True tiles each segment with abutting
 windows. ``[DataFrame] max_window_nan_ratio``
 (unset) is the existing NaN-fraction filter on every re-cut.
+``[DataFrame] block_mask_file`` (unset) is an npz of block flags applied
+before the time crop. ``block_mask_mode`` defaults to ``not_good``.
 ``filled_nan_log_sec`` is the re-cut log cutoff when ``max_fill_gap_sec``
 is unset. Crop stays time-based.
 
@@ -169,6 +171,8 @@ from .gap_grid import (
     FILLED_RUN_COL,
     GROUP_COL,
     PRESENT_COL,
+    _as_bool,
+    _blank_absent_rows,
     attach_gap_grid,
     combine_gap_grid,
     gap_load_stats,
@@ -1279,6 +1283,154 @@ def dataset_max_window_length(dataset) -> int:
     return max_group_span(dataset_row_group(dataset), n_rows)
 
 
+_BLOCK_MASK_MODES = ("not_good", "dirty", "lowamp", "dirty_or_lowamp")
+
+
+def parse_block_mask_mode(value) -> str:
+    """``not_good`` when unset. Other accepted names are the flag columns."""
+    if _is_unset(value):
+        return "not_good"
+    key = str(value).strip().lower()
+    if key not in _BLOCK_MASK_MODES:
+        raise ValueError(
+            "block_mask_mode must be one of "
+            f"{_BLOCK_MASK_MODES}, got {value!r}."
+        )
+    return key
+
+
+def _frame_sampling_hz(frame: pd.DataFrame) -> float:
+    """Median positive sample rate of the frame's datetime column."""
+    if frame is None or len(frame) < 2 or "datetime" not in frame.columns:
+        raise ValueError(
+            "block_mask_file needs a datetime column with at least two rows."
+        )
+    deltas = frame["datetime"].diff().dt.total_seconds().to_numpy(dtype=np.float64)
+    deltas = deltas[np.isfinite(deltas) & (deltas > 0)]
+    if deltas.size == 0:
+        raise ValueError("block_mask_file needs a positive sampling interval.")
+    return 1.0 / float(np.median(deltas))
+
+
+def _block_length_sec(t0: np.ndarray) -> float:
+    """Median positive spacing of block start times. Not a fixed 10 s."""
+    times = np.asarray(t0, dtype=np.float64).reshape(-1)
+    times = times[np.isfinite(times)]
+    if times.size < 2:
+        raise ValueError(
+            "block_mask t0 needs at least two finite times so the block "
+            "length can be inferred from their spacing."
+        )
+    step = np.diff(np.sort(times))
+    step = step[np.isfinite(step) & (step > 0)]
+    if step.size == 0:
+        raise ValueError("block_mask t0 spacing must be positive.")
+    return float(np.median(step))
+
+
+def block_mask_rows(n_rows: int, fs_hz: float, t0, flagged) -> np.ndarray:
+    """Rows covered by flagged blocks. Row 0 is session time 0.
+
+    Block ``i`` covers ``[t0, t0 + block_len)`` seconds, which is rows
+    ``[rint(fs * t0), rint(fs * (t0 + block_len)))``. ``fs_hz`` and the
+    block length are the caller's inferred values. Rows outside every
+    block stay False.
+    """
+    n = int(n_rows)
+    masked = np.zeros(n, dtype=bool)
+    if n == 0:
+        return masked
+    fs = float(fs_hz)
+    if not np.isfinite(fs) or fs <= 0:
+        raise ValueError(f"sampling rate must be positive, got {fs_hz!r}.")
+    times = np.asarray(t0, dtype=np.float64).reshape(-1)
+    flags = np.asarray(flagged, dtype=bool).reshape(-1)
+    if times.shape != flags.shape:
+        raise ValueError(
+            f"block mask t0 length {times.shape[0]} != flag length {flags.shape[0]}"
+        )
+    block_len = _block_length_sec(times)
+    use = flags & np.isfinite(times)
+    starts = np.rint(times[use] * fs).astype(np.int64)
+    ends = np.rint((times[use] + block_len) * fs).astype(np.int64)
+    for start, end in zip(starts, ends):
+        lo = max(int(start), 0)
+        hi = min(int(end), n)
+        if hi > lo:
+            masked[lo:hi] = True
+    return masked
+
+
+def block_flags(dirty, lowamp, good, mode: str) -> np.ndarray:
+    """Which blocks the mode masks. ``not_good`` is the complement of ``good``."""
+    mode = parse_block_mask_mode(mode)
+    dirty = np.asarray(dirty, dtype=bool).reshape(-1)
+    lowamp = np.asarray(lowamp, dtype=bool).reshape(-1)
+    good = np.asarray(good, dtype=bool).reshape(-1)
+    if mode == "dirty":
+        return dirty
+    if mode == "lowamp":
+        return lowamp
+    if mode == "dirty_or_lowamp":
+        return dirty | lowamp
+    return ~good
+
+
+def apply_block_mask(frame: pd.DataFrame, path, mode) -> pd.DataFrame:
+    """NaN masked rows and mark them absent. Unset path leaves the frame.
+
+    Applied on the waveform frame before the time crop. The same file is
+    used for every variant. Rows the file does not cover stay as they are.
+    """
+    if _is_unset(path):
+        return frame
+    mask_path = Path(path)
+    if not mask_path.is_file():
+        raise FileNotFoundError(f"block_mask_file not found: {mask_path}")
+    chosen = parse_block_mask_mode(mode)
+    with np.load(mask_path, allow_pickle=False) as npz:
+        missing = [key for key in ("t0", "dirty", "lowamp", "good") if key not in npz.files]
+        if missing:
+            raise ValueError(
+                f"block_mask_file {mask_path} is missing keys {missing}."
+            )
+        t0 = np.asarray(npz["t0"], dtype=np.float64).reshape(-1)
+        dirty = _as_bool(npz["dirty"]).reshape(-1)
+        lowamp = _as_bool(npz["lowamp"]).reshape(-1)
+        good = _as_bool(npz["good"]).reshape(-1)
+    lengths = {
+        "t0": int(t0.size),
+        "dirty": int(dirty.size),
+        "lowamp": int(lowamp.size),
+        "good": int(good.size),
+    }
+    if len(set(lengths.values())) != 1:
+        raise ValueError(
+            "block mask columns must share one length, got "
+            + ", ".join(f"{key}={length}" for key, length in sorted(lengths.items()))
+        )
+    n = 0 if frame is None else int(len(frame))
+    fs = _frame_sampling_hz(frame)
+    flagged = block_flags(dirty, lowamp, good, chosen)
+    masked = block_mask_rows(n, fs, t0, flagged)
+    if PRESENT_COL in frame.columns:
+        present = frame[PRESENT_COL].to_numpy(dtype=bool).copy()
+    else:
+        present = np.ones(n, dtype=bool)
+    present[masked] = False
+    frame = frame.copy()
+    frame[PRESENT_COL] = present
+    _blank_absent_rows(frame, present)
+    n_masked = int(masked.sum())
+    frac = (n_masked / n) if n else 0.0
+    print(
+        f"[XhroProper] block mask mode={chosen} file={mask_path} "
+        f"masked={n_masked}/{n} ({frac:.3f}) "
+        f"block_sec={_block_length_sec(t0):.6g} fs≈{fs:.6g} Hz"
+    )
+    return frame
+
+
 def crop_proper_frame(
     frame: pd.DataFrame,
     crop_start_sec,
@@ -1526,6 +1678,9 @@ class XhroProper(Xhro):
         ``find_indices`` starts. True tiles each segment without overlap
         or interior holes; the only unused samples are the final remainder
         of each piece, plus any gap a start had to step over.
+      - block_mask_file / block_mask_mode: waveform only. Unset file means
+        no block mask. The file's flagged blocks are set to NaN and
+        ``present=False`` before the time crop, so they act as gaps.
       - max_window_nan_ratio: waveform and coarse re-cuts. Unset means
         no NaN-fraction filtering. An explicit ``minimum_nan_ratio``
         argument overrides it.
@@ -1567,6 +1722,8 @@ class XhroProper(Xhro):
         start_on_observed=False,
         strict_non_overlap=False,
         max_window_nan_ratio=None,
+        block_mask_file=None,
+        block_mask_mode=None,
         **kwargs,
     ):
         self.path_to_data = data_dir
@@ -1609,6 +1766,10 @@ class XhroProper(Xhro):
         self.strict_non_overlap = _optional_bool(
             strict_non_overlap, "strict_non_overlap"
         )
+        self.block_mask_file = (
+            None if _is_unset(block_mask_file) else str(block_mask_file).strip()
+        )
+        self.block_mask_mode = parse_block_mask_mode(block_mask_mode)
         self.max_window_nan_ratio = _optional_nonnegative_float(
             max_window_nan_ratio, "max_window_nan_ratio"
         )
@@ -1621,6 +1782,12 @@ class XhroProper(Xhro):
         base, _suffix = _split_process(self.observation_process)
         if base in COARSE_OBS_COLUMNS:
             self.coarse_mode = True
+            if self.block_mask_file is not None:
+                warnings.warn(
+                    "block_mask_file is ignored for coarse observations.",
+                    UserWarning,
+                    stacklevel=2,
+                )
             self._init_coarse(
                 base,
                 _suffix,
@@ -1653,6 +1820,9 @@ class XhroProper(Xhro):
             base,
             resample_hz=self.resample_hz,
             max_fill_gap_sec=self.max_fill_gap_sec,
+        )
+        the_sequence = apply_block_mask(
+            the_sequence, self.block_mask_file, self.block_mask_mode
         )
         the_sequence = crop_proper_frame(
             the_sequence, self.crop_start_sec, self.crop_end_sec

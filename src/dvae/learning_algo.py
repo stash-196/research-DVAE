@@ -470,6 +470,12 @@ class LearningAlgorithm:
             max_window_nan_ratio=optional_config_float(
                 self.cfg, "DataFrame", "max_window_nan_ratio"
             ),
+            block_mask_file=optional_config_str(
+                self.cfg, "DataFrame", "block_mask_file"
+            ),
+            block_mask_mode=optional_config_str(
+                self.cfg, "DataFrame", "block_mask_mode"
+            ),
             **coarse_dataframe_kwargs(self.cfg),
         )
 
