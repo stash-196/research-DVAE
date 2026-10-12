@@ -145,7 +145,7 @@ def test_pickle_keeps_mt_sigmas_and_adds_plrnn_A_sigmas():
     assert attach_timescale_history({}) == {}
 
 
-def test_default_alpha_figure_still_uses_natural_sigmoid(tmp_path):
+def test_default_alpha_figure_uses_the_model_base10_sigmoid(tmp_path):
     metrics = _metrics()
     seen = {}
     original = metrics.mt_alpha_from_sigma
@@ -161,7 +161,7 @@ def test_default_alpha_figure_still_uses_natural_sigmoid(tmp_path):
         tmp_path,
         "MT_RNN",
     )
-    assert seen["value"][0] == pytest.approx(1 / (1 + np.exp(-1)))
+    assert seen["value"][0] == pytest.approx(1 / (1 + 10 ** (-1)))
     alpha_path = tmp_path / "vis_training_history_of_alpha_MT_RNN.png"
     sigma_called = tmp_path / "vis_training_history_of_sigma_MT_RNN.png"
     _assert_png(alpha_path)

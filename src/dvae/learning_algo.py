@@ -236,16 +236,11 @@ class LearningAlgorithm:
         if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
             # defaults to the same as lr if not present
             self.alpha_lr = self.cfg.getfloat("Training", "alpha_lr", fallback=self.lr)
-            # Shared sigmas, plus heart/brain block logits when those
-            # blocks are trainable. base_parameters drops every name
-            # that contains "sigmas", so this group is the only one.
-            if hasattr(self.model, "alpha_parameters"):
-                alpha_params = list(self.model.alpha_parameters())
-            else:
-                alpha_params = [self.model.sigmas]
+            # base_parameters drops every name that contains "sigmas",
+            # so this group is the only one that steps the timescale.
             params = [
                 {"params": self.model.base_parameters(), "lr": self.lr},
-                {"params": alpha_params, "lr": self.alpha_lr},
+                {"params": [self.model.sigmas], "lr": self.alpha_lr},
             ]
         else:
             params = self.model.parameters()
@@ -869,20 +864,10 @@ class LearningAlgorithm:
         sigmas_history = None
 
         def new_sigmas_history():
-            """One row per logged timescale logit, including block alphas."""
-            logged = getattr(self.model, "logged_sigmas", None)
-            if callable(logged):
-                current = logged().detach().cpu().numpy().reshape(-1)
-            else:
-                current = sigmoid_reverse_10(
-                    [
-                        float(i)
-                        for i in self.cfg.get("Network", "alphas").split(",")
-                        if i != ""
-                    ]
-                )
-            history = np.zeros((int(np.asarray(current).reshape(-1).shape[0]), epochs))
-            history[:, 0] = np.asarray(current, dtype=np.float64).reshape(-1)
+            """One row per entry of the shared sigmas parameter."""
+            current = self.model.sigmas.detach().cpu().numpy().reshape(-1)
+            history = np.zeros((current.shape[0], epochs))
+            history[:, 0] = current
             return history
 
         if not self.params["reload"]:
@@ -1667,15 +1652,9 @@ class LearningAlgorithm:
                 train_subband[epoch] += float(sub_loss.detach()) * bs
                 train_decorr[epoch] += float(dec_loss.detach()) * bs
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
-                    logged = getattr(self.model, "logged_sigmas", None)
-                    if callable(logged):
-                        sigmas_history[:, epoch] = (
-                            logged().detach().cpu().numpy().reshape(-1)
-                        )
-                    else:
-                        sigmas_history[:, epoch] = (
-                            self.model.sigmas.detach().cpu().numpy()
-                        )
+                    sigmas_history[:, epoch] = (
+                        self.model.sigmas.detach().cpu().numpy()
+                    )
                 update_A_sigmas_history(a_sigmas_history, self.model, epoch)
 
             sync_cuda(self.device)

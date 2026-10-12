@@ -1218,13 +1218,13 @@ def visualize_combined_metrics(
 
 
 def mt_alpha_from_sigma(sigmas):
-    """Map stored MT sigmas to the values drawn in the alpha-history figure.
+    """Map stored MT sigmas with the model's base-10 sigmoid.
 
-    This is the historical natural sigmoid used by MT_RNN plots and logs.
-    The model itself mixes hidden states with a base-10 sigmoid. Do not
-    change this default: existing MT figures depend on it.
+    This is ``1 / (1 + 10 ** (-sigma))``, the same map ``MT_RNN.sigmoid_10``
+    uses for the mixing weights.
     """
-    return 1 / (1 + np.exp(-sigmas))
+    sigmas = np.asarray(sigmas, dtype=np.float64)
+    return 1.0 / (1.0 + np.power(10.0, -sigmas))
 
 
 def _history_figure_tag(tag, file_tag):

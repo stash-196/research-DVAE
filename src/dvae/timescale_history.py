@@ -12,8 +12,8 @@ recurrent cell (``model.rnn.A_sigmas``). This module records that
 parameter on the same cadence and feeds it through the same figure
 functions.
 
-MT plots still convert sigmas with a natural sigmoid. That path is
-unchanged. PLRNN alpha curves use the cell's base-10 sigmoid so the
+MT plots convert mixing sigmas with the model's base-10 sigmoid.
+PLRNN alpha curves use the same base-10 map on ``A_sigmas`` so the
 figure shows the diagonal ``A`` the recurrence actually applies.
 """
 
@@ -23,7 +23,7 @@ MT_MODEL_NAMES = ("MT_RNN", "MT_VRNN")
 
 
 def diagonal_A_from_sigmas(sigmas):
-    """Base-10 sigmoid used by PLRNN / shPLRNN ``A`` (not MT's natural sigmoid)."""
+    """Base-10 sigmoid used by PLRNN / shPLRNN ``A`` and by MT mixing alphas."""
     sigmas = np.asarray(sigmas, dtype=np.float64)
     return 1.0 / (1.0 + np.power(10.0, -sigmas))
 
