@@ -44,8 +44,8 @@ Rosenstein is on ``val_lle_mean`` / ``val_lle_std`` plus the scalar
 one value per fixed window; ``val_lle_gt_per_window`` is that same
 ground-truth exponent per window, computed once. The plotted Rosenstein
 band is ``val_lle_std``. Drift figures are written raw and as
-``*_varnorm``. The per-timestep trajectories of ``e^2``, ``e d``, and
-``d^2`` are drawn at each ``save_frequency`` checkpoint into
+``*_varnorm``. The per-timestep trajectories of ``e^2``, ``e d``, ``d^2``, and
+the cosine of ``e`` and ``d`` are drawn at each ``save_frequency`` checkpoint into
 ``vis_during_training/drift_timestep/`` (epoch in the filename). Those
 arrays are not stored here; they can be recomputed from the saved
 model. The chosen window starts and their teacher-forced

@@ -1,4 +1,4 @@
-"""Per-timestep e^2, e*d, and d^2 trajectories on synthetic windows.
+"""Per-timestep e^2, e*d, d^2, and cosine trajectories on synthetic windows.
 
 The traces cover the full window. The checkpoint figure is written under
 vis_during_training/drift_timestep with the epoch in the filename. The
@@ -40,16 +40,33 @@ _STEP_KEYS = (
     "val_e2_per_step",
     "val_ed_per_step",
     "val_d2_per_step",
+    "val_cos_per_step",
     "val_e2_per_step_varnorm",
     "val_ed_per_step_varnorm",
     "val_d2_per_step_varnorm",
+    "val_cos_per_step_varnorm",
     "e2_per_step",
     "ed_per_step",
     "d2_per_step",
+    "cos_per_step",
     "e2_per_step_varnorm",
     "ed_per_step_varnorm",
     "d2_per_step_varnorm",
+    "cos_per_step_varnorm",
 )
+
+
+def _cosine(err, delta, mask):
+    chosen = np.asarray(mask, dtype=bool)
+    safe_err = np.where(chosen & np.isfinite(err), err, 0.0)
+    safe_delta = np.where(chosen & np.isfinite(delta), delta, 0.0)
+    dot = np.sum(safe_err * safe_delta, axis=-1)
+    err_norm = np.sqrt(np.sum(safe_err * safe_err, axis=-1))
+    delta_norm = np.sqrt(np.sum(safe_delta * safe_delta, axis=-1))
+    out = np.full(dot.shape, np.nan, dtype=np.float64)
+    ok = (chosen.sum(axis=-1) > 0) & (err_norm > 0.0) & (delta_norm > 0.0)
+    out[ok] = dot[ok] / (err_norm[ok] * delta_norm[ok])
+    return out
 
 
 def _channel_mean(values, mask):
@@ -121,6 +138,26 @@ def test_traces_span_the_full_window_and_match_channel_means():
     only_channel = (err[1, 2, 0] ** 2)
     assert metrics["e2_per_step"][1, 2] == pytest.approx(only_channel)
 
+    variance = np.asarray(variance, dtype=np.float64)
+    safe = np.where(np.isfinite(variance) & (variance > 0.0), variance, 1.0)
+    usable = masks & np.isfinite(variance) & (variance > 0.0)
+    std = np.sqrt(safe).reshape(1, 1, -1)
+    np.testing.assert_allclose(
+        metrics["cos_per_step"], _cosine(err, delta, masks), equal_nan=True
+    )
+    np.testing.assert_allclose(
+        metrics["cos_per_step_varnorm"],
+        _cosine(err / std, delta / std, usable),
+        equal_nan=True,
+    )
+    assert metrics["cos_per_step"].shape == (truth.shape[0], length)
+
+    quiet = autonomous.copy()
+    quiet[:, :4, :] = teacher[:, :4, :]
+    quiet_metrics, _quiet_var = _metrics(truth, teacher, quiet)
+    assert np.isnan(quiet_metrics["cos_per_step"][:, :4]).all()
+    assert np.isfinite(quiet_metrics["cos_per_step"][:, 4:]).any()
+
     bumped = teacher.copy()
     bumped[:, 0, :] += 3.0
     bumped_metrics, _variance = _metrics(truth, bumped, autonomous)
@@ -157,11 +194,13 @@ def test_checkpoint_figure_is_saved_with_the_epoch_in_the_filename(tmp_path):
         "e2": metrics["e2_per_step"],
         "ed": metrics["ed_per_step"],
         "d2": metrics["d2_per_step"],
+        "cos": metrics["cos_per_step"],
     }
     varnorm = {
         "e2": metrics["e2_per_step_varnorm"],
         "ed": metrics["ed_per_step_varnorm"],
         "d2": metrics["d2_per_step_varnorm"],
+        "cos": metrics["cos_per_step_varnorm"],
     }
     epoch = 4
     vis_dir = tmp_path / "vis_during_training"
@@ -191,10 +230,24 @@ def test_checkpoint_figure_is_saved_with_the_epoch_in_the_filename(tmp_path):
 
     fig = build_drift_timestep_figure(terms, flip=4)
     try:
-        assert len(fig.axes) == 3
-        assert _axes_share_x(fig.axes[0], fig.axes[1])
-        assert _axes_share_x(fig.axes[1], fig.axes[2])
-        for ax, key in zip(fig.axes, ("e2", "ed", "d2")):
+        assert len(fig.axes) == 4
+        for left, right in zip(fig.axes, fig.axes[1:]):
+            assert _axes_share_x(left, right)
+            np.testing.assert_allclose(left.get_xlim(), right.get_xlim())
+            np.testing.assert_allclose(left.get_xticks(), right.get_xticks())
+        cosine = fig.axes[3]
+        assert cosine.get_yscale() == "linear"
+        assert cosine.get_ylim() == (-1.0, 1.0)
+        assert fig.axes[0].get_ylim() != cosine.get_ylim()
+        fig.canvas.draw()
+        # align_ylabels shares the anchor next to the spine, and the spines.
+        label_x = [ax.yaxis.label.get_window_extent().x1 for ax in fig.axes]
+        spine_x = [
+            ax.spines["left"].get_window_extent().x0 for ax in fig.axes
+        ]
+        assert max(label_x) - min(label_x) < 1.0
+        assert max(spine_x) - min(spine_x) < 1.0
+        for ax, key in zip(fig.axes, ("e2", "ed", "d2", "cos")):
             lines = _trajectory_lines(ax)
             faint = [line for line in lines if line.get_alpha() == pytest.approx(0.2)]
             solid = [line for line in lines if line.get_alpha() == pytest.approx(1.0)]
@@ -206,6 +259,24 @@ def test_checkpoint_figure_is_saved_with_the_epoch_in_the_filename(tmp_path):
         assert fig.axes[-1].get_xlabel() == "$t$"
     finally:
         plt.close(fig)
+
+    var_fig = build_drift_timestep_figure(varnorm, flip=4, normalized=True)
+    try:
+        assert len(var_fig.axes) == 4
+        assert var_fig.axes[3].get_ylim() == (-1.0, 1.0)
+        assert var_fig.axes[3].get_yscale() == "linear"
+        var_fig.canvas.draw()
+        var_x = [ax.yaxis.label.get_window_extent().x1 for ax in var_fig.axes]
+        var_spine = [
+            ax.spines["left"].get_window_extent().x0 for ax in var_fig.axes
+        ]
+        assert max(var_x) - min(var_x) < 1.0
+        assert max(var_spine) - min(var_spine) < 1.0
+        np.testing.assert_allclose(
+            var_fig.axes[0].get_xticks(), var_fig.axes[-1].get_xticks()
+        )
+    finally:
+        plt.close(var_fig)
 
 
 def test_history_does_not_store_the_timestep_arrays(tmp_path):

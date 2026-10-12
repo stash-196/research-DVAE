@@ -422,11 +422,13 @@ class LearningAlgorithm:
                 "e2": np.asarray(scored["e2_per_step"], dtype=np.float64),
                 "ed": np.asarray(scored["ed_per_step"], dtype=np.float64),
                 "d2": np.asarray(scored["d2_per_step"], dtype=np.float64),
+                "cos": np.asarray(scored["cos_per_step"], dtype=np.float64),
             }
             self._latest_drift_steps_varnorm = {
                 "e2": np.asarray(scored["e2_per_step_varnorm"], dtype=np.float64),
                 "ed": np.asarray(scored["ed_per_step_varnorm"], dtype=np.float64),
                 "d2": np.asarray(scored["d2_per_step_varnorm"], dtype=np.float64),
+                "cos": np.asarray(scored["cos_per_step_varnorm"], dtype=np.float64),
             }
             self.logger.info(
                 "Val spectrum error (free-run half): {:.6f}".format(
