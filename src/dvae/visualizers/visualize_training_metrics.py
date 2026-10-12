@@ -291,6 +291,7 @@ def visualize_combined_metrics(
     noise_sampling_method,
     save_figures_dir,
     tag,
+    patience_threshold_epochs=None,
 ):
     plt.clf()
     fig, axs = plt.subplots(6, 1, figsize=(12, 18))  # Updated to 6 subplots
@@ -352,6 +353,16 @@ def visualize_combined_metrics(
     axs[3].step(
         range(len(cpt_patience_epochs)), cpt_patience_epochs, label="cpt_patience"
     )
+    # Dashed threshold: the patience that would fire a bump or the final stop
+    # on that epoch. Constant when warmup_patience_start is unset.
+    if patience_threshold_epochs is not None:
+        axs[3].step(
+            range(len(patience_threshold_epochs)),
+            patience_threshold_epochs,
+            linestyle="--",
+            color="black",
+            label="patience threshold",
+        )
     axs[3].legend(fontsize=16, title="cpt_patience", title_fontsize=20)
     axs[3].set_xlabel("epochs", fontdict={"size": 16})
     axs[3].set_ylabel("cpt_patience", fontdict={"size": 16})

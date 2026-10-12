@@ -53,6 +53,12 @@ from dvae.eval.utils.spectrum_validation import (
     score_spectrum_windows,
 )
 from dvae.eval.window_length import cap_eval_seq_len
+from dvae.warmup_curriculum import (
+    WarmupCurriculum,
+    format_patience,
+    warmup_action,
+    warmup_settings_from_config,
+)
 from dvae.run_options import (
     criteria_log_fields,
     normalised_criterion_sum,
@@ -655,6 +661,7 @@ class LearningAlgorithm:
         kl_warm_values = np.zeros((epochs,))
         best_state_epochs = np.zeros((epochs,))
         cpt_patience_epochs = np.zeros((epochs,))
+        patience_threshold_epochs = np.zeros((epochs,))
         delta_per_epoch = np.zeros((epochs,))
         sequence_len_values = np.full((epochs,), initial_sequence_len)
         delta_rolling_window_size = 6
@@ -673,6 +680,43 @@ class LearningAlgorithm:
                         restored[name] = float(saved_ref[name])
                 if len(restored) == len(self._val_criteria):
                     self._val_reference = restored
+
+        # Blank warmup_order is auto_first (autonomous+noise, KL, sequence).
+        # Blank warmup_patience_start keeps every trigger at early_stop_patience.
+        warmup_order, warmup_patience_start = warmup_settings_from_config(self.cfg)
+        warmup = WarmupCurriculum(
+            order=warmup_order,
+            patience_start=warmup_patience_start,
+            early_stop_patience=early_stop_patience,
+            initial_sequence_len=initial_sequence_len,
+            sequence_len=self.sequence_len,
+            enable_autonomous=self.enable_autonomous_warmup,
+            auto_start=self.auto_warm_start,
+            auto_limit=self.auto_warm_limit,
+            enable_noise=self.enable_noise_warmup,
+            noise_start=self.noise_warm_start,
+            noise_limit=self.noise_warm_limit,
+            noise_reset_on_window=self.noise_warm_reset_on_window,
+            enable_kl=self.enable_kl_warmup,
+        )
+        logger.info(
+            "Warm-up order: {} (window steps {}, autonomous steps {}, "
+            "KL steps {}, planned bumps {}). Patience start: {}. "
+            "Early stop patience: {}.".format(
+                warmup.order,
+                warmup.window_steps,
+                warmup.autonomous_steps,
+                warmup.kl_steps,
+                warmup.n_planned,
+                (
+                    "off"
+                    if warmup.patience_start is None
+                    else format_patience(warmup.patience_start)
+                ),
+                early_stop_patience,
+            )
+        )
+        bumps_completed = 0
 
         self.model.to(self.device)
 
@@ -1292,107 +1336,94 @@ class LearningAlgorithm:
             # length has already been increased to the requested maximum. This
             # allows the sequence-length warm-up to still occur when other
             # warm-ups are disabled.
-            if cpt_patience > early_stop_patience:
-                if (
-                    (not self.enable_kl_warmup or current_kl_warm >= 1.0)
-                    and (
-                        not self.enable_autonomous_warmup
-                        or current_auto_warm >= self.auto_warm_limit
-                    )
-                    and (
-                        not self.enable_noise_warmup
-                        or current_noise_warm >= self.noise_warm_limit
-                    )
-                    and current_sequence_len >= self.sequence_len
-                ):
-                    logger.info("Early stop patience achieved")
-                    break
-                else:
-                    cpt_patience = 0
-                    warm_up_happened = True
-                    warm_up_value = 0.1  # Your bump size
-
-                    # Priority: autonomous+noise bump -> KL bump -> sequence-length bump
-                    if self.enable_autonomous_warmup and (
-                        current_auto_warm < self.auto_warm_limit
-                        or (
-                            self.enable_noise_warmup
-                            and current_noise_warm < self.noise_warm_limit
-                        )
-                    ):
-                        if current_auto_warm < self.auto_warm_limit:
-                            logger.info("Bumping auto warm-up")
-                            current_auto_warm = min(
-                                self.auto_warm_limit,
-                                current_auto_warm
-                                + warm_up_value * self.auto_warm_limit,
-                            )
-                            logger.info(
-                                "Autonomous warm-up, anneal coeff: {}".format(
-                                    current_auto_warm
-                                )
-                            )
-                        if (
-                            self.enable_noise_warmup
-                            and current_noise_warm < self.noise_warm_limit
-                        ):
-                            logger.info("Bumping noise warm-up")
-                            current_noise_warm = min(
-                                self.noise_warm_limit,
-                                current_noise_warm
-                                + warm_up_value * self.noise_warm_limit,
-                            )
-                            logger.info(
-                                "Noise warm-up, noise coeff: {}".format(
-                                    current_noise_warm
-                                )
-                            )
-                    elif self.enable_kl_warmup and current_kl_warm < 1.0:
-                        logger.info("Bumping KL warm-up")
-                        current_kl_warm += warm_up_value
-
-                    elif current_sequence_len < self.sequence_len:
-                        logger.info("Bumping sequence length")
-                        current_sequence_len = min(
-                            self.sequence_len,
-                            current_sequence_len
-                            + int(warm_up_value * self.sequence_len),
-                        )
-                        train_dataloader.dataset.update_sequence_length(
-                            current_sequence_len,
-                        )
-                        val_dataloader.dataset.update_sequence_length(
-                            current_sequence_len
-                        )
-                        train_dataloader = torch.utils.data.DataLoader(
-                            train_dataloader.dataset,
-                            batch_size=train_dataloader.batch_size,
-                            shuffle=self.shuffle,
-                            num_workers=train_dataloader.num_workers,
-                            pin_memory=True,
-                        )
-                        val_dataloader = torch.utils.data.DataLoader(
-                            val_dataloader.dataset,
-                            batch_size=val_dataloader.batch_size,
-                            shuffle=self.shuffle,
-                            num_workers=val_dataloader.num_workers,
-                            pin_memory=True,
-                        )
+            # auto_first: autonomous+noise, then KL, then sequence length.
+            # window_first: sequence length first (autonomous fraction stays at
+            # auto_warm_start), then autonomous+noise, then KL. Same 0.1 bumps.
+            # A blank warmup_patience_start compares against early_stop_patience
+            # on every bump. The final stop always uses early_stop_patience.
+            warmups_finished = warmup.finished(
+                current_auto_warm,
+                current_noise_warm,
+                current_kl_warm,
+                current_sequence_len,
+            )
+            active_patience = warmup.active_patience(
+                bumps_completed, warmups_finished
+            )
+            logger.info(
+                "Epoch: {} active patience: {}".format(
+                    epoch, format_patience(active_patience)
+                )
+            )
+            action = warmup_action(
+                cpt_patience, active_patience, warmups_finished
+            )
+            if action == "stop":
+                logger.info("Early stop patience achieved")
+                break
+            if action == "bump":
+                cpt_patience = 0
+                warm_up_happened = True
+                bumped = warmup.apply_bump(
+                    current_auto_warm,
+                    current_noise_warm,
+                    current_kl_warm,
+                    current_sequence_len,
+                )
+                current_auto_warm = bumped.auto
+                current_noise_warm = bumped.noise
+                current_kl_warm = bumped.kl
+                current_sequence_len = bumped.sequence_len
+                if bumped.kind == "auto":
+                    if bumped.auto_bumped:
+                        logger.info("Bumping auto warm-up")
                         logger.info(
-                            "Sequence length increased to: {}".format(
-                                current_sequence_len
+                            "Autonomous warm-up, anneal coeff: {}".format(
+                                current_auto_warm
                             )
                         )
-
-                        if self.enable_kl_warmup:
-                            current_kl_warm = 0
-                        current_auto_warm = self.auto_warm_start
-                        if self.noise_warm_reset_on_window and self.enable_noise_warmup:
-                            current_noise_warm = self.noise_warm_start
-                        logger.info("Resetting KL & auto & noise warm-ups")
-
-                    else:
-                        logger.info("Unknown early stop condition")
+                    if bumped.noise_bumped:
+                        logger.info("Bumping noise warm-up")
+                        logger.info(
+                            "Noise warm-up, noise coeff: {}".format(
+                                current_noise_warm
+                            )
+                        )
+                elif bumped.kind == "kl":
+                    logger.info("Bumping KL warm-up")
+                elif bumped.kind == "window":
+                    logger.info("Bumping sequence length")
+                    train_dataloader.dataset.update_sequence_length(
+                        current_sequence_len,
+                    )
+                    val_dataloader.dataset.update_sequence_length(
+                        current_sequence_len
+                    )
+                    train_dataloader = torch.utils.data.DataLoader(
+                        train_dataloader.dataset,
+                        batch_size=train_dataloader.batch_size,
+                        shuffle=self.shuffle,
+                        num_workers=train_dataloader.num_workers,
+                        pin_memory=True,
+                    )
+                    val_dataloader = torch.utils.data.DataLoader(
+                        val_dataloader.dataset,
+                        batch_size=val_dataloader.batch_size,
+                        shuffle=self.shuffle,
+                        num_workers=val_dataloader.num_workers,
+                        pin_memory=True,
+                    )
+                    logger.info(
+                        "Sequence length increased to: {}".format(
+                            current_sequence_len
+                        )
+                    )
+                    logger.info("Resetting KL & auto & noise warm-ups")
+                else:
+                    logger.info("Unknown early stop condition")
+                if bumped.kind != "none":
+                    bumps_completed += 1
+            patience_threshold_epochs[epoch] = active_patience
             if self.tie_noise_to_auto:
                 current_noise_warm = current_auto_warm
             cpt_patience_epochs[epoch] = cpt_patience
@@ -1567,6 +1598,7 @@ class LearningAlgorithm:
                     self.noise_sampling_method,
                     save_figures_dir,
                     tag,
+                    patience_threshold_epochs[: epoch + 1],
                 )
 
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
