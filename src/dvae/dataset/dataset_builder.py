@@ -59,9 +59,10 @@ class DatasetConfig:
     # filled_nan_log_sec is the re-cut log cutoff when max_fill is unset.
     max_fill_gap_sec: float | None = None
     filled_nan_log_sec: float | None = None
-    # Window rules. Blank config keys take these. legacy_windowing true
-    # restores the previous bundle when the placement keys are blank, and
-    # turns the NaN filter off when max_window_nan_ratio is blank.
+    # Window rules. Blank config keys take these. legacy_defaults
+    # (alias legacy_windowing) true restores the previous bundle when the
+    # placement keys are blank, and turns the NaN filter off when
+    # max_window_nan_ratio is blank.
     # A blank ratio (None, and not max_window_nan_ratio_off) uses
     # dataset_missing_rate + max_window_nan_excess.
     legacy_windowing: bool = False

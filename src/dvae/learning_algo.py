@@ -488,7 +488,8 @@ class LearningAlgorithm:
 
         # Blank val_criteria is recon,spectrum: each term divided by its
         # first validation epoch, then summed. Explicit recon, or
-        # legacy_windowing, stays on the raw val_loss comparison.
+        # legacy_defaults / legacy_windowing, stays on the raw val_loss
+        # comparison.
         # spectrum scores fixed free-run windows and does not resize them.
         self._val_criteria = resolve_val_criteria(self.cfg)
         self._val_reference = None
@@ -681,8 +682,10 @@ class LearningAlgorithm:
                 if len(restored) == len(self._val_criteria):
                     self._val_reference = restored
 
-        # Blank warmup_order is auto_first (autonomous+noise, KL, sequence).
-        # Blank warmup_patience_start keeps every trigger at early_stop_patience.
+        # Blank warmup_order is window_first. Blank warmup_patience_start
+        # is 2, growing to early_stop_patience. legacy_defaults or
+        # legacy_windowing restores auto_first and a single patience when
+        # those keys are blank. Explicit values still win.
         warmup_order, warmup_patience_start = warmup_settings_from_config(self.cfg)
         warmup = WarmupCurriculum(
             order=warmup_order,

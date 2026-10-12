@@ -342,6 +342,7 @@ def test_template_has_gap_keys():
     assert "max_window_nan_ratio = {max_window_nan_ratio}" in text
     assert "max_window_nan_excess = {max_window_nan_excess}" in text
     assert "strict_non_overlap = {strict_non_overlap}" in text
+    assert "legacy_defaults = {legacy_defaults}" in text
     assert "legacy_windowing = {legacy_windowing}" in text
 
 
@@ -596,6 +597,7 @@ def test_default_fraction_splits_and_legacy_keeps_an_explicit_key(tmp_path):
 
     blank = resolve_windowing()
     assert blank["legacy_windowing"] is False
+    assert blank["legacy_defaults"] is False
     assert blank["start_on_observed"] is True
     assert blank["strict_non_overlap"] is True
     assert blank["max_window_nan_ratio"] is None
@@ -604,7 +606,13 @@ def test_default_fraction_splits_and_legacy_keeps_an_explicit_key(tmp_path):
     assert blank["max_gap_window_frac"] == pytest.approx(0.25)
     assert blank["gap_split_quantile"] == pytest.approx(0.99)
     legacy = resolve_windowing(legacy_windowing=True)
+    assert legacy["legacy_defaults"] is True
     assert legacy["start_on_observed"] is False
+    aliased = resolve_windowing(legacy_defaults=True)
+    assert aliased["legacy_windowing"] is True
+    assert aliased["start_on_observed"] is False
+    assert aliased["strict_non_overlap"] is False
+    assert aliased["max_gap_window_frac"] is None
     assert legacy["strict_non_overlap"] is False
     assert legacy["max_window_nan_ratio"] is None
     assert legacy["max_window_nan_ratio_off"] is False
@@ -634,6 +642,14 @@ def test_default_fraction_splits_and_legacy_keeps_an_explicit_key(tmp_path):
     assert windowing_from_config(cfg)["gap_split_quantile"] is None
     cfg.set("DataFrame", "gap_split_quantile", "")
     assert windowing_from_config(cfg)["gap_split_quantile"] is None
+    only_alias = configparser.ConfigParser()
+    only_alias.add_section("DataFrame")
+    only_alias.set("DataFrame", "legacy_defaults", "true")
+    from_alias = windowing_from_config(only_alias)
+    assert from_alias["legacy_windowing"] is True
+    assert from_alias["start_on_observed"] is False
+    assert from_alias["max_gap_window_frac"] is None
+    assert from_alias["max_window_nan_excess"] is None
 
     n = 100
     present = np.ones(n, dtype=bool)

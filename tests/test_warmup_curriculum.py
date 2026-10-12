@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import configparser
+from pathlib import Path
 
 import matplotlib
 
@@ -55,38 +56,82 @@ def _kinds(sim):
     return [event["kind"] for event in sim.events]
 
 
-def test_blank_config_keeps_auto_first_and_fixed_patience():
+def test_blank_config_uses_window_first_and_patience_2():
     cfg = configparser.ConfigParser()
     cfg.read_string("[Training]\nwarmup_order =\nwarmup_patience_start =\n")
     order, start = warmup_settings_from_config(cfg)
-    assert order == "auto_first"
-    assert start is None
+    assert order == "window_first"
+    assert start == 2.0
 
     cfg = configparser.ConfigParser()
     cfg.read_string("[Training]\nepochs = 3\n")
     order, start = warmup_settings_from_config(cfg)
-    assert order == "auto_first"
-    assert start is None
+    assert order == "window_first"
+    assert start == 2.0
 
     cfg = configparser.ConfigParser()
     cfg.read_string(
         "[Training]\n"
-        "warmup_order = window_first\n"
+        "warmup_order = auto_first\n"
         "warmup_patience_start = off\n"
     )
     order, start = warmup_settings_from_config(cfg)
-    assert order == "window_first"
+    assert order == "auto_first"
     assert start is None
 
     cfg = configparser.ConfigParser()
     cfg.read_string("[Training]\nwarmup_patience_start = none\n")
-    assert warmup_settings_from_config(cfg)[1] is None
+    assert warmup_settings_from_config(cfg) == ("window_first", 2.0)
     cfg = configparser.ConfigParser()
     cfg.read_string("[Training]\nwarmup_patience_start = null\n")
-    assert warmup_settings_from_config(cfg)[1] is None
-    cfg = configparser.ConfigParser()
-    cfg.read_string("[Training]\nwarmup_patience_start = 2\n")
     assert warmup_settings_from_config(cfg)[1] == 2.0
+    cfg = configparser.ConfigParser()
+    cfg.read_string("[Training]\nwarmup_patience_start = 4\n")
+    assert warmup_settings_from_config(cfg)[1] == 4.0
+
+
+def test_legacy_switch_restores_auto_first_and_a_single_patience():
+    for name in ("legacy_defaults", "legacy_windowing"):
+        cfg = _cfg(
+            "[Training]\n"
+            "warmup_order =\n"
+            "warmup_patience_start =\n"
+            "[DataFrame]\n"
+            f"{name} = true\n"
+        )
+        assert warmup_settings_from_config(cfg) == ("auto_first", None)
+
+    # Either name is enough, and an explicit warm-up value still wins.
+    cfg = _cfg(
+        "[Training]\n"
+        "warmup_order = window_first\n"
+        "warmup_patience_start = 4\n"
+        "[DataFrame]\n"
+        "legacy_defaults = false\n"
+        "legacy_windowing = true\n"
+    )
+    assert warmup_settings_from_config(cfg) == ("window_first", 4.0)
+
+    cfg = _cfg(
+        "[Training]\n"
+        "warmup_patience_start = off\n"
+        "[DataFrame]\n"
+        "legacy_defaults = true\n"
+    )
+    assert warmup_settings_from_config(cfg) == ("auto_first", None)
+
+
+def test_template_documents_window_first_and_patience_2():
+    text = (
+        Path(__file__).resolve().parents[1]
+        / "config/general_signal/cfg_base_template.ini"
+    ).read_text()
+    assert "warmup_order = {warmup_order}" in text
+    assert "warmup_patience_start = {warmup_patience_start}" in text
+    assert "Blank = window_first" in text
+    assert "Blank = 2." in text
+    assert "legacy_defaults = {legacy_defaults}" in text
+    assert "legacy_windowing = {legacy_windowing}" in text
 
 
 def test_bad_order_and_negative_patience_are_rejected():

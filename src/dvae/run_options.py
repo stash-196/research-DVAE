@@ -2,8 +2,10 @@
 
 ``val_criteria`` defaults to recon and spectrum. A blank key keeps that
 pair: each term is divided by its first validation epoch and the sum is
-the selection score. ``[DataFrame] legacy_windowing`` true, or an explicit
-``val_criteria = recon``, keeps reconstruction-only selection.
+the selection score. ``[DataFrame] legacy_defaults`` true, or the same
+switch under its old name ``legacy_windowing``, keeps reconstruction-only
+selection when ``val_criteria`` is blank. An explicit ``val_criteria =
+recon`` does that on its own.
 Checkpoint cadence and the in-domain eval path stay off unless set.
 """
 
@@ -29,12 +31,30 @@ def legacy_windowing_enabled(raw) -> bool:
     return _text(raw).lower() in {"1", "true", "yes", "y", "on"}
 
 
+def legacy_defaults_from_config(cfg) -> bool:
+    """True when ``legacy_defaults`` or ``legacy_windowing`` is explicitly on.
+
+    ``legacy_defaults`` is the name to write. ``legacy_windowing`` is the
+    same switch. Blank on both is false. An explicit true on either name
+    restores the previous defaults for the keys that are still blank.
+    """
+    if not cfg.has_section("DataFrame"):
+        return False
+    for option in ("legacy_defaults", "legacy_windowing"):
+        if not cfg.has_option("DataFrame", option):
+            continue
+        if legacy_windowing_enabled(cfg.get("DataFrame", option)):
+            return True
+    return False
+
+
 def parse_val_criteria(raw, legacy_windowing=False) -> tuple[str, ...]:
     """Comma-separated validation criteria.
 
     Blank and ``None`` are ``recon,spectrum``. ``legacy_windowing`` true
-    changes that blank default back to ``recon``. An explicit ``recon``
-    is always recon only, and an explicit list is kept as written.
+    (the ``legacy_defaults`` switch) changes that blank default back to
+    ``recon``. An explicit ``recon`` is always recon only, and an
+    explicit list is kept as written.
 
     ``recon`` is the reconstruction validation loss. ``spectrum`` is the
     free-run spectral error. One entry is used raw, so ``recon`` keeps
@@ -69,10 +89,11 @@ def parse_val_criteria(raw, legacy_windowing=False) -> tuple[str, ...]:
 
 
 def resolve_val_criteria(cfg) -> tuple[str, ...]:
-    """Read ``[Training] val_criteria`` and ``[DataFrame] legacy_windowing``.
+    """Read ``[Training] val_criteria`` and the legacy-defaults switch.
 
     A missing ``val_criteria`` key falls back to the older ``val_criterion``
-    name. Blank uses the default pair unless legacy windowing is on.
+    name. Blank uses the default pair unless ``legacy_defaults`` or
+    ``legacy_windowing`` is on.
     """
     if cfg.has_option("Training", "val_criteria"):
         raw = cfg.get("Training", "val_criteria")
@@ -80,10 +101,7 @@ def resolve_val_criteria(cfg) -> tuple[str, ...]:
         raw = cfg.get("Training", "val_criterion")
     else:
         raw = None
-    legacy = False
-    if cfg.has_section("DataFrame") and cfg.has_option("DataFrame", "legacy_windowing"):
-        legacy = legacy_windowing_enabled(cfg.get("DataFrame", "legacy_windowing"))
-    return parse_val_criteria(raw, legacy_windowing=legacy)
+    return parse_val_criteria(raw, legacy_windowing=legacy_defaults_from_config(cfg))
 
 
 def normalised_criterion_sum(components: dict, reference: dict) -> float:

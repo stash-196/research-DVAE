@@ -1,23 +1,26 @@
 """Warm-up phase order and the patience that triggers each bump.
 
-Two `[Training]` keys, both defaulting to today's loop:
+Two `[Training]` keys. Blank keys take the new-run defaults:
 
-* `warmup_order = auto_first` (blank does the same). Autonomous and noise
-  bump together, then KL, then sequence length. `window_first` grows the
-  sequence to `sequence_len` first, while the autonomous fraction stays at
+* `warmup_order` blank is `window_first`. The sequence grows to
+  `sequence_len` first, while the autonomous fraction stays at
   `auto_warm_start` (full teacher forcing when that start is 0), then
-  autonomous and noise, then KL.
-* `warmup_patience_start` blank, none, null, or off: every bump and the
-  final stop use `early_stop_patience`. When set, the patience that fires
-  each bump grows linearly from that start to `early_stop_patience` across
-  the planned bumps. The final stop, once every phase is done, always uses
-  the full `early_stop_patience`.
+  autonomous and noise, then KL. `auto_first` is the previous order:
+  autonomous and noise together, then KL, then sequence length.
+* `warmup_patience_start` blank is 2. The patience that fires each bump
+  grows linearly from that start to `early_stop_patience` across the
+  planned bumps. The final stop, once every phase is done, always uses
+  the full `early_stop_patience`. `off` keeps that single patience for
+  the bumps as well.
+
+`[DataFrame] legacy_defaults` true, or the old name `legacy_windowing`,
+restores `auto_first` and the single patience when those two keys are
+blank. An explicit order or an explicit patience still wins.
 
 Planned bumps are counted once from the config: window steps + autonomous
 steps + KL steps. A sequence-length bump still resets KL and the autonomous
-fraction the way the training loop always has, so `auto_first` can fire
-more bump events than that sum. Those extra events sit at the end of the
-schedule and use `early_stop_patience`.
+fraction, so `auto_first` can fire more bump events than that sum. Those
+extra events sit at the end of the schedule and use `early_stop_patience`.
 
 Step counts replay the live bump arithmetic, including the `0.1` float
 residue (KL and a 0-to-limit autonomous ramp each take 11 steps, not 10).
@@ -31,16 +34,27 @@ from dataclasses import dataclass
 WARMUP_BUMP = 0.1
 ORDER_AUTO_FIRST = "auto_first"
 ORDER_WINDOW_FIRST = "window_first"
+DEFAULT_WARMUP_ORDER = ORDER_WINDOW_FIRST
+DEFAULT_WARMUP_PATIENCE_START = 2.0
 _ORDERS = (ORDER_AUTO_FIRST, ORDER_WINDOW_FIRST)
-_PATIENCE_OFF = {"", "none", "null", "off", "false", "no"}
+_UNSET = {"", "none", "null"}
+_PATIENCE_OFF = {"off", "false", "no"}
 
 
-def resolve_warmup_order(value) -> str:
-    """Blank or ``auto_first`` keeps the historical phase order."""
+def resolve_warmup_order(value, legacy: bool = False) -> str:
+    """Blank is ``window_first``. Legacy blank is ``auto_first``.
+
+    An explicit ``auto_first`` or ``window_first`` wins over ``legacy``.
+    """
     if value is None:
-        return ORDER_AUTO_FIRST
-    key = str(value).strip().lower()
-    if key in {"", "none", "null", ORDER_AUTO_FIRST}:
+        key = ""
+    else:
+        key = str(value).strip().lower()
+    if key in _UNSET:
+        if legacy:
+            return ORDER_AUTO_FIRST
+        return DEFAULT_WARMUP_ORDER
+    if key == ORDER_AUTO_FIRST:
         return ORDER_AUTO_FIRST
     if key == ORDER_WINDOW_FIRST:
         return ORDER_WINDOW_FIRST
@@ -50,27 +64,36 @@ def resolve_warmup_order(value) -> str:
     )
 
 
-def resolve_warmup_patience_start(value) -> float | None:
-    """Blank, none, null, or off leaves bump patience at early_stop_patience."""
-    if value is None or isinstance(value, bool):
+def resolve_warmup_patience_start(value, legacy: bool = False) -> float | None:
+    """Blank is 2. ``off`` is the single ``early_stop_patience``.
+
+    Legacy blank is that single patience too. A number is that start,
+    including under legacy. ``None`` here is a missing config value, not
+    the already-resolved "patience is off" stored on ``WarmupCurriculum``.
+    """
+    if isinstance(value, bool):
         if value is True:
             raise ValueError(
-                "warmup_patience_start must be a non-negative number, or "
-                "blank to leave it off."
+                "warmup_patience_start must be a non-negative number, "
+                "or off for a single early_stop_patience."
             )
         return None
     if isinstance(value, (int, float)):
         number = float(value)
     else:
-        text = str(value).strip().lower()
+        text = "" if value is None else str(value).strip().lower()
+        if text in _UNSET:
+            if legacy:
+                return None
+            return DEFAULT_WARMUP_PATIENCE_START
         if text in _PATIENCE_OFF:
             return None
         try:
             number = float(text)
         except ValueError as exc:
             raise ValueError(
-                "warmup_patience_start must be a non-negative number, or "
-                f"blank/none/off, got {value!r}."
+                "warmup_patience_start must be a non-negative number, "
+                f"or off, got {value!r}."
             ) from exc
     if not math.isfinite(number) or number < 0:
         raise ValueError(
@@ -81,15 +104,23 @@ def resolve_warmup_patience_start(value) -> float | None:
 
 
 def warmup_settings_from_config(cfg) -> tuple[str, float | None]:
-    """Read the two keys. Missing options match a blank template."""
+    """Read the two keys. Missing options match a blank template.
+
+    Blank is ``window_first`` and patience 2. ``legacy_defaults`` or
+    ``legacy_windowing`` changes those blanks to ``auto_first`` and a
+    single patience. Explicit values still win.
+    """
+    from dvae.run_options import legacy_defaults_from_config
+
+    legacy = legacy_defaults_from_config(cfg)
     order_raw = None
     patience_raw = None
     if cfg.has_section("Training"):
         order_raw = cfg.get("Training", "warmup_order", fallback=None)
         patience_raw = cfg.get("Training", "warmup_patience_start", fallback=None)
     return (
-        resolve_warmup_order(order_raw),
-        resolve_warmup_patience_start(patience_raw),
+        resolve_warmup_order(order_raw, legacy=legacy),
+        resolve_warmup_patience_start(patience_raw, legacy=legacy),
     )
 
 
@@ -250,7 +281,7 @@ class WarmupCurriculum:
     def __init__(
         self,
         *,
-        order=ORDER_AUTO_FIRST,
+        order=DEFAULT_WARMUP_ORDER,
         patience_start=None,
         early_stop_patience: int,
         initial_sequence_len: int,
@@ -266,7 +297,12 @@ class WarmupCurriculum:
         bump: float = WARMUP_BUMP,
     ):
         self.order = resolve_warmup_order(order)
-        self.patience_start = resolve_warmup_patience_start(patience_start)
+        # None is already resolved: adaptive patience is off. The config
+        # reader turns a blank key into 2 before it reaches this constructor.
+        if patience_start is None:
+            self.patience_start = None
+        else:
+            self.patience_start = resolve_warmup_patience_start(patience_start)
         self.early_stop_patience = early_stop_patience
         self.initial_sequence_len = int(initial_sequence_len)
         self.sequence_len = int(sequence_len)

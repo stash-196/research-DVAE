@@ -37,8 +37,9 @@ missing run (NaN or ``present=False``) only when its length exceeds
 ``[DataFrame] gap_split_quantile`` (default 0.99) is that quantile of
 the missing-run lengths, computed once after the block mask and the
 time crop, before windowing. Empty or ``none`` drops the quantile term.
-The comparison is recomputed on every re-cut. ``legacy_windowing`` true
-disables the split when the fraction key is blank. ``[DataFrame] start_on_observed``
+The comparison is recomputed on every re-cut. ``legacy_defaults`` true
+(alias ``legacy_windowing``) disables the split when the fraction key
+is blank. ``[DataFrame] start_on_observed``
 (default true) moves a start that lands on ``present=False`` forward to
 the next observed sample in the same segment. ``[DataFrame]
 strict_non_overlap`` (default true) tiles each segment with abutting
@@ -50,12 +51,15 @@ exceeds the dataset missing rate plus ``[DataFrame] max_window_nan_excess``
 time crop, before the train/test cut and before windowing, from NaN and
 ``present=False`` only. A threshold of at least 1 drops nothing. An
 explicit ratio is an absolute cap, and ``off`` disables both rules.
-``[DataFrame] legacy_windowing`` (default false) restores the previous
-bundle when the placement keys are blank: starts may land on a missing
-sample, the historical picker is used, the fraction split is off, and
-both NaN rules are off. The same switch restores recon-only model
-selection when ``val_criteria`` is blank. An explicit value for one key
-still wins, including an explicit ratio under legacy windowing.
+``[DataFrame] legacy_defaults`` (default false; ``legacy_windowing`` is
+the same switch) restores the previous bundle when the placement keys
+are blank: starts may land on a missing sample, the historical picker
+is used, the fraction split is off, and both NaN rules are off. The
+same switch restores recon-only model selection when ``val_criteria``
+is blank, and restores ``auto_first`` warm-up plus a single
+``early_stop_patience`` when those training keys are blank. An explicit
+value for one key still wins, including an explicit ratio under the
+legacy switch.
 ``[DataFrame] block_mask_file`` (unset) is an npz of block flags applied
 before the time crop. ``block_mask_mode`` defaults to ``not_good``.
 ``filled_nan_log_sec`` is the re-cut log cutoff when ``max_fill_gap_sec``
@@ -883,18 +887,21 @@ def resolve_windowing(
     max_window_nan_excess=_WINDOW_DEFAULT,
     max_gap_window_frac=_WINDOW_DEFAULT,
     gap_split_quantile=_WINDOW_DEFAULT,
+    legacy_defaults=_WINDOW_DEFAULT,
 ) -> dict:
     """Defaults for the window rules, and the legacy override.
 
-    A blank key takes the new default. ``legacy_windowing`` true changes
-    that blank-key default back to the historical one (starts may be
-    missing, historical ``find_indices``, no fraction split, no NaN
-    filter). A blank ``max_window_nan_ratio`` is the relative rule
-    (missing rate + excess), not a fixed 0.3. ``off`` on that key
-    disables both the absolute cap and the relative rule. A value that
-    is actually set still wins.
+    A blank key takes the new default. ``legacy_defaults`` or
+    ``legacy_windowing`` true changes that blank-key default back to the
+    historical one (starts may be missing, historical ``find_indices``,
+    no fraction split, no NaN filter). Either name is enough. A blank
+    ``max_window_nan_ratio`` is the relative rule (missing rate + excess),
+    not a fixed 0.3. ``off`` on that key disables both the absolute cap
+    and the relative rule. A value that is actually set still wins.
     """
-    legacy = _window_bool(legacy_windowing, "legacy_windowing", False)
+    legacy = _window_bool(legacy_windowing, "legacy_windowing", False) or (
+        _window_bool(legacy_defaults, "legacy_defaults", False)
+    )
     if legacy:
         start_default = False
         strict_default = False
@@ -915,6 +922,7 @@ def resolve_windowing(
         excess = None
     return {
         "legacy_windowing": legacy,
+        "legacy_defaults": legacy,
         "start_on_observed": _window_bool(
             start_on_observed, "start_on_observed", start_default
         ),
@@ -937,6 +945,7 @@ def windowing_from_config(cfg) -> dict:
     """Resolve the ``[DataFrame]`` window rules, including a blank legacy key."""
     return resolve_windowing(
         legacy_windowing=optional_config_str(cfg, "DataFrame", "legacy_windowing"),
+        legacy_defaults=optional_config_str(cfg, "DataFrame", "legacy_defaults"),
         start_on_observed=optional_config_str(cfg, "DataFrame", "start_on_observed"),
         strict_non_overlap=optional_config_str(cfg, "DataFrame", "strict_non_overlap"),
         max_window_nan_ratio=optional_config_str(
@@ -1829,10 +1838,13 @@ class XhroProper(Xhro):
         inside windows. When set, a filled gap with ``gap_duration_s``
         greater than this becomes a window split, like a segment boundary.
         The split indices are stored and reused on every re-cut.
-      - legacy_windowing: false by default. True restores the previous
+      - legacy_defaults: false by default. ``legacy_windowing`` is the
+        same switch; either name set to true restores the previous
         window bundle when the placement keys below are blank, disables
-        both NaN rules when ``max_window_nan_ratio`` is blank, and
-        restores recon-only selection when ``val_criteria`` is blank.
+        both NaN rules when ``max_window_nan_ratio`` is blank, restores
+        recon-only selection when ``val_criteria`` is blank, and restores
+        ``auto_first`` plus a single patience when those warm-up keys
+        are blank.
       - max_gap_window_frac: waveform only. Blank is 0.25 (off when
         ``legacy_windowing`` is true). A contiguous missing run longer
         than ``max(fraction * sequence length, gap quantile)`` is a
