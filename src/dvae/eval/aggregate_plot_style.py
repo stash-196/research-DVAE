@@ -62,6 +62,15 @@ METRIC_DISPLAY_NAMES = {
     "local_drift_avg_d_norm": "Local drift mean ||d||^2",
     "local_drift_avg_cross_term": "Local drift mean d^T e",
     "local_drift_avg_delta_mse": "Local drift mean delta MSE",
+    "emd_w1_tf": "1D Wasserstein W1 (TF)",
+    "emd_w1_auto": "1D Wasserstein W1 (Auto)",
+    "emd_sliced_tf": "Sliced Wasserstein (TF)",
+    "emd_sliced_auto": "Sliced Wasserstein (Auto)",
+    "emd_exact_tf": "Exact EMD (TF)",
+    "emd_exact_auto": "Exact EMD (Auto)",
+    "lle_rosenstein_gt": "Rosenstein LLE (GT)",
+    "lle_rosenstein_auto": "Rosenstein LLE (Auto)",
+    "lle_rosenstein_diff": "Rosenstein LLE (Auto - GT)",
 }
 
 # Top-level scalar scores stamped by eval_signal / jacobian_lyapunov.
@@ -86,20 +95,46 @@ HIDDEN_JOINT_ID_METRICS = (
     "id_twonn_hidden_joint_auto",
 )
 
+# Free-run vs ground truth. Exact POT EMD is stamped when it is cheap but is
+# not a default line: it is often absent. Per-channel emd_w1_* / lle_* keys
+# are auto-discovered the same way as per-channel ID.
+FREE_RUN_DISTRIBUTION_METRICS = (
+    "emd_w1_tf",
+    "emd_w1_auto",
+    "emd_sliced_tf",
+    "emd_sliced_auto",
+    "lle_rosenstein_gt",
+    "lle_rosenstein_auto",
+    "lle_rosenstein_diff",
+)
+
+FREE_RUN_COMPARE_METRICS = (
+    "emd_w1_auto",
+    "emd_sliced_auto",
+    "lle_rosenstein_gt",
+    "lle_rosenstein_auto",
+    "lle_rosenstein_diff",
+)
+
 DEFAULT_AGGREGATE_METRICS = (
     "kld_tf",
     "kld_auto",
     "spectrum_error_gt",
     "spectrum_error_tf",
     "spectrum_error_auto",
-) + PRIMARY_DYNAMICAL_SCALAR_METRICS + HIDDEN_JOINT_ID_METRICS
+) + PRIMARY_DYNAMICAL_SCALAR_METRICS + HIDDEN_JOINT_ID_METRICS + (
+    FREE_RUN_DISTRIBUTION_METRICS
+)
 
 # Compare overlays default to the autonomous KLD/spectrum pair, the dynamical
-# scalars, and hidden-joint ID. Observation-space id_* columns stay opt-in.
+# scalars, hidden-joint ID, and the free-run distribution scores.
+# Observation-space id_* columns stay opt-in.
 DEFAULT_COMPARE_METRICS = (
     "kld_auto",
     "spectrum_error_auto",
-) + PRIMARY_DYNAMICAL_SCALAR_METRICS + HIDDEN_JOINT_ID_METRICS
+) + PRIMARY_DYNAMICAL_SCALAR_METRICS + HIDDEN_JOINT_ID_METRICS + (
+    FREE_RUN_COMPARE_METRICS
+)
 
 # Fixed heatmap color limits so colorbars are comparable across images.
 # Spectrum: Hellinger distance is in [0, 1]. KLD: shared symlog scale.

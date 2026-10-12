@@ -2045,22 +2045,29 @@ class LearningAlgorithm:
             if epoch % save_frequency == 0:
                 # Full prefix through this epoch, not only up to the best
                 # epoch, so the file matches the figure just drawn and a
-                # reload can restore every series.
-                loss_log = history_at(epoch + 1)
+                # reload can restore every series. The first write is
+                # before the figures, so a crash while plotting still
+                # leaves the weights. The second write, after the plot
+                # timer, puts this epoch's time_plot into the checkpoint.
                 history_path = os.path.join(save_dir, "loss_model.pckl")
-                save_training_history(history_path, loss_log)
                 save_file = os.path.join(save_dir, self.model_name + "_checkpoint.pt")
-                torch.save(
-                    {
-                        "epoch": cur_best_epoch,
-                        "best_val_loss": best_val_loss,
-                        "cpt_patience": cpt_patience,
-                        "model_state_dict": best_state_dict,
-                        "optim_state_dict": best_optim_dict,
-                        "loss_log": loss_log,
-                    },
-                    save_file,
-                )
+
+                def write_epoch_checkpoint():
+                    loss_log = history_at(epoch + 1)
+                    save_training_history(history_path, loss_log)
+                    torch.save(
+                        {
+                            "epoch": cur_best_epoch,
+                            "best_val_loss": best_val_loss,
+                            "cpt_patience": cpt_patience,
+                            "model_state_dict": best_state_dict,
+                            "optim_state_dict": best_optim_dict,
+                            "loss_log": loss_log,
+                        },
+                        save_file,
+                    )
+
+                write_epoch_checkpoint()
                 logger.info(
                     "Epoch: {} ===> checkpoint stored with current best epoch: {}".format(
                         epoch, cur_best_epoch
@@ -2367,9 +2374,7 @@ class LearningAlgorithm:
                     )
                 else:
                     try:
-                        train_dataloader.dataset.update_sequence_length(
-                            _viz_len, minimum_nan_ratio=0.3
-                        )
+                        train_dataloader.dataset.update_sequence_length(_viz_len)
                         _viz_ready = len(train_dataloader.dataset.data_idx) > 0
                         if not _viz_ready:
                             logger.info(
@@ -2605,6 +2610,12 @@ class LearningAlgorithm:
                 )
                 sync_cuda(self.device)
                 time_plot[epoch] = time.perf_counter() - plot_t0
+                write_epoch_checkpoint()
+                logger.info(
+                    "Epoch: {} ===> checkpoint loss_log updated with plot wall time {:.4f}".format(
+                        epoch, time_plot[epoch]
+                    )
+                )
 
             # Current weights, in addition to the best checkpoint and the
             # final best-epoch file. 0 / off leaves this path unused.

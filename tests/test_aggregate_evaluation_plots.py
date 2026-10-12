@@ -85,6 +85,16 @@ def _score_block(scale):
         "id_pr_hidden_joint_auto": 4.1 * scale,
         "id_twonn_hidden_joint_tf": 2.8 * scale,
         "id_twonn_hidden_joint_auto": 3.6 * scale,
+        "emd_w1_tf": 0.15 * scale,
+        "emd_w1_auto": 0.40 * scale,
+        "emd_sliced_tf": 0.12 * scale,
+        "emd_sliced_auto": 0.33 * scale,
+        "lle_rosenstein_gt": 0.90,
+        "lle_rosenstein_auto": 0.70 * scale,
+        "lle_rosenstein_diff": 0.70 * scale - 0.90,
+        "emd_max_samples": 512,
+        "lle_rosenstein_theiler": 40,
+        "lle_rosenstein_embed_dim": 5,
     }
 
 
@@ -165,8 +175,13 @@ def test_discover_keeps_scalar_families_and_skips_lists_and_settings():
         "local_drift_n_batches",
         "id_pr_gt_std_across_batches",
         "kld_auto",
+        "emd_max_samples",
+        "lle_rosenstein_theiler",
+        "lle_rosenstein_embed_dim",
     ):
         assert key not in found
+    assert "emd_w1_auto" in found
+    assert "lle_rosenstein_diff" in found
     assert is_auto_plot_metric_key("lyap_spectrum") is False
     assert is_auto_plot_metric_key("id_pr_gt_ch1") is True
 
@@ -252,6 +267,17 @@ def test_display_names_and_heatmap_limits():
     assert get_metric_display_name("id_pr_gt_std_across_batches") == (
         "PR intrinsic dim (GT) (std across batches)"
     )
+    assert get_metric_display_name("emd_w1_auto") == "1D Wasserstein W1 (Auto)"
+    assert get_metric_display_name("emd_w1_auto_ch1") == (
+        "1D Wasserstein W1 (Auto) (ch1)"
+    )
+    assert get_metric_display_name("emd_sliced_auto") == "Sliced Wasserstein (Auto)"
+    assert get_metric_display_name("lle_rosenstein_gt") == "Rosenstein LLE (GT)"
+    assert get_metric_display_name("lle_rosenstein_diff") == (
+        "Rosenstein LLE (Auto - GT)"
+    )
+    assert resolve_heatmap_limits("emd_w1_auto") is None
+    assert resolve_heatmap_limits("lle_rosenstein_auto") is None
 
     assert resolve_heatmap_limits("spectrum_error_auto") == (0.0, 1.0, "linear")
     assert resolve_heatmap_limits("kld_auto") == (-10.0, 1e3, "symlog")

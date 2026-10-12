@@ -125,7 +125,8 @@ class DampedSimpleHarmonicOscillator(Dataset):
         the_sequence = the_sequence.squeeze()
 
         # Special handling for damped_sho datasets
-        self.is_damped_sho = "damped_sho" in self.dataset_label.lower()
+        # Each column is its own series. The window rules use that, not the label.
+        self.is_damped_sho = True
 
         # For damped SHO, treat as multiple 1D instances
         self.N, self.n_instances = the_sequence.shape
@@ -135,7 +136,13 @@ class DampedSimpleHarmonicOscillator(Dataset):
         self.is_segmented_1d = False
         # Now the_sequence is a 2D tensor
         self.seq = the_sequence
+        from dvae.dataset.gap_grid import (
+            install_simulated_window_rules,
+            refresh_simulated_gap_stats,
+        )
 
+        install_simulated_window_rules(self, kwargs)
+        refresh_simulated_gap_stats(self)
         self.update_sequence_length(self.seq_len)
 
     def _extract_missing_mask(self, sequence):
@@ -256,7 +263,49 @@ class DampedSimpleHarmonicOscillator(Dataset):
         end_frame = min(start_frame + self.seq_len, self.N)
         return self.seq[start_frame:end_frame, instance].unsqueeze(-1)
 
-    def update_sequence_length(self, new_seq_len=None):
+    def update_sequence_length(self, new_seq_len=None, minimum_nan_ratio=None):
+        if getattr(self, "legacy_windowing", False):
+            self._legacy_update_sequence_length(new_seq_len)
+            return
+        from dvae.dataset.gap_grid import log_window_recut, recut_flat_windows
+
+        saved = self.seq
+        spans = getattr(self, "instance_gap_spans", None)
+        if not spans:
+            spans = [getattr(self, "missing_run_spans", [])] * self.n_instances
+        requested = self.N if new_seq_len is None else new_seq_len
+        all_indices = []
+        gap_splits = 0
+        try:
+            for instance, instance_spans in enumerate(spans):
+                self.seq = saved[:, instance]
+                self.missing_run_spans = instance_spans
+                starts = recut_flat_windows(self, requested, minimum_nan_ratio)
+                gap_splits += int(self.window_recut_stats.get("gap_splits", 0))
+                if starts is None:
+                    all_indices.append((instance, 0))
+                else:
+                    for start in starts:
+                        all_indices.append((instance, int(start)))
+        finally:
+            self.seq = saved
+            self.missing_run_spans = []
+        self.window_recut_stats["gap_splits"] = gap_splits
+        if self.split == "test":
+            self.data_idx = all_indices
+        else:
+            train_indices, validation_indices = self.split_dataset(
+                all_indices, self.val_indices
+            )
+            if self.split == "train":
+                self.data_idx = train_indices
+            elif self.split == "valid":
+                self.data_idx = validation_indices
+            else:
+                raise ValueError("Split not recognized.")
+        log_window_recut(self)
+
+    def _legacy_update_sequence_length(self, new_seq_len=None):
         if new_seq_len is not None:
             self.seq_len = new_seq_len
         else:

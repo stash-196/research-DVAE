@@ -60,6 +60,20 @@ _NON_SCORE_KEYS = frozenset(
         "local_drift_flip_point",
         "local_drift_auto_len",
         "local_drift_n_batches",
+        "emd_max_samples",
+        "emd_n_projections",
+        "emd_exact_max_n",
+        "emd_exact_max_dim",
+        "emd_exact_skip_reason",
+        "emd_exact_skip_reason_tf",
+        "emd_exact_skip_reason_auto",
+        "lle_rosenstein_embed_dim",
+        "lle_rosenstein_tau",
+        "lle_rosenstein_theiler",
+        "lle_rosenstein_evolution",
+        "lle_rosenstein_dt",
+        "lle_rosenstein_fit_steps",
+        "lle_rosenstein_skip_reason",
     }
 )
 # Lists in evaluation_summary.yaml. flatten_scalar_fields stores them as
@@ -75,6 +89,8 @@ _AUTO_METRIC_PREFIXES = (
     "local_drift_avg_",
     "id_pr_",
     "id_twonn_",
+    "emd_",
+    "lle_rosenstein_",
 )
 
 # Dictionary for value display names (map raw labels to nicer labels)

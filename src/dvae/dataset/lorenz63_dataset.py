@@ -5,7 +5,6 @@
 import torch
 from torch.utils.data import Dataset
 import numpy as np
-from .utils import data_utils
 import pickle
 
 # Column slices of the simulated xyz state. ``only_x`` stays 1-D (shape (T,))
@@ -73,7 +72,6 @@ class Lorenz63(Dataset):
         self.observation_process = observation_process
         self.overlap = overlap
         self.shuffle = shuffle
-        self.strict_non_overlap = bool(kwargs.get("strict_non_overlap", True))
         self.device = device
         self.with_nan = with_nan
         self.eval_mode = eval_mode
@@ -181,8 +179,13 @@ class Lorenz63(Dataset):
                 )
         # Now the_sequence is a 2D tensor
         self.seq = the_sequence
-        #
+        from dvae.dataset.gap_grid import (
+            install_simulated_window_rules,
+            refresh_simulated_gap_stats,
+        )
 
+        install_simulated_window_rules(self, kwargs)
+        refresh_simulated_gap_stats(self)
         self.update_sequence_length(self.seq_len)
 
     def _extract_missing_mask(self, sequence):
@@ -333,32 +336,29 @@ class Lorenz63(Dataset):
         end_frame = min(start_frame + self.seq_len, len(self.missing_mask))
         return self.missing_mask[start_frame:end_frame]
 
-    def update_sequence_length(self, new_seq_len=None, **kwargs):
-        # Only one index representing the start of each sequence
-        if new_seq_len is not None:
-            self.seq_len = new_seq_len
-            # Recalculate data_idx based on the new sequence length
-            num_frames = self.seq.shape[0]
-            all_indices = data_utils.find_indices(
-                num_frames,
-                self.seq_len,
-                num_frames // self.seq_len,
-                strict_non_overlap=getattr(self, "strict_non_overlap", False),
-            )
-            if self.split == "test":
-                valid_frames = all_indices
-            else:
-                train_indices, validation_indices = self.split_dataset(
-                    all_indices, self.val_indices
-                )
-                if self.split == "train":
-                    valid_frames = train_indices
-                elif self.split == "valid":
-                    valid_frames = validation_indices
-                else:
-                    raise ValueError("Split not recognized.")
+    def update_sequence_length(self, new_seq_len=None, minimum_nan_ratio=None, **kwargs):
+        # Same window rules as Xhro when legacy_defaults is false: an
+        # observed start, the relative NaN filter, and the gap split.
+        # legacy_defaults leaves the historical finder.
+        from dvae.dataset.gap_grid import log_window_recut, recut_flat_windows
 
-            self.data_idx = list(valid_frames)
-        else:
-            # Use entire sequence if seq_len is None
+        starts = recut_flat_windows(self, new_seq_len, minimum_nan_ratio)
+        if starts is None:
             self.data_idx = [0]
+            log_window_recut(self)
+            return
+        if self.split == "test":
+            valid_frames = starts
+        else:
+            train_indices, validation_indices = self.split_dataset(
+                starts, self.val_indices
+            )
+            if self.split == "train":
+                valid_frames = train_indices
+            elif self.split == "valid":
+                valid_frames = validation_indices
+            else:
+                raise ValueError("Split not recognized.")
+
+        self.data_idx = list(valid_frames)
+        log_window_recut(self)

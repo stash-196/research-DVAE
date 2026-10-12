@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from dvae.dataset.gap_grid import filled_gap_frac_cuts
 from dvae.dataset.utils.data_utils import find_indices
 from dvae.dataset.xhro_proper_dataset import XhroProper, load_proper_frame
 
@@ -112,8 +113,23 @@ def test_old_npz_recut_matches_find_indices(tmp_path, capsys):
     assert ds.start_on_observed is True
     assert ds.max_gap_window_frac == pytest.approx(0.25)
     n = len(np.asarray(ds.seq))
+    # The fixture's only missing run is samples 10:15 (length 5). A
+    # window of 16 has floor 4, and that run is its own 0.99 quantile,
+    # so it splits at 10 and 15. Strict tiles then start after the hole.
+    gap_cuts = filled_gap_frac_cuts(
+        [np.arange(10, 15)], 16, 0.25, n, gap_quantile=5.0
+    )
+    assert list(np.asarray(gap_cuts).tolist()) == [10, 15]
     assert list(ds.data_idx) == list(
-        np.asarray(find_indices(n, 16, n // 16, strict_non_overlap=True)).tolist()
+        np.asarray(
+            find_indices(
+                n,
+                16,
+                n // 16,
+                boundaries=gap_cuts,
+                strict_non_overlap=True,
+            )
+        ).tolist()
     )
     # This fixture's first window is mostly NaN. The relative default
     # (missing rate + 0.2) still drops it. The rate itself is 5/200.
@@ -586,7 +602,9 @@ def test_max_window_nan_ratio_filters_recuts_unless_overridden(tmp_path):
     text = (
         Path(__file__).resolve().parents[1] / "src/dvae/learning_algo.py"
     ).read_text()
-    assert "minimum_nan_ratio=0.3" in text
+    # The long-sequence figure uses the dataset's active NaN threshold.
+    assert "minimum_nan_ratio=0.3" not in text
+    assert "update_sequence_length(_viz_len)" in text
     assert open_windows.max_window_nan_ratio is None
     assert open_windows.max_window_nan_excess == pytest.approx(0.2)
 
@@ -655,13 +673,17 @@ def test_default_fraction_splits_and_legacy_keeps_an_explicit_key(tmp_path):
     present = np.ones(n, dtype=bool)
     present[32:40] = False
     _session(tmp_path, n, present=present, segment_id=np.zeros(n, dtype=np.int64))
-    # The only missing run is 8 samples, so the 0.99 quantile is 8 and
-    # 8 > 8 does not split. The tile at 30 still contains the hole.
-    # Dropping the quantile restores the fraction split.
+    # The only missing run is 8 samples, so the 0.99 quantile is 8.
+    # The window is 10, so a quarter is 2.5. The run is longer than that
+    # quarter and equals its own quantile, so it still splits. A strict
+    # greater-than against the quantile would have left the hole inside
+    # the tile at 30. Dropping the quantile splits on the fraction alone.
     lone = _load(tmp_path, seq_len=10, max_window_nan_ratio="off")
     assert lone.gap_split_quantile == pytest.approx(0.99)
     assert lone.dataset_gap_quantile == pytest.approx(8)
-    assert any(start < 40 and start + lone.seq_len > 32 for start in lone.data_idx)
+    assert not any(
+        start < 40 and start + lone.seq_len > 32 for start in lone.data_idx
+    )
     split = _load(
         tmp_path,
         seq_len=10,

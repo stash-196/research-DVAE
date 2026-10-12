@@ -420,10 +420,11 @@ def _seq_as_array(seq):
 def filter_window_starts(dataset, starts, minimum_nan_ratio=None):
     """Drop starts whose window NaN fraction is above the resolved threshold.
 
-    The comparison matches the historical keep test: a float16 mean of
-    ``isnan`` that is ``<=`` the threshold stays. A threshold of None, or
-    one that resolved to at least 1, keeps every start. Logs the dataset
-    missing rate, the threshold, and the number dropped.
+    The keep test is ``nan_fraction <= threshold`` in float64. A float16
+    mean maps 4001/8000 onto 0.5, so a window just above a 0.5 cap would
+    be kept. A threshold of None, or one that resolved to at least 1,
+    keeps every start. Logs the dataset missing rate, the threshold, and
+    the number dropped.
     """
     starts_arr = np.asarray([] if starts is None else list(starts), dtype=np.int64)
     threshold, label, rate = nan_window_threshold(dataset, minimum_nan_ratio)
@@ -446,8 +447,8 @@ def filter_window_starts(dataset, starts, minimum_nan_ratio=None):
         window = seq[int(idx) : int(idx) + length]
         if window.size == 0:
             continue
-        nan_ratio = np.float16(np.isnan(window)).mean()
-        if nan_ratio <= threshold:
+        nan_ratio = float(np.mean(np.isnan(window), dtype=np.float64))
+        if nan_ratio <= float(threshold):
             kept.append(int(idx))
     dropped = int(starts_arr.size - len(kept))
     stats["nan_ratio_threshold"] = float(threshold)
@@ -538,10 +539,13 @@ def gap_length_quantile(lengths, quantile) -> float | None:
 
 
 def gap_split_limit(seq_len, frac, gap_quantile):
-    """Sample threshold for one re-cut, or None when the rule is off.
+    """Logged sample threshold for one re-cut, or None when the rule is off.
 
-    The rule is off when ``frac`` is unset. Otherwise the threshold is
-    ``frac * seq_len``, raised to ``gap_quantile`` when that length is set.
+    The rule is off when ``frac`` is unset. Otherwise the logged threshold
+    is ``frac * seq_len``, raised to ``gap_quantile`` when that length is
+    set. Whether a run actually splits is :func:`run_exceeds_gap_split`:
+    a run longer than the fraction still splits when it equals the
+    quantile, so the logged number is not a strict ``>`` cutoff.
     """
     if frac is None or seq_len is None:
         return None
@@ -551,25 +555,51 @@ def gap_split_limit(seq_len, frac, gap_quantile):
     return limit
 
 
+def run_exceeds_gap_split(length, seq_len, frac, gap_quantile) -> bool:
+    """True when this missing run is cut out of windows.
+
+    The floor is ``frac * seq_len``. A run that is not strictly longer
+    than that floor stays, even if it is the quantile. A run that is
+    strictly longer than the floor splits when the quantile is unset or
+    no higher than the floor. When the quantile is above the floor, the
+    run splits if it is at least that quantile (``>=``, not ``>``).
+
+    A lone run, or several runs of the same length, is its own 0.99
+    quantile. A strict ``>`` against ``max(floor, quantile)`` would
+    never cut it. ``>=`` against that quantile keeps the floor as a
+    strict lower bound and still cuts a run that only ties the quantile
+    once the run is longer than a quarter of the window. A run that is
+    longer than the floor but shorter than a higher quantile of other
+    runs stays: the quantile is still the upper bar, it just cannot
+    hide a run that is the bar.
+    """
+    if frac is None or seq_len is None:
+        return False
+    floor = float(frac) * int(seq_len)
+    length = int(length)
+    if gap_quantile is None or float(gap_quantile) <= floor:
+        return length > floor
+    return length >= float(gap_quantile)
+
+
 def filled_gap_frac_cuts(
     spans, seq_len, frac, num_frames, gap_quantile=None
 ) -> np.ndarray:
-    """Cuts that isolate missing runs longer than the gap-split threshold.
+    """Cuts that isolate missing runs the gap-split rule removes.
 
-    ``frac`` unset returns no cuts. The comparison is strict, in samples,
-    and uses the sequence length of this re-cut. The threshold is
-    ``max(frac * seq_len, gap_quantile)`` when the quantile length is set.
-    A qualifying run is cut at its first row and at the first row after it,
-    same as ``max_fill_gap_sec``.
+    ``frac`` unset returns no cuts. See :func:`run_exceeds_gap_split`
+    for the comparison. A qualifying run is cut at its first row and at
+    the first row after it, same as ``max_fill_gap_sec``.
     """
-    limit = gap_split_limit(seq_len, frac, gap_quantile)
-    if limit is None:
+    if gap_split_limit(seq_len, frac, gap_quantile) is None:
         return np.asarray([], dtype=np.int64)
     n = int(num_frames)
     cuts = []
     for span in spans or []:
         rows = np.asarray(span, dtype=np.int64).ravel()
-        if rows.size == 0 or int(rows.size) <= limit:
+        if rows.size == 0 or not run_exceeds_gap_split(
+            int(rows.size), seq_len, frac, gap_quantile
+        ):
             continue
         start = int(rows.min())
         after = int(rows.max()) + 1
@@ -689,6 +719,167 @@ def observed_row_mask(seq, observed_per_row):
         return np.isfinite(np.reshape(arr, -1))
     finite = np.isfinite(np.reshape(arr, (arr.shape[0], -1)))
     return finite.any(axis=1)
+
+
+def missing_run_spans(mask) -> list:
+    """Index arrays of contiguous missing rows. Empty when nothing is missing."""
+    flags = np.asarray(mask, dtype=bool).reshape(-1)
+    if flags.size == 0 or not flags.any():
+        return []
+    padded = np.concatenate([[False], flags, [False]])
+    edges = np.diff(padded.astype(np.int8))
+    starts = np.flatnonzero(edges == 1)
+    ends = np.flatnonzero(edges == -1)
+    return [np.arange(int(start), int(end)) for start, end in zip(starts, ends)]
+
+
+def install_simulated_window_rules(dataset, kwargs) -> None:
+    """Give a Lorenz or SHO series the same window rules as Xhro.
+
+    Blank keys take the Xhro defaults. ``legacy_defaults`` or
+    ``legacy_windowing`` true restores historical placement: starts may
+    land on a missing row, ``find_indices`` is not strict, and the
+    fraction split and the NaN filter stay off unless a key is set.
+    Call this after ``dataset.seq`` exists, then
+    :func:`refresh_simulated_gap_stats`.
+    """
+    from dvae.dataset.xhro_proper_dataset import resolve_windowing
+
+    windowing = resolve_windowing(
+        legacy_windowing=kwargs.get("legacy_windowing", kwargs.get("legacy_defaults")),
+        legacy_defaults=kwargs.get("legacy_defaults"),
+        start_on_observed=kwargs.get("start_on_observed"),
+        strict_non_overlap=kwargs.get("strict_non_overlap"),
+        max_window_nan_ratio=kwargs.get("max_window_nan_ratio"),
+        max_window_nan_excess=kwargs.get("max_window_nan_excess"),
+        max_gap_window_frac=kwargs.get("max_gap_window_frac"),
+        gap_split_quantile=kwargs.get("gap_split_quantile"),
+    )
+    if kwargs.get("max_window_nan_ratio_off"):
+        windowing["max_window_nan_ratio_off"] = True
+        windowing["max_window_nan_ratio"] = None
+    for key, value in windowing.items():
+        setattr(dataset, key, value)
+
+
+def refresh_simulated_gap_stats(dataset) -> None:
+    """Missing rate, run spans, and the gap quantile of the loaded series.
+
+    A damped SHO stores one span list per instance. Every other series
+    stores one list of row spans. The quantile pools every run.
+    """
+    arr = _seq_as_array(dataset.seq)
+    dataset.dataset_missing_rate = float(dataset_missing_rate(arr))
+    if getattr(dataset, "is_damped_sho", False) and getattr(arr, "ndim", 1) == 2:
+        pieces = [arr[:, index] for index in range(arr.shape[1])]
+    else:
+        pieces = [arr]
+    per_spans = []
+    length_parts = []
+    for piece in pieces:
+        mask = missing_row_mask(piece)
+        per_spans.append(missing_run_spans(mask))
+        length_parts.append(contiguous_run_lengths(mask))
+    lengths = (
+        np.concatenate(length_parts)
+        if length_parts
+        else np.asarray([], dtype=np.int64)
+    )
+    quantile = getattr(dataset, "gap_split_quantile", None)
+    if quantile is None:
+        dataset.dataset_gap_quantile = None
+    else:
+        dataset.dataset_gap_quantile = gap_length_quantile(lengths, quantile)
+    if len(per_spans) == 1:
+        dataset.missing_run_spans = per_spans[0]
+        dataset.instance_gap_spans = None
+    else:
+        dataset.missing_run_spans = []
+        dataset.instance_gap_spans = per_spans
+
+
+def recut_flat_windows(dataset, new_seq_len, minimum_nan_ratio=None):
+    """Window starts for the series currently on ``dataset.seq``.
+
+    Same placement as ``Xhro.update_sequence_length``: gap cuts, an
+    observed start, then the relative NaN filter. Returns the starts
+    after that filter. ``None`` means ``seq_len`` was unset and the
+    caller keeps one placeholder window. Does not assign ``data_idx``.
+    """
+    from dvae.dataset.utils import data_utils
+
+    begin_window_recut(dataset)
+    seq = _seq_as_array(dataset.seq)
+    num_frames = int(seq.shape[0])
+    if new_seq_len is None:
+        log_gap_split_recut(dataset, None, num_frames)
+        log_current_nan_window_rule(dataset, 0, minimum_nan_ratio)
+        stats = _window_recut_stats(dataset)
+        stats["windows_kept"] = 1
+        return None
+    requested = int(new_seq_len)
+    spans = getattr(dataset, "missing_run_spans", None)
+    seq_len, boundaries = resolve_recut_length(
+        num_frames,
+        requested,
+        getattr(dataset, "split_boundaries", None),
+        spans,
+        getattr(dataset, "max_gap_window_frac", None),
+        gap_quantile=getattr(dataset, "dataset_gap_quantile", None),
+    )
+    if boundaries is not None and seq_len < requested:
+        print(
+            f"[{type(dataset).__name__}] seq_len {requested} exceeds the "
+            f"longest unbroken span {seq_len}; using {seq_len}."
+        )
+    dataset.seq_len = seq_len
+    log_gap_split_recut(dataset, dataset.seq_len, num_frames)
+    strict = bool(getattr(dataset, "strict_non_overlap", False))
+    shift_stats = {}
+    observed = None
+    if strict and getattr(dataset, "start_on_observed", False):
+        observed = observed_row_mask(
+            dataset.seq, getattr(dataset, "observed_per_row", None)
+        )
+    count = num_frames // dataset.seq_len if dataset.seq_len else 0
+    all_indices = data_utils.find_indices(
+        num_frames,
+        dataset.seq_len,
+        count,
+        boundaries=boundaries,
+        strict_non_overlap=strict,
+        observed=observed,
+        shift_stats=shift_stats if observed is not None else None,
+    )
+    if observed is not None:
+        # Strict mode already shifted inside find_indices. Shift again
+        # without adding to the stats, matching Xhro.
+        all_indices = shift_starts_onto_observed(
+            all_indices,
+            observed,
+            dataset.seq_len,
+            boundaries,
+            num_frames,
+        )
+    elif getattr(dataset, "start_on_observed", False):
+        observed = observed_row_mask(
+            dataset.seq, getattr(dataset, "observed_per_row", None)
+        )
+        all_indices = shift_starts_onto_observed(
+            all_indices,
+            observed,
+            dataset.seq_len,
+            boundaries,
+            num_frames,
+            shift_stats=shift_stats,
+        )
+    else:
+        n = 0 if all_indices is None else int(np.asarray(all_indices).size)
+        shift_stats["dropped_unfit"] = int(shift_stats.get("dropped_unfit", 0))
+        shift_stats["shift_sum"] = float(shift_stats.get("shift_sum", 0.0))
+        shift_stats["shift_count"] = int(shift_stats.get("shift_count", 0)) + n
+    note_shift_stats(dataset, shift_stats)
+    return filter_window_starts(dataset, all_indices, minimum_nan_ratio)
 
 
 def _piece_containing(start: int, cuts, num_frames: int):
