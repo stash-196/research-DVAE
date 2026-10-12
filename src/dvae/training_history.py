@@ -66,6 +66,8 @@ import pickle
 
 import numpy as np
 
+from dvae.regularizers import OPTIONAL_HISTORY_KEYS
+
 # Appendix B series. Stored when the fixed windows were scored.
 DRIFT_SERIES_KEYS = (
     "val_base_error",
@@ -305,6 +307,12 @@ def build_training_history(
     history["spectrum_monitored"] = bool(spectrum_monitored)
     history["drift_monitored"] = bool(drift_monitored)
     for key in DRIFT_SERIES_KEYS:
+        if key in series:
+            history[key] = _slice_1d(series[key], end)
+    # Subband and decorr are optional. Callers that never pass them
+    # (older tests, older checkpoints) keep working. A training run
+    # passes zeros when the term is off.
+    for key in OPTIONAL_HISTORY_KEYS:
         if key in series:
             history[key] = _slice_1d(series[key], end)
     if drift_horizon is not None:

@@ -156,6 +156,12 @@ def _load(tmp_path, label, process, **overrides):
         shuffle=False,
     )
     params.update(overrides)
+    base = _base_name(process)
+    if (
+        "coarse_include_hr" not in overrides
+        and "hr_mean_bpm" in COARSE_OBS_COLUMNS.get(base, [])
+    ):
+        params["coarse_include_hr"] = True
     return XhroProper(**params)
 
 
@@ -259,6 +265,8 @@ def test_rel_alpha_mask_clears_eeg_and_ignores_epoch_eeg_good():
         ("coarse_hr_acc", 2),
         ("coarse_hr_acc_tod", 4),
         ("coarse_eeg", 4),
+        ("coarse_eeg_acc", 5),
+        ("coarse_eeg_acc_tod", 7),
         ("coarse_eeg_hr", 5),
         ("coarse_eeg_hr_acc", 6),
         ("coarse_eeg_hr_acc_tod", 8),
@@ -359,6 +367,21 @@ def test_transforms_clip_and_zscore_use_nontest_only(tmp_path, _torch_required):
     assert recon_abs < 4.0
     # tod is sorted back to 0,1,2,... and not z-scored.
     assert _seq(train)[:5, tod_i].tolist() == pytest.approx([0, 1, 2, 3, 4])
+
+
+def test_hr_modes_require_opt_in_and_warn_when_enabled(tmp_path, _torch_required):
+    epochs, hrv = make_frames(40, "subj_a", seed=7)
+    write_session(tmp_path, "subj_a", epochs, hrv)
+    with pytest.raises(ValueError, match="hr_mean_bpm"):
+        _load(tmp_path, "subj_a", "coarse_eeg_hr", coarse_include_hr=False)
+    with pytest.raises(ValueError, match="hr_mean_bpm"):
+        _load(tmp_path, "subj_a", "coarse_full", coarse_include_hr=False)
+    with pytest.warns(UserWarning, match="hr_mean_bpm"):
+        opted = _load(tmp_path, "subj_a", "coarse_full", coarse_include_hr=True)
+    assert "hr_mean_bpm" in opted.feature_columns
+    ecg_free = _load(tmp_path, "subj_a", "coarse_eeg_acc_tod")
+    assert ecg_free.feature_columns == COARSE_OBS_COLUMNS["coarse_eeg_acc_tod"]
+    assert "hr_mean_bpm" not in ecg_free.feature_columns
 
 
 def test_std_guard_sets_constant_column_to_nan(tmp_path, _torch_required):
@@ -971,6 +994,7 @@ def test_coarse_config_keys_reach_dataloader(tmp_path, _torch_required):
         "coarse_eeg_artifact_mask",
         "coarse_eeg_artifact_k",
         "coarse_eeg_max_rel_delta",
+        "coarse_include_hr",
     ):
         assert key in text
 
@@ -982,8 +1006,9 @@ def test_config_generator_coarse_example_is_separate():
     spec.loader.exec_module(module)
     example = module.xhro_proper_coarse_example()
     assert example["dataset_label"] == ["xhro_04_XH058,xhro_01_XH032"]
-    assert example["observation_process"] == ["coarse_eeg_hr_acc_tod"]
-    assert example["x_dim"] == [8]
+    assert example["observation_process"] == ["coarse_eeg_acc_tod"]
+    assert example["x_dim"] == [7]
+    assert "hr_mean_bpm" not in COARSE_OBS_COLUMNS["coarse_eeg_acc_tod"]
     assert example["coarse_eeg_artifact_mask"] == ["none"]
     assert example["coarse_test_split"] == ["usable_tail"]
 

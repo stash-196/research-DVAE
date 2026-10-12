@@ -25,6 +25,7 @@ import torch
 from collections import OrderedDict
 import math
 from dvae.model.base_rnn import BaseRNN
+from dvae.model.hidden_block import apply_block_alphas
 
 
 def build_MT_RNN(cfg, device="cpu"):
@@ -136,21 +137,20 @@ class MT_RNN(BaseRNN):
         if self.dim_rnn > len(alphas):
             repeats = self.dim_rnn // len(alphas)
             remainder = self.dim_rnn % len(alphas)
-            return torch.cat([alphas] * repeats + [alphas[:remainder]])
+            per_unit = torch.cat([alphas] * repeats + [alphas[:remainder]])
         else:
-            return alphas[: self.dim_rnn]
+            per_unit = alphas[: self.dim_rnn]
+        block = getattr(self, "hidden_block", None)
+        if block is None:
+            return per_unit
+        return apply_block_alphas(per_unit, block)
 
     def recurrence(self, feature_xt, h_t, c_t=None):
-        if self.type_rnn == "LSTM":
-            _, (h_tp1, c_tp1) = self.rnn(feature_xt, (h_t, c_t))
-        elif self.type_rnn in ["RNN", "PLRNN", "shPLRNN"]:
-            _, h_tp1 = self.rnn(feature_xt, h_t)
-            c_tp1 = None
-        else:
-            raise ValueError(
-                f"Unsupported RNN type for MT_RNN recurrence: {self.type_rnn}"
-            )
-        h_tp1 = (1 - self.alphas_per_unit()) * h_t + self.alphas_per_unit() * h_tp1
+        # BaseRNN applies the block mask on RNN/LSTM. PLRNN and shPLRNN
+        # apply it inside the cell. The mix below is unchanged.
+        h_tp1, c_tp1 = super().recurrence(feature_xt, h_t, c_t)
+        alphas = self.alphas_per_unit()
+        h_tp1 = (1 - alphas) * h_t + alphas * h_tp1
         return h_tp1, c_tp1
 
 

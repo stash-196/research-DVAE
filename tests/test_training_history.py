@@ -105,6 +105,35 @@ def _history(n=4):
     )
 
 
+def test_subband_and_decorr_series_are_stored_only_when_passed():
+    history = _history()
+    assert "train_subband" not in history
+    assert "decorr_loss_weight_values" not in history
+    series = _series()
+    series["train_subband"] = np.ones(4)
+    series["val_subband"] = np.full(4, 2.0)
+    series["subband_loss_weight_values"] = np.array([0.0, 0.0, 0.5, 1.0])
+    series["train_decorr"] = np.zeros(4)
+    series["val_decorr"] = np.zeros(4)
+    series["decorr_loss_weight_values"] = np.zeros(4)
+    stored = build_training_history(
+        end=4,
+        model_name="RNN",
+        tag="unit",
+        auto_sampling_method="ptf",
+        noise_sampling_method="none",
+        delta_threshold=1e-4,
+        val_criteria=("recon",),
+        val_reference={"recon": 0.5},
+        series=series,
+        dataset_stats=_stats(),
+    )
+    np.testing.assert_allclose(stored["train_subband"], np.ones(4))
+    np.testing.assert_allclose(
+        stored["subband_loss_weight_values"], [0.0, 0.0, 0.5, 1.0]
+    )
+
+
 def test_new_history_stores_the_series_that_were_missing():
     history = _history()
     for key in NOT_PERSISTED_BEFORE:

@@ -72,6 +72,11 @@ from dvae.epoch_log import (
     make_bump_row,
 )
 from dvae.wall_clock import sync_cuda
+from dvae.regularizers import (
+    effective_weight,
+    parse_regularizer_settings,
+    regularizer_losses,
+)
 from dvae.warmup_curriculum import (
     WarmupCurriculum,
     format_patience,
@@ -978,6 +983,16 @@ class LearningAlgorithm:
         time_rosenstein = series_or_new(loss_log, "time_rosenstein", epochs)
         time_plot = series_or_new(loss_log, "time_plot", epochs)
         time_eval = series_or_new(loss_log, "time_eval", epochs)
+        train_subband = series_or_new(loss_log, "train_subband", epochs)
+        val_subband = series_or_new(loss_log, "val_subband", epochs)
+        subband_loss_weight_values = series_or_new(
+            loss_log, "subband_loss_weight_values", epochs
+        )
+        train_decorr = series_or_new(loss_log, "train_decorr", epochs)
+        val_decorr = series_or_new(loss_log, "val_decorr", epochs)
+        decorr_loss_weight_values = series_or_new(
+            loss_log, "decorr_loss_weight_values", epochs
+        )
         bump_events = []
         if isinstance(loss_log, dict) and isinstance(loss_log.get("bump_events"), list):
             bump_events = [dict(row) for row in loss_log["bump_events"]]
@@ -1135,6 +1150,11 @@ class LearningAlgorithm:
             )
         )
         auto_kl_done = 0
+        self._regularizers = parse_regularizer_settings(
+            self.cfg,
+            y_dim=int(self.model.y_dim),
+            hidden_block=getattr(self.model, "hidden_block", None),
+        )
         dataset_stats = snapshot_window_stats(train_dataloader.dataset)
 
         def history_at(end):
@@ -1196,6 +1216,12 @@ class LearningAlgorithm:
                     "time_rosenstein": time_rosenstein,
                     "time_plot": time_plot,
                     "time_eval": time_eval,
+                    "train_subband": train_subband,
+                    "val_subband": val_subband,
+                    "subband_loss_weight_values": subband_loss_weight_values,
+                    "train_decorr": train_decorr,
+                    "val_decorr": val_decorr,
+                    "decorr_loss_weight_values": decorr_loss_weight_values,
                 },
                 dataset_stats=dataset_stats,
                 sigmas_history=(
@@ -1238,6 +1264,24 @@ class LearningAlgorithm:
         stopped_early = False
         for epoch in range(start_epoch + 1, epochs):
             ran_epoch = True
+            # The bump that ends this epoch increments auto_kl_done afterwards,
+            # so the loss of the trigger epoch still uses the previous scale.
+            sub_w = effective_weight(
+                self._regularizers.subband_weight,
+                self._regularizers.subband_warmup,
+                auto_kl_done,
+                warmup.autonomous_steps,
+                warmup.kl_steps,
+            )
+            dec_w = effective_weight(
+                self._regularizers.decorr_weight,
+                self._regularizers.decorr_warmup,
+                auto_kl_done,
+                warmup.autonomous_steps,
+                warmup.kl_steps,
+            )
+            subband_loss_weight_values[epoch] = sub_w
+            decorr_loss_weight_values[epoch] = dec_w
 
             start_time = datetime.datetime.now()
 
@@ -1507,8 +1551,12 @@ class LearningAlgorithm:
                     f"[Learning Algo][epoch{epoch}] loss_recon.device: {loss_recon.device}, loss_kl.device: {loss_kl.device}"
                 )
                 loss_tot_avg = loss_recon_avg + loss_kl_avg
+                sub_loss, dec_loss = regularizer_losses(
+                    self.model, batch_data, self._regularizers
+                )
+                loss_backward = loss_tot_avg + sub_w * sub_loss + dec_w * dec_loss
                 optimizer.zero_grad()
-                loss_tot_avg.backward()
+                loss_backward.backward()
 
                 # temporarily store detatched parameters
                 current_named_params_grad = [
@@ -1562,6 +1610,8 @@ class LearningAlgorithm:
                 train_loss[epoch] += loss_tot_avg.item() * bs
                 train_recon[epoch] += loss_recon_avg.item() * bs
                 train_kl[epoch] += loss_kl_avg.item() * bs
+                train_subband[epoch] += float(sub_loss.detach()) * bs
+                train_decorr[epoch] += float(dec_loss.detach()) * bs
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
                     sigmas_history[:, epoch] = self.model.sigmas.detach().cpu().numpy()
                 update_A_sigmas_history(a_sigmas_history, self.model, epoch)
@@ -1769,10 +1819,15 @@ class LearningAlgorithm:
                     f"[Learning Algo][epoch{epoch}] loss_recon.device: {loss_recon.device}, loss_kl.device: {loss_kl.device}"
                 )
                 loss_tot_avg = loss_recon_avg + loss_kl_avg
+                sub_loss, dec_loss = regularizer_losses(
+                    self.model, batch_data, self._regularizers
+                )
 
                 val_loss[epoch] += loss_tot_avg.item() * bs
                 val_recon[epoch] += loss_recon_avg.item() * bs
                 val_kl[epoch] += loss_kl_avg.item() * bs
+                val_subband[epoch] += float(sub_loss.detach()) * bs
+                val_decorr[epoch] += float(dec_loss.detach()) * bs
 
             sync_cuda(self.device)
             time_val[epoch] = time.perf_counter() - val_t0
@@ -1784,6 +1839,10 @@ class LearningAlgorithm:
             val_loss[epoch] = val_loss[epoch] / val_num
             val_recon[epoch] = val_recon[epoch] / val_num
             val_kl[epoch] = val_kl[epoch] / val_num
+            train_subband[epoch] = train_subband[epoch] / train_num
+            train_decorr[epoch] = train_decorr[epoch] / train_num
+            val_subband[epoch] = val_subband[epoch] / val_num
+            val_decorr[epoch] = val_decorr[epoch] / val_num
 
             # Training time
             end_time = datetime.datetime.now()
@@ -1801,6 +1860,24 @@ class LearningAlgorithm:
                     val_kl[epoch],
                 )
             )
+            if self._regularizers.subband_on:
+                logger.info(
+                    "Train => subband {:.4f} weight {:.4f} Val => subband {:.4f} weight {:.4f}".format(
+                        train_subband[epoch],
+                        sub_w,
+                        val_subband[epoch],
+                        sub_w,
+                    )
+                )
+            if self._regularizers.decorr_on:
+                logger.info(
+                    "Train => decorr {:.4f} weight {:.4f} Val => decorr {:.4f} weight {:.4f}".format(
+                        train_decorr[epoch],
+                        dec_w,
+                        val_decorr[epoch],
+                        dec_w,
+                    )
+                )
 
             selection_value, selection_raw, selection_norm = self._epoch_selection_value(
                 epoch, val_loss, val_spectrum, val_criteria_score, drift_arrays
