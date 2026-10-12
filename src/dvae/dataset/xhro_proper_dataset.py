@@ -43,7 +43,9 @@ its local ``RandomState(1234567890)``. ``[DataFrame] max_window_nan_ratio``
 ``[DataFrame] legacy_windowing`` (default false) restores the previous
 bundle when those four keys are blank: starts may land on a missing
 sample, the historical picker is used, and neither the fraction split nor
-the NaN filter is applied. An explicit value for one key still wins.
+the NaN filter is applied. The same switch restores recon-only model
+selection when ``val_criteria`` is blank. An explicit value for one key
+still wins.
 ``[DataFrame] block_mask_file`` (unset) is an npz of block flags applied
 before the time crop. ``block_mask_mode`` defaults to ``not_good``.
 ``filled_nan_log_sec`` is the re-cut log cutoff when ``max_fill_gap_sec``
@@ -1753,7 +1755,8 @@ class XhroProper(Xhro):
         greater than this becomes a window split, like a segment boundary.
         The split indices are stored and reused on every re-cut.
       - legacy_windowing: false by default. True restores the previous
-        window bundle when the four keys below are blank.
+        window bundle when the four keys below are blank, and restores
+        recon-only selection when ``val_criteria`` is blank.
       - max_gap_window_frac: waveform only. Blank is 0.25 (off when
         ``legacy_windowing`` is true). A filled gap with more samples
         than this fraction of the current sequence length is a split
