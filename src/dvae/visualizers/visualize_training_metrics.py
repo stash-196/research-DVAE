@@ -1414,8 +1414,12 @@ def build_drift_timestep_figure(terms, flip=None, normalized=False):
                     label="window" if index == 0 else "_nolegend_",
                     zorder=1,
                 )
-            with np.errstate(all="ignore"):
-                mean = np.nanmean(values, axis=0)
+            finite = np.isfinite(values)
+            count = finite.sum(axis=0)
+            summed = np.sum(np.where(finite, values, 0.0), axis=0)
+            mean = np.full(count.shape, np.nan, dtype=float)
+            ok = count > 0
+            mean[ok] = summed[ok] / count[ok]
             ax.plot(
                 time,
                 mean,
