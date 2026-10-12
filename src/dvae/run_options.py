@@ -4,11 +4,12 @@
 pair: each term is divided by its first validation epoch and the sum is
 the selection score. The validation figure still plots raw recon, the
 spectrum error, and the Appendix B terms every epoch; the list only
-chooses the checkpoint. ``base_error``, ``auto_drift``,
-``error_drift_cross``, and ``error_drift_total`` are optional extra
-selection terms with that same first-epoch normalisation. The older
-names ``drift``, ``cross``, and ``auto_total`` are accepted aliases
-and are stored under the new names.
+chooses the checkpoint. Every stored per-epoch drift and Lyapunov
+series is selectable. ``error_drift_cross`` and its variance-normalised
+copy enter the score as ``|cross|``. ``ftle`` and ``rosenstein_lle``
+enter as ``|estimate - GT LLE|``. The plotted cross stays signed. The
+older names ``drift``, ``cross``, and ``auto_total`` are accepted
+aliases and are stored under the new names.
 ``[DataFrame] legacy_defaults`` true, or the same switch under its old
 name ``legacy_windowing``, keeps reconstruction-only selection when
 ``val_criteria`` is blank, and then skips the spectrum windows unless
@@ -25,13 +26,6 @@ import re
 
 _OFF = {"", "none", "null", "off", "false", "no"}
 _VAL_UNSET = {"", "none", "null"}
-# Canonical Appendix B names. History, plots, and logs use these only.
-_DRIFT_CRITERIA = (
-    "base_error",
-    "auto_drift",
-    "error_drift_cross",
-    "error_drift_total",
-)
 # Older configs still select the same term. The alias is rewritten
 # before the name is stored or plotted.
 CRITERION_ALIASES = {
@@ -39,7 +33,39 @@ CRITERION_ALIASES = {
     "cross": "error_drift_cross",
     "auto_total": "error_drift_total",
 }
-_VAL_CRITERIA = ("recon", "spectrum") + _DRIFT_CRITERIA
+# Every per-epoch series the fixed windows produce can be a checkpoint
+# criterion. The default pair is still recon and spectrum.
+SELECTABLE_VAL_CRITERIA = (
+    "recon",
+    "spectrum",
+    "base_error",
+    "auto_drift",
+    "error_drift_cross",
+    "error_drift_total",
+    "recon_k",
+    "base_error_varnorm",
+    "auto_drift_varnorm",
+    "error_drift_cross_varnorm",
+    "error_drift_total_varnorm",
+    "auto_drift_k1",
+    "auto_drift_k5",
+    "auto_drift_k",
+    "ftle",
+    "rosenstein_lle",
+)
+# These need the fixed windows. Legacy selection builds the windows
+# when any of them is listed.
+_WINDOW_CRITERIA = tuple(
+    name for name in SELECTABLE_VAL_CRITERIA if name not in ("recon", "spectrum")
+)
+# Selection uses the absolute cross. The stored and plotted series stay signed.
+_ABS_SELECTION = frozenset({
+    "error_drift_cross",
+    "error_drift_cross_varnorm",
+})
+# Selection uses the distance to the ground-truth Rosenstein exponent.
+_LYAPUNOV_SELECTION = frozenset({"ftle", "rosenstein_lle"})
+_VAL_CRITERIA = SELECTABLE_VAL_CRITERIA
 DEFAULT_VAL_CRITERIA = ("recon", "spectrum")
 DEFAULT_VAL_DRIFT_HORIZON = 60
 DEFAULT_TF_MIN_OBSERVED = 0.95
@@ -50,6 +76,45 @@ def canonical_criterion_name(name) -> str:
     """Map a val_criteria token onto the name used in history and plots."""
     key = _text(name).lower()
     return CRITERION_ALIASES.get(key, key)
+
+
+def criterion_series_key(name) -> str:
+    """History suffix for a criterion. ``rosenstein_lle`` reads ``lle_mean``."""
+    key = canonical_criterion_name(name)
+    if key == "rosenstein_lle":
+        return "lle_mean"
+    return key
+
+
+def selection_criterion_value(name, raw, gt_lle=None) -> float:
+    """Value compared at this epoch. Lower is better.
+
+    ``error_drift_cross`` and ``error_drift_cross_varnorm`` use
+    ``|cross|``. ``ftle`` and ``rosenstein_lle`` use
+    ``|estimate - GT LLE|``. Every other name uses the stored series
+    as it is. ``recon`` stays the raw validation loss.
+    """
+    key = canonical_criterion_name(name)
+    value = float(raw)
+    if key in _ABS_SELECTION:
+        if not math.isfinite(value):
+            raise ValueError(
+                f"val criterion {key!r} is |cross| and the cross term is "
+                f"not finite, got {raw!r}."
+            )
+        return abs(value)
+    if key in _LYAPUNOV_SELECTION:
+        if gt_lle is None or not math.isfinite(float(gt_lle)):
+            raise ValueError(
+                f"val criterion {key!r} is |estimate - GT LLE| and the "
+                "ground-truth exponent is not finite."
+            )
+        if not math.isfinite(value):
+            raise ValueError(
+                f"val criterion {key!r} estimate is not finite, got {raw!r}."
+            )
+        return abs(value - float(gt_lle))
+    return value
 
 
 def _text(raw) -> str:
@@ -89,15 +154,17 @@ def parse_val_criteria(raw, legacy_windowing=False) -> tuple[str, ...]:
     explicit list is kept as written.
 
     ``recon`` is the reconstruction validation loss. ``spectrum`` is the
-    free-run spectral error. ``base_error``, ``auto_drift``,
-    ``error_drift_cross``, and ``error_drift_total`` are the Appendix B
-    terms on the same windows. ``drift``, ``cross``, and ``auto_total``
-    are aliases of the last three and are returned under the new names.
-    One entry is used raw, so ``recon`` keeps the historical ``val_loss``
-    comparison and a single drift term stays raw. Two entries are added
-    after each is divided by its own value at the first validation
-    epoch. That sum is lower-is-better. Each first-epoch value must be
-    finite and non-zero.
+    free-run spectral error. The remaining names are the per-epoch series
+    from the fixed windows: the four Appendix B terms, ``recon_k``, each
+    ``*_varnorm`` copy, ``auto_drift`` at k = 1, 5, and K, ``ftle``, and
+    ``rosenstein_lle``. ``drift``, ``cross``, and ``auto_total`` are
+    aliases of ``auto_drift``, ``error_drift_cross``, and
+    ``error_drift_total``. One entry is used raw, so ``recon`` keeps the
+    historical ``val_loss`` comparison. A single cross term is ``|cross|``
+    and a single Lyapunov term is ``|estimate - GT LLE|``. Two or more
+    entries are added after each is divided by its own value at the first
+    validation epoch. That sum is lower-is-better. Each first-epoch value
+    must be finite and non-zero.
     """
     text = _text(raw)
     lowered = text.lower()
@@ -116,9 +183,9 @@ def parse_val_criteria(raw, legacy_windowing=False) -> tuple[str, ...]:
     unknown = [part for part in parts if part not in _VAL_CRITERIA]
     if unknown:
         raise ValueError(
-            "val_criteria entries must be recon, spectrum, base_error, "
-            "auto_drift, error_drift_cross, and/or error_drift_total "
-            "(drift, cross, and auto_total are aliases), "
+            "val_criteria entries must be "
+            + ", ".join(SELECTABLE_VAL_CRITERIA)
+            + " (drift, cross, and auto_total are aliases), "
             f"got {raw!r}."
         )
     if len(parts) != len(set(parts)):
@@ -173,14 +240,13 @@ def normalised_criterion_sum(components: dict, reference: dict) -> float:
 def spectrum_monitoring_enabled(criteria, legacy: bool = False) -> bool:
     """Score the fixed spectrum windows even when selection ignores them.
 
-    Drift uses those same windows. The legacy switch is the exception:
-    with it on, the windows are built only when ``spectrum`` or one of
-    ``base_error``, ``auto_drift``, ``error_drift_cross``,
-    ``error_drift_total`` is selected. The aliases ``drift``, ``cross``,
-    and ``auto_total`` count as those terms.
+    Drift and Lyapunov use those same windows. The legacy switch is the
+    exception: with it on, the windows are built only when ``spectrum``
+    or any other selectable series is listed. The aliases ``drift``,
+    ``cross``, and ``auto_total`` count as those terms.
     """
     names = tuple(canonical_criterion_name(name) for name in criteria)
-    if "spectrum" in names or any(name in names for name in _DRIFT_CRITERIA):
+    if "spectrum" in names or any(name in names for name in _WINDOW_CRITERIA):
         return True
     return not bool(legacy)
 

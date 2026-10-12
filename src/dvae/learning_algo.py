@@ -70,7 +70,9 @@ from dvae.run_options import (
     DEFAULT_TF_MAX_GAP_FRAC,
     DEFAULT_TF_MIN_OBSERVED,
     canonical_criterion_name,
+    criterion_series_key,
     normalised_criterion_sum,
+    selection_criterion_value,
     parse_checkpoint_every_n_epochs,
     parse_optional_int,
     parse_unit_interval,
@@ -331,7 +333,7 @@ class LearningAlgorithm:
                     device=self.device,
                     ftle_k_start=self._ftle_fit[0],
                     ftle_k_end=self._ftle_fit[1],
-                    rosenstein=self._val_rosenstein,
+                    rosenstein=self._score_rosenstein,
                     embed_dim=self._embed_dim,
                     embed_tau=self._embed_tau,
                 )
@@ -340,11 +342,21 @@ class LearningAlgorithm:
                 self.model.train()
 
     def _raw_criterion(self, name, epoch, val_loss, val_spectrum, drift_arrays):
+        """Selection value for one criterion. Lower is better.
+
+        ``recon`` is ``val_loss``. ``spectrum`` is the free-run spectral
+        error. A cross term is ``|cross|``. ``ftle`` and ``rosenstein_lle``
+        are ``|estimate - GT LLE|``. The stored series stay signed.
+        """
         if name == "recon":
-            return float(val_loss[epoch])
-        if name == "spectrum":
-            return float(val_spectrum[epoch])
-        return float(drift_arrays["val_" + name][epoch])
+            raw = float(val_loss[epoch])
+        elif name == "spectrum":
+            raw = float(val_spectrum[epoch])
+        else:
+            raw = float(
+                drift_arrays["val_" + criterion_series_key(name)][epoch]
+            )
+        return selection_criterion_value(name, raw, gt_lle=self._lle_gt)
 
     def _epoch_selection_value(
         self, epoch, val_loss, val_spectrum, val_criteria_score, drift_arrays
@@ -352,11 +364,13 @@ class LearningAlgorithm:
         """Score used for best-model selection and early stopping.
 
         ``recon`` alone returns ``val_loss[epoch]``. Any other single
-        criterion returns that raw series. Several criteria return the
-        sum of each value divided by its value at the first validation
-        epoch. Every selected component is logged on that multi-criterion
-        path. Spectrum and the Appendix B terms are filled whenever the
-        fixed windows exist, including when they are not selected.
+        criterion returns its selection value: the stored series, except
+        ``|cross|`` for a cross term and ``|estimate - GT LLE|`` for
+        ``ftle`` and ``rosenstein_lle``. Several criteria return the sum
+        of each of those values divided by its value at the first
+        validation epoch. Spectrum and the Appendix B terms are filled
+        whenever the fixed windows exist, including when they are not
+        selected.
         """
         if self._spectrum_windows is not None:
             scored = self._score_fixed_validation()
@@ -409,7 +423,7 @@ class LearningAlgorithm:
                     self._ftle_fit[0], self._ftle_fit[1], scored["ftle"]
                 )
             )
-            if self._val_rosenstein:
+            if self._score_rosenstein:
                 gt = self._lle_gt
                 gt_text = "nan" if gt is None or not np.isfinite(gt) else "{:.6f}".format(gt)
                 self.logger.info(
@@ -619,6 +633,8 @@ class LearningAlgorithm:
         self._window_info = None
         self._ftle_fit = (1, 1)
         self._val_rosenstein = False
+        self._score_rosenstein = False
+        self._needs_gt_lle = False
         self._lle_gt = None
         self._lle_gt_per_window = None
         self._lle_per_window = None
@@ -667,6 +683,16 @@ class LearningAlgorithm:
             )
             self._val_rosenstein = parse_val_rosenstein(
                 self.cfg.get("Training", "val_rosenstein", fallback=None)
+            )
+            # ftle and rosenstein_lle are |estimate - GT LLE|, so the
+            # ground-truth exponent is required even when the Rosenstein
+            # switch is off. Selecting rosenstein_lle also scores it
+            # every epoch.
+            self._score_rosenstein = self._val_rosenstein or (
+                "rosenstein_lle" in self._val_criteria
+            )
+            self._needs_gt_lle = self._score_rosenstein or (
+                "ftle" in self._val_criteria
             )
             self._spectrum_windows, self._window_info = capture_fixed_spectrum_windows(
                 val_dataloader.dataset,
@@ -720,7 +746,28 @@ class LearningAlgorithm:
                         n_windows, min_observed, max_gap_frac
                     )
                 )
-            if self._val_rosenstein:
+            if self._score_rosenstein and not self._val_rosenstein:
+                logger.info(
+                    "rosenstein_lle is selected, so Rosenstein is scored "
+                    "every epoch even though val_rosenstein is false."
+                )
+            elif self._needs_gt_lle and not self._val_rosenstein:
+                logger.info(
+                    "ftle is selected, so the ground-truth Rosenstein "
+                    "exponent is computed once even though val_rosenstein "
+                    "is false."
+                )
+            if any(
+                name in ("error_drift_cross", "error_drift_cross_varnorm")
+                for name in self._val_criteria
+            ):
+                logger.info(
+                    "Cross-term criteria use |cross|. The plotted series "
+                    "stays signed."
+                )
+            if any(name in ("ftle", "rosenstein_lle") for name in self._val_criteria):
+                logger.info("Lyapunov criteria use |estimate - GT LLE|.")
+            if self._needs_gt_lle:
                 import time
 
                 started = time.perf_counter()
@@ -732,13 +779,22 @@ class LearningAlgorithm:
                     observation_process=self._spectrum_observation,
                 )
                 elapsed = time.perf_counter() - started
-                logger.info(
-                    "Rosenstein GT LLE {:.6f} on the free-run half "
-                    "(embed m={}, tau={}) in {:.3f}s. The same cost is "
-                    "paid again each epoch on the autonomous pass.".format(
-                        self._lle_gt, self._embed_dim, self._embed_tau, elapsed
+                if self._score_rosenstein:
+                    logger.info(
+                        "Rosenstein GT LLE {:.6f} on the free-run half "
+                        "(embed m={}, tau={}) in {:.3f}s. The same cost is "
+                        "paid again each epoch on the autonomous pass.".format(
+                            self._lle_gt, self._embed_dim, self._embed_tau, elapsed
+                        )
                     )
-                )
+                else:
+                    logger.info(
+                        "Rosenstein GT LLE {:.6f} on the free-run half "
+                        "(embed m={}, tau={}) in {:.3f}s. Per-epoch "
+                        "Rosenstein stays off.".format(
+                            self._lle_gt, self._embed_dim, self._embed_tau, elapsed
+                        )
+                    )
             else:
                 logger.info(
                     "val_rosenstein is false: skipping Rosenstein LLE. "

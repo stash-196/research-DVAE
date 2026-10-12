@@ -23,9 +23,13 @@ from dvae.eval.utils.local_drift_analysis import (
 from dvae.run_options import (
     parse_val_criteria,
     parse_val_drift_horizon,
+    selection_criterion_value,
     spectrum_monitoring_enabled,
 )
-from dvae.visualizers.visualize_training_metrics import build_val_criteria_figure
+from dvae.visualizers.visualize_training_metrics import (
+    build_val_criteria_figure,
+    cross_symlog_linthresh,
+)
 
 
 def _windows():
@@ -232,8 +236,44 @@ def test_drift_horizon_and_criteria_defaults():
     assert spectrum_monitoring_enabled(("recon",), legacy=True) is False
     assert spectrum_monitoring_enabled(("drift",), legacy=True) is True
     assert spectrum_monitoring_enabled(("base_error", "cross"), legacy=True) is True
+    assert parse_val_criteria(
+        "recon_k,ftle,rosenstein_lle,auto_drift_k1,base_error_varnorm"
+    ) == (
+        "recon_k",
+        "ftle",
+        "rosenstein_lle",
+        "auto_drift_k1",
+        "base_error_varnorm",
+    )
+    assert parse_val_criteria("error_drift_cross_varnorm,auto_drift_k5,auto_drift_k") == (
+        "error_drift_cross_varnorm",
+        "auto_drift_k5",
+        "auto_drift_k",
+    )
+    assert spectrum_monitoring_enabled(("recon_k",), legacy=True) is True
+    assert spectrum_monitoring_enabled(("ftle",), legacy=True) is True
+    assert spectrum_monitoring_enabled(("rosenstein_lle",), legacy=True) is True
+    assert spectrum_monitoring_enabled(("auto_drift_k1",), legacy=True) is True
+    assert spectrum_monitoring_enabled(("error_drift_cross_varnorm",), legacy=True) is True
     with pytest.raises(ValueError, match="auto_total"):
         parse_val_criteria("energy")
+
+
+def test_selection_uses_abs_cross_and_distance_to_gt_lle():
+    assert selection_criterion_value("recon", 1.5) == 1.5
+    assert selection_criterion_value("error_drift_cross", -0.4) == pytest.approx(0.4)
+    assert selection_criterion_value(
+        "error_drift_cross_varnorm", -0.2
+    ) == pytest.approx(0.2)
+    assert selection_criterion_value("cross", 0.3) == pytest.approx(0.3)
+    assert selection_criterion_value("ftle", 1.2, gt_lle=0.9) == pytest.approx(0.3)
+    assert selection_criterion_value(
+        "rosenstein_lle", 0.4, gt_lle=0.9
+    ) == pytest.approx(0.5)
+    assert selection_criterion_value("recon_k", 2.0) == 2.0
+    assert selection_criterion_value("auto_drift_k5", 0.2) == 0.2
+    with pytest.raises(ValueError, match="GT LLE"):
+        selection_criterion_value("ftle", 0.1)
 
 
 def _warmup_colors(ax):
@@ -313,6 +353,29 @@ def test_drift_layouts_share_range_and_keep_markers():
     assert "GT LLE" in lyap_labels
     band_labels = [coll.get_label() for coll in lyap.collections]
     assert "Rosenstein ± std" in band_labels
+    picked = build_val_criteria_figure(
+        ("recon_k", "ftle", "rosenstein_lle"),
+        [0.5, 2.5],
+        [0.3, 2.3],
+        [2.0, 4.0],
+        [0, 3],
+        [0, 4],
+        [0],
+        [0, 6],
+        "VRNN",
+        "ss",
+        "none",
+        best_epoch=1,
+        drift=drift,
+        recon_k=recon_k,
+        lyapunov=lyapunov,
+    )
+    picked_overlay = [line.get_label() for line in picked.axes[2].lines]
+    assert "recon_k (selected)" in picked_overlay
+    assert "auto_drift (selected)" not in picked_overlay
+    picked_lyap = [line.get_label() for line in picked.axes[3].lines]
+    assert "finite-time exponent (selected)" in picked_lyap
+    assert "Rosenstein LLE (selected)" in picked_lyap
     for ax in fig.axes:
         colors = _warmup_colors(ax)
         assert colors.count("c") == 2
@@ -350,6 +413,12 @@ def test_drift_layouts_share_range_and_keep_markers():
         log_scale=True,
     )
     assert all(ax.get_yscale() == "symlog" for ax in log_fig.axes)
+    # |cross| is 0.1 on both epochs, so the 10th percentile is 0.1.
+    assert log_fig.axes[2].yaxis._scale.linthresh == pytest.approx(
+        cross_symlog_linthresh(drift["error_drift_cross"])
+    )
+    assert cross_symlog_linthresh([0.1, -0.1]) == pytest.approx(0.1)
+    assert cross_symlog_linthresh([1e-8, -1e-8]) == pytest.approx(1e-4)
     log_cross = next(
         line
         for line in log_fig.axes[2].lines
@@ -393,6 +462,7 @@ def test_drift_layouts_share_range_and_keep_markers():
         log_scale=True,
     )
     assert all(ax.get_yscale() == "symlog" for ax in log_panels.axes)
+    assert log_panels.axes[2].yaxis._scale.linthresh == pytest.approx(0.1)
     assert [ax.get_ylim() for ax in log_panels.axes][0] == [
         ax.get_ylim() for ax in log_panels.axes
     ][-1]
@@ -419,7 +489,8 @@ def test_drift_layouts_share_range_and_keep_markers():
     )
     var_labels = [line.get_label() for line in var_fig.axes[2].lines]
     assert "recon_k / var" in var_labels
-    assert "auto_drift / var (selected)" in var_labels
+    assert "auto_drift / var" in var_labels
+    assert "auto_drift / var (selected)" not in var_labels
     var_best = next(
         line for line in var_fig.axes[2].lines if line.get_label() == "best epoch"
     )
@@ -439,10 +510,26 @@ def test_drift_layouts_share_range_and_keep_markers():
     )
     assert [ax.get_legend().get_title().get_text() for ax in var_panels.axes] == [
         "VRNN: base_error / var",
-        "VRNN: auto_drift / var (selected)",
+        "VRNN: auto_drift / var",
         "VRNN: error_drift_cross / var",
         "VRNN: error_drift_total / var",
     ]
+    marked = build_drift_panels_figure(
+        drift,
+        [0, 3],
+        [0, 4],
+        [0],
+        [0, 6],
+        "VRNN",
+        "ss",
+        "none",
+        criteria=("auto_drift_varnorm",),
+        best_epoch=1,
+        normalized=True,
+    )
+    assert [ax.get_legend().get_title().get_text() for ax in marked.axes][1] == (
+        "VRNN: auto_drift / var (selected)"
+    )
     var_panel_best = [
         float(np.asarray(line.get_ydata(), dtype=float).reshape(-1)[0])
         for ax in var_panels.axes
@@ -546,3 +633,93 @@ def test_rosenstein_cost_on_a_synthetic_epoch(capsys):
     print(f"Rosenstein synthetic cost per epoch: {elapsed:.4f} s")
     captured = capsys.readouterr().out
     assert "Rosenstein synthetic cost per epoch:" in captured
+
+
+def _lorenz_x(n, dt=0.01):
+    """Standard Lorenz x, RK4, after a short transient. dt matches the dataset."""
+    sigma, rho, beta = 10.0, 28.0, 8.0 / 3.0
+    state = np.array([1.0, 1.0, 1.0], dtype=np.float64)
+
+    def deriv(s):
+        x, y, z = s
+        return np.array(
+            [sigma * (y - x), x * (rho - z) - y, x * y - beta * z],
+            dtype=np.float64,
+        )
+
+    for _ in range(2000):
+        k1 = deriv(state)
+        k2 = deriv(state + 0.5 * dt * k1)
+        k3 = deriv(state + 0.5 * dt * k2)
+        k4 = deriv(state + dt * k3)
+        state = state + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+    out = np.empty(n, dtype=np.float64)
+    for index in range(n):
+        k1 = deriv(state)
+        k2 = deriv(state + 0.5 * dt * k1)
+        k3 = deriv(state + 0.5 * dt * k2)
+        k4 = deriv(state + dt * k3)
+        state = state + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+        out[index] = state[0]
+    return out
+
+
+def _ecg_like(n, fs=250.0, hr_bpm=75.0, seed=0):
+    """One synthetic lead at 250 Hz: P-QRS-T Gaussians plus a slow baseline."""
+    rng = np.random.RandomState(seed)
+    t = np.arange(n, dtype=np.float64) / fs
+    signal = 0.02 * np.sin(2.0 * np.pi * 0.15 * t)
+    waves = (
+        (-0.20, 0.025, 0.15),
+        (-0.05, 0.010, -0.15),
+        (0.00, 0.011, 1.0),
+        (0.04, 0.012, -0.25),
+        (0.22, 0.040, 0.30),
+    )
+    cursor = 0.4
+    mean_rr = 60.0 / hr_bpm
+    while cursor < float(t[-1]) + 0.5:
+        rr = max(mean_rr * (1.0 + 0.015 * float(rng.randn())), 0.45)
+        for offset, width, amp in waves:
+            signal += amp * np.exp(-0.5 * ((t - (cursor + offset)) / width) ** 2)
+        cursor += rr
+    return signal
+
+
+def test_rosenstein_cost_on_lorenz_and_ecg(capsys):
+    import time
+
+    from dvae.eval.utils.local_drift_analysis import rosenstein_on_free_run
+
+    def windows_from(series):
+        series = np.asarray(series, dtype=np.float64).reshape(-1)
+        return [
+            series[index * 2000 : (index + 1) * 2000].reshape(-1, 1)
+            for index in range(10)
+        ]
+
+    cases = (
+        ("Lorenz x", _lorenz_x(20000), 3, 10, 0.01),
+        ("ECG-like 250 Hz", _ecg_like(20000), 3, 5, 1.0 / 250.0),
+    )
+    for name, series, embed_dim, tau, sample_dt in cases:
+        started = time.perf_counter()
+        mean, std, per_window = rosenstein_on_free_run(
+            windows_from(series), tf_steps=1000, m=embed_dim, tau=tau
+        )
+        elapsed = time.perf_counter() - started
+        assert per_window.shape == (10,)
+        assert np.isfinite(mean)
+        assert np.isfinite(per_window).all()
+        assert std == pytest.approx(float(np.std(per_window, ddof=1)))
+        assert std >= 0.0
+        print(
+            f"Rosenstein {name}: 10 windows, 1000 free steps, "
+            f"m={embed_dim}, tau={tau}, dt=1 sample "
+            f"(sample interval {sample_dt:.4g} s), "
+            f"mean={mean:.6f}, across-window std={std:.6f}, "
+            f"cost per epoch={elapsed:.4f} s"
+        )
+    captured = capsys.readouterr().out
+    assert "Rosenstein Lorenz x:" in captured
+    assert "Rosenstein ECG-like 250 Hz:" in captured

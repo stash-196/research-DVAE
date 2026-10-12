@@ -33,8 +33,9 @@ def draw_loss_warmup_lines(
 
 
 # Four Appendix B terms. Log figures use a symlog axis so a negative
-# error_drift_cross stays on the panel; the linear band is one decade
-# below the smallest nonzero magnitude (floor 1e-4).
+# error_drift_cross stays on the panel. The linear band is the 10th
+# percentile of the finite |cross| values on that panel, and at least
+# 1e-4. The plotted cross stays signed. Selection uses |cross| separately.
 _DRIFT_LINE_ORDER = (
     "base_error",
     "auto_drift",
@@ -143,11 +144,34 @@ def _finite_limits(arrays, pad=0.05):
     return lo - pad * span, hi + pad * span
 
 
-def _symlog_linthresh(arrays) -> float:
-    """Linear half-width for a symlog axis that still shows a negative cross.
+# 10th percentile of |cross|. A smaller percentile would follow a single
+# near-zero sample and crush the rest of the axis into the log region.
+_CROSS_LINTHRESH_PERCENTILE = 10.0
+_CROSS_LINTHRESH_FLOOR = 1e-4
 
-    One decade below the smallest nonzero magnitude, and at least 1e-4,
-    so values near zero are not crushed and a sign change stays visible.
+
+def cross_symlog_linthresh(cross) -> float:
+    """Linear half-width for the signed cross term on a symlog axis.
+
+    ``linthresh`` is the 10th percentile of the finite ``|cross|`` values,
+    and at least 1e-4. A percentile of zero uses that floor. The plotted
+    values stay signed. There is no absolute-value series and no sign marker.
+    """
+    values = np.abs(np.asarray(cross, dtype=float).reshape(-1))
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return _CROSS_LINTHRESH_FLOOR
+    thresh = float(np.percentile(values, _CROSS_LINTHRESH_PERCENTILE))
+    if not np.isfinite(thresh) or thresh <= 0.0:
+        return _CROSS_LINTHRESH_FLOOR
+    return float(max(thresh, _CROSS_LINTHRESH_FLOOR))
+
+
+def _symlog_linthresh(arrays) -> float:
+    """Fallback linear half-width when a panel has no cross series.
+
+    One decade below the smallest nonzero magnitude, and at least 1e-4.
+    The cross term uses ``cross_symlog_linthresh`` instead.
     """
     chunks = []
     for arr in arrays:
@@ -224,13 +248,30 @@ def _canon_criteria(criteria):
     return tuple(names)
 
 
+def _criterion_selected(name, criteria, normalized=False) -> bool:
+    """Raw panels follow the raw name. Varnorm panels follow ``name_varnorm``."""
+    names = _canon_criteria(criteria)
+    if normalized:
+        return f"{name}_varnorm" in names
+    return name in names
+
+
 def _selected_label(name, criteria, normalized=False):
     label = _DRIFT_PANEL_LABELS.get(name, name)
     if normalized:
         label = f"{label} / var"
-    if name in _canon_criteria(criteria):
+    if _criterion_selected(name, criteria, normalized=normalized):
         return f"{label} (selected)"
     return label
+
+
+def _drift_linthresh(terms) -> float:
+    """Symlog band for a drift axes. The cross series sets it when present."""
+    if terms and "error_drift_cross" in terms:
+        return cross_symlog_linthresh(terms["error_drift_cross"])
+    if not terms:
+        return _symlog_linthresh([])
+    return _symlog_linthresh(list(terms.values()))
 
 
 def _draw_warmup(ax, model_name, auto_sampling_method, noise_sampling_method, kl_warm_epochs, auto_warm_epochs, noise_warm_epochs, sequence_len_epochs):
@@ -249,12 +290,18 @@ def _draw_warmup(ax, model_name, auto_sampling_method, noise_sampling_method, kl
 def _draw_drift_overlay(ax, drift, recon_k, criteria, best_epoch, title, normalized=False):
     """Four drift terms on one axes. ``recon_k`` sits behind the total."""
     if recon_k is not None:
+        if normalized:
+            recon_label = "recon_k / var"
+        elif "recon_k" in _canon_criteria(criteria):
+            recon_label = "recon_k (selected)"
+        else:
+            recon_label = "recon_k"
         ax.plot(
             np.asarray(recon_k, dtype=float).reshape(-1),
             color="0.75",
             linewidth=6,
             solid_capstyle="round",
-            label="recon_k / var" if normalized else "recon_k",
+            label=recon_label,
             zorder=1,
         )
     has_total = "error_drift_total" in drift
@@ -280,11 +327,18 @@ def _draw_drift_overlay(ax, drift, recon_k, criteria, best_epoch, title, normali
     ax.grid(True)
 
 
-def _draw_lyapunov(ax, lyapunov, best_epoch, title):
+def _lyapunov_line_label(text, criterion, criteria) -> str:
+    if criterion in _canon_criteria(criteria):
+        return f"{text} (selected)"
+    return text
+
+
+def _draw_lyapunov(ax, lyapunov, best_epoch, title, criteria=()):
     """One axes: finite-time slope, Rosenstein mean ± across-window std, GT line.
 
     The std band is the spread of the per-window Rosenstein estimates.
     Both curves and the ground-truth reference share this subplot.
+    ``ftle`` and ``rosenstein_lle`` are marked when they are selected.
     """
     ftle = lyapunov.get("ftle")
     lle_mean = lyapunov.get("lle_mean")
@@ -293,13 +347,23 @@ def _draw_lyapunov(ax, lyapunov, best_epoch, title):
     labeled_best = False
     if ftle is not None:
         ftle = np.asarray(ftle, dtype=float).reshape(-1)
-        ax.plot(ftle, color="tab:purple", label="finite-time exponent")
+        ax.plot(
+            ftle,
+            color="tab:purple",
+            label=_lyapunov_line_label("finite-time exponent", "ftle", criteria),
+        )
         _mark_best_epoch(ax, ftle, best_epoch, labeled=True)
         labeled_best = True
     if lle_mean is not None:
         mean = np.asarray(lle_mean, dtype=float).reshape(-1)
         if np.isfinite(mean).any():
-            ax.plot(mean, color="tab:brown", label="Rosenstein LLE")
+            ax.plot(
+                mean,
+                color="tab:brown",
+                label=_lyapunov_line_label(
+                    "Rosenstein LLE", "rosenstein_lle", criteria
+                ),
+            )
             if lle_std is not None:
                 std = np.asarray(lle_std, dtype=float).reshape(-1)
                 n = int(min(mean.size, std.size))
@@ -371,8 +435,10 @@ def build_val_criteria_figure(
     ground-truth exponent as a horizontal line. The selection score is
     last, and only when more than one criterion is selected.
 
-    ``log_scale`` uses a symlog y axis on every panel so a negative
-    ``error_drift_cross`` is drawn with its sign. ``normalized`` draws
+    ``log_scale`` uses a symlog y axis. On the drift overlay the linear
+    band is the 10th percentile of finite ``|error_drift_cross|`` (floor
+    1e-4), so a negative cross keeps its sign. There is no absolute-value
+    series and no sign marker. ``normalized`` draws
     the four drift terms and ``recon_k`` divided by the variance of
     ``x_true``; recon, spectrum, and Lyapunov stay in their own units.
     Warm-up lines and the best-epoch marker are on every panel.
@@ -421,7 +487,7 @@ def build_val_criteria_figure(
         sym_arrays.extend(drift_terms.values())
     if recon_k is not None:
         sym_arrays.append(np.asarray(recon_k, dtype=float))
-    linthresh = _symlog_linthresh(sym_arrays) if sym_arrays else None
+    linthresh = _drift_linthresh(drift_terms) if sym_arrays else None
     for ax, (kind, payload) in zip(axes[:, 0], blocks):
         _draw_warmup(
             ax,
@@ -453,7 +519,11 @@ def build_val_criteria_figure(
                 ), linthresh=linthresh)
         elif kind == "lyapunov":
             _draw_lyapunov(
-                ax, payload, best_epoch, f"{model_name}: Lyapunov"
+                ax,
+                payload,
+                best_epoch,
+                f"{model_name}: Lyapunov",
+                criteria=criteria,
             )
             if log_scale:
                 pieces = []
@@ -497,9 +567,12 @@ def build_drift_panels_figure(
     """One subplot per Appendix B term, with one shared y range.
 
     Order is base_error, auto_drift, error_drift_cross, error_drift_total.
-    ``log_scale`` is a symlog axis with that same range, so a negative
-    cross stays on the figure. ``normalized`` uses the ``*_varnorm``
-    series. Warm-up lines and the best-epoch marker are on every subplot.
+    ``log_scale`` is a symlog axis with that same range. ``linthresh`` is
+    the 10th percentile of the finite ``|cross|`` on these panels (floor
+    1e-4), so a negative cross stays signed. ``normalized`` uses the
+    ``*_varnorm`` series and marks a term selected only when that
+    ``*_varnorm`` name is in ``criteria``. Warm-up lines and the
+    best-epoch marker are on every subplot.
     """
     criteria = _canon_criteria(criteria)
     terms = _drift_arrays(drift, normalized=normalized)
@@ -507,7 +580,7 @@ def build_drift_panels_figure(
         raise ValueError("drift panels need at least one Appendix B series.")
     names = [name for name in _DRIFT_LINE_ORDER if name in terms]
     limits = _finite_limits([terms[name] for name in names])
-    linthresh = _symlog_linthresh([terms[name] for name in names])
+    linthresh = _drift_linthresh(terms)
     fig, axes = plt.subplots(
         len(names), 1, figsize=(8, 6 * len(names)), squeeze=False, sharey=True
     )
@@ -523,7 +596,7 @@ def build_drift_panels_figure(
             noise_warm_epochs,
             sequence_len_epochs,
         )
-        selected = name in tuple(criteria)
+        selected = _criterion_selected(name, criteria, normalized=normalized)
         ylabel = _DRIFT_PANEL_LABELS[name]
         if normalized:
             ylabel = f"{ylabel} / var"

@@ -483,7 +483,7 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
     assert captured["panels_log"]["scales"] == ["symlog"] * 4
     assert captured["panels_varnorm"]["titles"] == [
         "MT_VRNN: base_error / var",
-        "MT_VRNN: auto_drift / var (selected)",
+        "MT_VRNN: auto_drift / var",
         "MT_VRNN: error_drift_cross / var",
         "MT_VRNN: error_drift_total / var",
     ]
