@@ -623,6 +623,7 @@ class LearningAlgorithm:
             corpus=optional_config_str(self.cfg, "DataFrame", "corpus"),
             crop_start_sec=optional_config_float(self.cfg, "DataFrame", "crop_start_sec"),
             crop_end_sec=optional_config_float(self.cfg, "DataFrame", "crop_end_sec"),
+            segments=optional_config_str(self.cfg, "DataFrame", "segments"),
             max_fill_gap_sec=optional_config_float(
                 self.cfg, "DataFrame", "max_fill_gap_sec"
             ),

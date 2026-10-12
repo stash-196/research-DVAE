@@ -65,6 +65,30 @@ before the time crop. ``block_mask_mode`` defaults to ``not_good``.
 ``filled_nan_log_sec`` is the re-cut log cutoff when ``max_fill_gap_sec``
 is unset. Crop stays time-based.
 
+Waveform segments
+-----------------
+``[DataFrame] segments`` (unset by default) is the waveform way to load
+several subjects and several time ranges. Coarse modes keep the
+comma-separated ``dataset_label`` and do not read this key. The value
+is a ``.yaml`` / ``.yml`` / ``.csv`` path, or one line::
+
+    subject:start-end[,start-end]; subject:start-end
+
+Times are inclusive seconds from that subject's first timestamp. Ranges
+on one subject may not share a timestamp, including a shared endpoint.
+Each range is loaded and cropped on its own, then concatenated in the
+order written. The join does not resample and does not insert or delete
+samples to close a gap, so missing values stay NaN. Normalisation is
+per subject: nanmean / nanstd on that subject's non-test rows (the same
+last-20% row cut as one waveform), applied to every row of that
+subject. A non-test std below ``1e-8`` sets that column to NaN for the
+subject. Segment edges are window splits, in addition to the existing
+gap splits, so a window stays inside one segment. A range shorter than
+``seq_len`` is warned and dropped; if every range is that short,
+loading raises. Leave ``segments`` unset to keep ``dataset_label`` plus
+``crop_start_sec`` / ``crop_end_sec`` with the same rows and values.
+Setting ``segments`` together with either crop key raises.
+
 Session directory
 -----------------
 ``data_dir`` (``path_to_data``) is the dataset root. The folder that
@@ -179,9 +203,13 @@ file exists for only some sessions; a missing file raises
 
 from __future__ import annotations
 
+import csv
 import json
+import re
 import warnings
 from pathlib import Path
+
+import yaml
 
 import numpy as np
 import pandas as pd
@@ -1696,6 +1724,408 @@ def crop_proper_frame(
     return cropped
 
 
+# Inclusive ``start-end``. The hyphen is the separator, so a leading sign
+# is not part of the grammar (a negative start is out of range anyway).
+_SEGMENT_NUMBER = r"[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+_SEGMENT_RANGE_RE = re.compile(
+    rf"^\s*({_SEGMENT_NUMBER})\s*-\s*({_SEGMENT_NUMBER})\s*$"
+)
+_SEGMENT_FILE_SUFFIXES = (".yaml", ".yml", ".csv")
+
+
+def _parse_segment_number(text, *, what: str) -> float:
+    try:
+        value = float(text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{what} must be a number of seconds, got {text!r}.") from exc
+    if not np.isfinite(value):
+        raise ValueError(f"{what} must be finite, got {text!r}.")
+    return float(value)
+
+
+def _segment_record(subject, start, end) -> dict:
+    """One inclusive ``[start, end]`` range, in seconds."""
+    name = "" if subject is None else str(subject).strip()
+    if not name or name.lower() == "none":
+        raise ValueError(f"waveform segment is missing a subject, got {subject!r}.")
+    if any(ch in name for ch in ",;"):
+        raise ValueError(f"waveform subject {name!r} cannot contain ',' or ';'.")
+    start_f = _parse_segment_number(start, what=f"segment {name!r} start")
+    end_f = _parse_segment_number(end, what=f"segment {name!r} end")
+    if start_f >= end_f:
+        raise ValueError(
+            f"segment {name!r} has start >= end ({start_f} >= {end_f})."
+        )
+    return {"subject": name, "start": start_f, "end": end_f}
+
+
+def _reject_overlapping_segments(segments: list[dict]) -> None:
+    """Closed ranges on one subject may not share a time, including an endpoint."""
+    by_subject: dict[str, list[dict]] = {}
+    for seg in segments:
+        by_subject.setdefault(seg["subject"], []).append(seg)
+    for subject, rows in by_subject.items():
+        ordered = sorted(rows, key=lambda row: (row["start"], row["end"]))
+        for prev, nxt in zip(ordered, ordered[1:]):
+            if nxt["start"] <= prev["end"]:
+                raise ValueError(
+                    f"overlapping segments for subject {subject!r}: "
+                    f"[{prev['start']}, {prev['end']}] and "
+                    f"[{nxt['start']}, {nxt['end']}]."
+                )
+
+
+def _parse_inline_segments(text: str) -> list[dict]:
+    rows = []
+    for chunk in str(text).split(";"):
+        piece = chunk.strip()
+        if not piece:
+            continue
+        if ":" not in piece:
+            raise ValueError(
+                "waveform segments must look like "
+                "'subject:start-end[,start-end]; subject:start-end', "
+                f"got {piece!r}."
+            )
+        subject, ranges = piece.split(":", 1)
+        range_bits = [bit.strip() for bit in ranges.split(",") if bit.strip()]
+        if not range_bits:
+            raise ValueError(
+                f"segment subject {subject.strip()!r} has no start-end ranges."
+            )
+        for bit in range_bits:
+            match = _SEGMENT_RANGE_RE.match(bit)
+            if match is None:
+                raise ValueError(
+                    f"segment range {bit!r} for subject {subject.strip()!r} "
+                    "must be start-end in seconds."
+                )
+            rows.append(_segment_record(subject, match.group(1), match.group(2)))
+    if not rows:
+        raise ValueError("waveform segments spec is empty.")
+    _reject_overlapping_segments(rows)
+    return rows
+
+
+def _segments_path(spec: str, data_dir) -> Path | None:
+    """Return a sidecar path, or None when ``spec`` is the inline form.
+
+    Only ``.yaml``, ``.yml``, and ``.csv`` are files. A missing file with
+    one of those suffixes raises; anything else is parsed as inline text.
+    """
+    text = str(spec).strip()
+    suffix = Path(text).suffix.lower()
+    if suffix not in _SEGMENT_FILE_SUFFIXES:
+        return None
+    raw = Path(text)
+    candidates = [raw]
+    if data_dir is not None and not raw.is_absolute():
+        candidates.append(Path(str(data_dir)) / text)
+    for cand in candidates:
+        if cand.is_file():
+            return cand
+    tried = ", ".join(str(cand) for cand in candidates)
+    raise ValueError(f"segments file not found: {text} (tried {tried}).")
+
+
+def _segments_from_csv(path: Path) -> list[dict]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if not reader.fieldnames:
+            raise ValueError(f"segments csv {path} has no header.")
+        fields = {str(name).strip().lower(): name for name in reader.fieldnames}
+        def _col(*names):
+            for name in names:
+                if name in fields:
+                    return fields[name]
+            return None
+        subject_col = _col("subject", "dataset_label")
+        start_col = _col("start", "start_sec", "crop_start_sec")
+        end_col = _col("end", "end_sec", "crop_end_sec")
+        if subject_col is None or start_col is None or end_col is None:
+            raise ValueError(
+                f"segments csv {path} needs columns subject,start,end "
+                f"(got {list(reader.fieldnames)})."
+            )
+        rows = []
+        for raw in reader:
+            if raw is None:
+                continue
+            if not any(str(value).strip() for value in raw.values() if value is not None):
+                continue
+            rows.append(
+                _segment_record(raw.get(subject_col), raw.get(start_col), raw.get(end_col))
+            )
+    return rows
+
+
+def _yaml_range_rows(subject, ranges, path: Path) -> list[dict]:
+    if isinstance(ranges, dict):
+        ranges = [ranges]
+    if not isinstance(ranges, list):
+        raise ValueError(
+            f"segments file {path} subject {subject!r} must list ranges, "
+            f"got {type(ranges).__name__}."
+        )
+    rows = []
+    for item in ranges:
+        if isinstance(item, (list, tuple)) and len(item) == 2:
+            rows.append(_segment_record(subject, item[0], item[1]))
+            continue
+        if isinstance(item, dict):
+            start = item.get("start", item.get("start_sec", item.get("crop_start_sec")))
+            end = item.get("end", item.get("end_sec", item.get("crop_end_sec")))
+            rows.append(_segment_record(subject, start, end))
+            continue
+        raise ValueError(
+            f"segments file {path} range {item!r} must be [start, end] "
+            "or {start, end}."
+        )
+    return rows
+
+
+def _segments_from_yaml(path: Path) -> list[dict]:
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if loaded is None:
+        raise ValueError(f"segments file {path} is empty.")
+    if isinstance(loaded, list):
+        rows = []
+        for item in loaded:
+            if not isinstance(item, dict):
+                raise ValueError(
+                    f"segments file {path} entries must be mappings, got {item!r}."
+                )
+            subject = item.get("subject", item.get("dataset_label"))
+            start = item.get("start", item.get("start_sec", item.get("crop_start_sec")))
+            end = item.get("end", item.get("end_sec", item.get("crop_end_sec")))
+            rows.append(_segment_record(subject, start, end))
+        return rows
+    if isinstance(loaded, dict):
+        rows = []
+        for subject, ranges in loaded.items():
+            rows.extend(_yaml_range_rows(subject, ranges, path))
+        return rows
+    raise ValueError(
+        f"segments file {path} must be a list of ranges or a subject map, "
+        f"got {type(loaded).__name__}."
+    )
+
+
+def _segments_from_sequence(spec) -> list[dict]:
+    rows = []
+    for item in spec:
+        if isinstance(item, dict):
+            subject = item.get("subject", item.get("dataset_label"))
+            start = item.get("start", item.get("start_sec", item.get("crop_start_sec")))
+            end = item.get("end", item.get("end_sec", item.get("crop_end_sec")))
+            rows.append(_segment_record(subject, start, end))
+            continue
+        if isinstance(item, (list, tuple)) and len(item) == 3:
+            rows.append(_segment_record(item[0], item[1], item[2]))
+            continue
+        raise ValueError(
+            "waveform segment entries must be (subject, start, end) or "
+            f"a mapping, got {item!r}."
+        )
+    return rows
+
+
+def parse_waveform_segments(spec, *, data_dir=None) -> list[dict]:
+    """Parse ``segments`` into ``{subject, start, end}`` rows, in given order.
+
+    ``spec`` is the inline form
+    ``subject:start-end[,start-end]; subject:start-end``, a ``.yaml`` /
+    ``.yml`` / ``.csv`` path, or a list of triples / mappings. Times are
+    seconds from that subject's first timestamp. ``start >= end`` and
+    overlapping ranges on one subject raise here. A missing sidecar raises.
+    """
+    if isinstance(spec, (list, tuple)):
+        rows = _segments_from_sequence(spec)
+    else:
+        text = str(spec).strip()
+        path = _segments_path(text, data_dir)
+        if path is None:
+            return _parse_inline_segments(text)
+        suffix = path.suffix.lower()
+        rows = _segments_from_csv(path) if suffix == ".csv" else _segments_from_yaml(path)
+    if not rows:
+        raise ValueError("waveform segments spec is empty.")
+    _reject_overlapping_segments(rows)
+    return rows
+
+
+def _optional_label_list(dataset_label) -> list[str] | None:
+    """Comma-separated names, or None when the config value is unset."""
+    if _is_unset(dataset_label):
+        return None
+    labels = []
+    for part in str(dataset_label).split(","):
+        name = part.strip()
+        if name and name.lower() != "none":
+            labels.append(name)
+    return labels or None
+
+
+def _elapsed_from_first_timestamp(frame: pd.DataFrame) -> np.ndarray:
+    t0 = frame["datetime"].min()
+    return (frame["datetime"] - t0).dt.total_seconds().to_numpy(dtype=np.float64)
+
+
+def crop_waveform_segment(
+    frame: pd.DataFrame, start: float, end: float, subject: str
+) -> pd.DataFrame:
+    """Keep ``start <= t <= end`` seconds from this frame's first timestamp.
+
+    The row set is exactly the samples already on the frame. Nothing is
+    resampled and no timestamp inside the range is dropped.
+    """
+    if frame is None or len(frame) == 0 or "datetime" not in getattr(frame, "columns", []):
+        raise ValueError(
+            f"segment {subject!r} [{start}, {end}] is out of range "
+            "(frame has no datetime rows)."
+        )
+    elapsed = _elapsed_from_first_timestamp(frame)
+    finite = elapsed[np.isfinite(elapsed)]
+    if finite.size == 0:
+        raise ValueError(
+            f"segment {subject!r} [{start}, {end}] is out of range "
+            "(datetime values are not finite)."
+        )
+    span = float(np.max(finite))
+    # 1e-6 s absorbs binary noise on a timestamp that was formatted and
+    # parsed back. It is far below one sample at 250 Hz.
+    tol = 1e-6
+    if float(start) < -tol or float(start) > span + tol or float(end) > span + tol:
+        raise ValueError(
+            f"segment {subject!r} [{start}, {end}] is out of range "
+            f"(span_sec={span:.6g})."
+        )
+    keep = (elapsed >= float(start)) & (elapsed <= float(end))
+    cropped = frame.loc[keep].reset_index(drop=True)
+    if len(cropped) == 0:
+        raise ValueError(
+            f"segment {subject!r} [{start}, {end}] is out of range "
+            f"(no samples inside the recording, span_sec={span:.6g})."
+        )
+    return cropped
+
+
+def _waveform_head_length(n_rows: int) -> int:
+    """Rows kept by ``iloc[: -n // 5]`` (the non-test head)."""
+    n = int(n_rows)
+    if n <= 0:
+        return 0
+    return n + ((-n) // 5)
+
+
+def _retag_window_groups(frame: pd.DataFrame, next_group: int) -> tuple[pd.DataFrame, int]:
+    """Give this cropped segment group ids that cannot collide with another."""
+    frame = frame.copy()
+    if GROUP_COL in frame.columns:
+        codes, uniques = pd.factorize(frame[GROUP_COL].to_numpy(), sort=False)
+        frame[GROUP_COL] = np.asarray(codes, dtype=np.int64) + int(next_group)
+        return frame, int(next_group) + int(len(uniques))
+    frame[GROUP_COL] = np.full(len(frame), int(next_group), dtype=np.int64)
+    return frame, int(next_group) + 1
+
+
+def _observation_matrix(frame: pd.DataFrame, columns: list[str]) -> np.ndarray:
+    missing = [col for col in columns if col not in frame.columns]
+    if missing:
+        raise KeyError(
+            f"columns {missing} not in loaded frame {list(frame.columns)}"
+        )
+    arr = frame[list(columns)].to_numpy(dtype=np.float64)
+    if arr.ndim == 1:
+        arr = arr.reshape(-1, 1)
+    return arr
+
+
+def _zscore_waveform_subject(values, non_test, subject: str) -> np.ndarray:
+    """Per-subject z-score from non-test rows. Tiny std becomes NaN.
+
+    Same rule as coarse ``_zscore_features``: stats ignore NaNs, and a
+    non-test std below ``COARSE_STD_EPS`` blanks that column for the
+    whole subject.
+    """
+    out = np.array(values, dtype=np.float64, copy=True)
+    non_test = np.asarray(non_test, dtype=bool)
+    if out.shape[0] == 0 or not bool(non_test.any()):
+        warnings.warn(
+            f"[XhroProper][segment] {subject} has no non-test rows; "
+            "leaving values unscaled.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return out
+    n_cols = out.shape[1] if out.ndim == 2 else 1
+    if out.ndim == 1:
+        out = out.reshape(-1, 1)
+    for j in range(n_cols):
+        sample = out[non_test, j]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            mean = float(np.nanmean(sample))
+            std = float(np.nanstd(sample))
+        if (not np.isfinite(std)) or std < COARSE_STD_EPS:
+            out[:, j] = np.nan
+            msg = (
+                f"[XhroProper][segment][{subject}] column {j} "
+                f"non-test std {std:.3g} < {COARSE_STD_EPS}; "
+                "setting that column to NaN for this subject."
+            )
+            print("WARNING " + msg)
+            warnings.warn(msg, UserWarning, stacklevel=2)
+            continue
+        out[:, j] = (out[:, j] - mean) / std
+    return out
+
+
+def _interpolate_within_piece(values: np.ndarray) -> np.ndarray:
+    """Linear fill inside this array only. No fill crosses the caller’s cut."""
+    out = np.array(values, dtype=np.float64, copy=True)
+    if out.ndim == 1:
+        out = out.reshape(-1, 1)
+    idx = np.arange(out.shape[0])
+    for j in range(out.shape[1]):
+        column = out[:, j]
+        missing = ~np.isfinite(column)
+        if not missing.any():
+            continue
+        valid = ~missing
+        if valid.any():
+            column[missing] = np.interp(idx[missing], idx[valid], column[valid])
+        else:
+            column[:] = 0.0
+        out[:, j] = column
+    return out
+
+
+def _apply_waveform_piece_suffix(values, suffix, *, parity: bool) -> np.ndarray:
+    """Suffix for one already z-scored piece. Pieces are not concatenated first."""
+    arr = np.asarray(values, dtype=np.float64)
+    if arr.ndim == 1:
+        arr = arr.reshape(-1, 1)
+    if suffix is None:
+        return arr.astype(np.float32)
+    if suffix == "interpolate":
+        return _interpolate_within_piece(arr).astype(np.float32)
+    if suffix == "indicate":
+        if parity:
+            missing = np.isnan(arr)
+            imputed = np.where(missing, 0.0, arr).astype(np.float32)
+            is_obs = (~missing).astype(np.float32)
+            result = np.empty((arr.shape[0], arr.shape[1] * 2), dtype=np.float32)
+            result[:, 0::2] = imputed
+            result[:, 1::2] = is_obs
+            return result
+        missing = np.isnan(arr)
+        imputed = np.where(missing, 0.0, arr).astype(np.float32)
+        is_obs = (~missing.any(axis=1)).astype(np.float32)[:, None]
+        return np.concatenate([imputed, is_obs], axis=1)
+    raise ValueError(f"Unknown waveform suffix: {suffix!r}")
+
+
 def build_coarse_subject(
     session_dir: Path,
     columns: list[str],
@@ -1885,7 +2315,14 @@ class XhroProper(Xhro):
       - coarse_eeg_max_rel_delta: optional rel_delta cap; unset means off.
       - crop_start_sec / crop_end_sec: inclusive seconds from the first
         timestamp. Unset means no crop. Waveform path only, after load and
-        before the 20% test split.
+        before the 20% test split. Used only when ``segments`` is unset;
+        setting both raises.
+      - segments: waveform only. Unset keeps ``dataset_label`` and the crop
+        keys, with the same rows and values. Inline
+        ``subject:start-end[,start-end]; subject:start-end``, or a
+        ``.yaml`` / ``.yml`` / ``.csv`` path. Times are inclusive seconds
+        from that subject's first timestamp. Each range is cropped on its
+        own; normalisation is per subject. See "Waveform segments".
       - max_fill_gap_sec: waveform only. Unset keeps filled gaps as NaN
         inside windows. When set, a filled gap with ``gap_duration_s``
         greater than this becomes a window split, like a segment boundary.
@@ -1964,6 +2401,7 @@ class XhroProper(Xhro):
         coarse_include_hr=False,
         crop_start_sec=None,
         crop_end_sec=None,
+        segments=None,
         max_fill_gap_sec=None,
         filled_nan_log_sec=None,
         legacy_windowing=_WINDOW_DEFAULT,
@@ -2003,6 +2441,9 @@ class XhroProper(Xhro):
         self.resample_hz = resample_hz
         self.crop_start_sec = crop_start_sec
         self.crop_end_sec = crop_end_sec
+        self.segments = None if _is_unset(segments) else segments
+        self.waveform_segments = None
+        self._keep_all_rows = False
         self.max_fill_gap_sec = _optional_nonnegative_float(
             max_fill_gap_sec, "max_fill_gap_sec"
         )
@@ -2045,6 +2486,11 @@ class XhroProper(Xhro):
         base, _suffix = _split_process(self.observation_process)
         if base in COARSE_OBS_COLUMNS:
             self.coarse_mode = True
+            if self.segments is not None:
+                raise ValueError(
+                    "segments is for XhroProper waveform modes. Coarse modes "
+                    "list subjects in dataset_label."
+                )
             if self.block_mask_file is not None:
                 warnings.warn(
                     "block_mask_file is ignored for coarse observations.",
@@ -2060,6 +2506,18 @@ class XhroProper(Xhro):
                 coarse_eeg_max_rel_delta=coarse_eeg_max_rel_delta,
                 coarse_include_hr=coarse_include_hr,
             )
+            return
+
+        if self.segments is not None:
+            if base not in PARITY_PROCESSES and base not in GROK_EXTRA_PROCESSES:
+                raise ValueError(
+                    f"Invalid observation process: {self.observation_process!r}. "
+                    f"Parity: {sorted(PARITY_PROCESSES)}; "
+                    f"grok extras: {sorted(GROK_EXTRA_PROCESSES)}; "
+                    f"coarse: {sorted(COARSE_OBS_COLUMNS)}; "
+                    "each may take _interpolate or _indicate."
+                )
+            self._init_waveform_segments(base, _suffix)
             return
 
         self.session_dir = _require_session_dir(
@@ -2205,6 +2663,10 @@ class XhroProper(Xhro):
     def _apply_keep_positions(self, sequence: pd.DataFrame) -> np.ndarray:
         """Positions ``apply_observation_process`` keeps, in order."""
         n = len(sequence)
+        # Segment loads keep every cropped row, including a leading NaN,
+        # so the time axis is not trimmed and group ids stay aligned.
+        if getattr(self, "_keep_all_rows", False):
+            return np.arange(n, dtype=np.int64)
         base, _suffix = _split_process(self.observation_process)
         if base in PARITY_PROCESSES:
             first_valid = sequence.first_valid_index()
@@ -2547,6 +3009,334 @@ class XhroProper(Xhro):
         self.split_boundaries = split_boundaries_from_ids(self.subject_index_per_row)
         self.update_sequence_length(self.seq_len)
 
+    def _init_waveform_segments(self, base: str, suffix: str | None) -> None:
+        """Load each configured range on its own and split windows at the joins.
+
+        Normalisation uses each subject's non-test rows (the waveform
+        last-20% cut on that subject's ranges, in the order written) and
+        is applied to every row of that subject. Gap-split rules still
+        run later, on top of these segment edges.
+        """
+        if not _is_unset(self.crop_start_sec) or not _is_unset(self.crop_end_sec):
+            raise ValueError(
+                "segments replaces crop_start_sec/crop_end_sec. Unset the crop "
+                f"keys (got crop_start_sec={self.crop_start_sec!r}, "
+                f"crop_end_sec={self.crop_end_sec!r})."
+            )
+        specs = parse_waveform_segments(self.segments, data_dir=self.path_to_data)
+        declared = _optional_label_list(self.dataset_label)
+        named = list(dict.fromkeys(seg["subject"] for seg in specs))
+        if declared is not None and set(declared) != set(named):
+            raise ValueError(
+                "dataset_label subjects "
+                f"{declared} do not match segments subjects {named}."
+            )
+        if self.resample_hz is not None:
+            warnings.warn(
+                "resample_hz is ignored for waveform segments; each segment "
+                "stays on its native time axis and missing samples stay NaN.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        columns = _columns_for_base(base)
+        sessions: dict[str, Path] = {}
+        frames: dict[str, pd.DataFrame] = {}
+        mask_weight: list[tuple[int, float]] = []
+        for label in named:
+            try:
+                session_dir = _require_session_dir(
+                    self.path_to_data,
+                    label,
+                    self.variant,
+                    data_root=self.data_root,
+                    corpus=self.corpus,
+                )
+            except FileNotFoundError as exc:
+                raise ValueError(f"unknown subject {label!r}: {exc}") from exc
+            frame = load_proper_frame(
+                session_dir,
+                base,
+                resample_hz=None,
+                max_fill_gap_sec=self.max_fill_gap_sec,
+            )
+            frame = apply_block_mask(frame, self.block_mask_file, self.block_mask_mode)
+            frac = frame.attrs.get("block_mask_fraction")
+            if frac is not None:
+                mask_weight.append((len(frame), float(frac)))
+            sessions[label] = session_dir
+            frames[label] = frame
+        if self.block_mask_file is not None and mask_weight:
+            total = sum(n for n, _frac in mask_weight)
+            self.block_mask_fraction = (
+                sum(n * frac for n, frac in mask_weight) / total if total else 0.0
+            )
+
+        next_group = 0
+        kept: list[dict] = []
+        dropped: list[dict] = []
+        for spec_index, spec in enumerate(specs):
+            label = spec["subject"]
+            cropped = crop_waveform_segment(
+                frames[label], spec["start"], spec["end"], label
+            )
+            values = _observation_matrix(cropped, columns)
+            present = (
+                cropped[PRESENT_COL].to_numpy(dtype=bool)
+                if PRESENT_COL in cropped.columns
+                else None
+            )
+            record = {
+                "subject": label,
+                "start": float(spec["start"]),
+                "end": float(spec["end"]),
+                "n_samples": int(len(cropped)),
+                "missing_rate": float(dataset_missing_rate(values, present)),
+                "spec_index": int(spec_index),
+                "values": values,
+                "present": present,
+                "frame": cropped,
+            }
+            if self.seq_len is not None and len(cropped) < int(self.seq_len):
+                msg = (
+                    f"[XhroProper][segment] {label} [{spec['start']}, {spec['end']}] "
+                    f"has {len(cropped)} samples, shorter than seq_len "
+                    f"{int(self.seq_len)}; dropping it."
+                )
+                print("WARNING " + msg)
+                warnings.warn(msg, UserWarning, stacklevel=2)
+                dropped.append(record)
+                continue
+            record["frame"], next_group = _retag_window_groups(cropped, next_group)
+            kept.append(record)
+
+        if not kept:
+            raise ValueError(
+                "every waveform segment is shorter than "
+                f"seq_len={int(self.seq_len)}; dropped {len(dropped)} segment(s)."
+            )
+
+        self._share_segment_columns(kept)
+        self._zscore_segment_subjects(kept)
+
+        pre_values = np.concatenate([seg["values"] for seg in kept], axis=0)
+        if any(seg["present"] is not None for seg in kept):
+            pre_present = np.concatenate(
+                [
+                    seg["present"]
+                    if seg["present"] is not None
+                    else np.ones(len(seg["values"]), dtype=bool)
+                    for seg in kept
+                ]
+            )
+        else:
+            pre_present = None
+        self.dataset_missing_rate = dataset_missing_rate(pre_values, pre_present)
+        if self.gap_split_quantile is None:
+            self.dataset_gap_quantile = None
+        else:
+            self.dataset_gap_quantile = gap_length_quantile(
+                contiguous_run_lengths(missing_row_mask(pre_values, pre_present)),
+                self.gap_split_quantile,
+            )
+        clock = pd.concat(
+            [seg["frame"]["datetime"] for seg in kept], ignore_index=True
+        )
+        deltas = clock.diff().dt.total_seconds().dropna()
+        self.sampling_freq = None
+        if len(deltas):
+            med = float(deltas.median())
+            if med > 0:
+                self.sampling_freq = 1.0 / med
+        if self.sampling_freq is None:
+            self.sampling_freq = 250.0
+
+        parity = base in PARITY_PROCESSES
+        seq_parts = []
+        mask_parts = []
+        frame_parts = []
+        reports = []
+        for seg in kept:
+            offset = int(seg["subject_offset"])
+            n_seg = len(seg["values"])
+            cut = int(seg["subject_cut"])
+            n_sub = int(seg["subject_n"])
+            if self.split == "test":
+                keep_lo, keep_hi = cut, n_sub
+            else:
+                keep_lo, keep_hi = 0, cut
+            local_lo = max(keep_lo, offset) - offset
+            local_hi = min(keep_hi, offset + n_seg) - offset
+            report = {
+                "subject": seg["subject"],
+                "start": seg["start"],
+                "end": seg["end"],
+                "n_samples": seg["n_samples"],
+                "missing_rate": seg["missing_rate"],
+                "dropped": None,
+                "row_lo": None,
+                "row_hi": None,
+                "spec_index": seg["spec_index"],
+            }
+            if local_hi > local_lo:
+                raw = seg["values"][local_lo:local_hi]
+                piece_frame = seg["frame"].iloc[local_lo:local_hi].reset_index(drop=True)
+                seq_parts.append(
+                    _apply_waveform_piece_suffix(
+                        seg["scaled"][local_lo:local_hi], suffix, parity=parity
+                    )
+                )
+                mask = np.isnan(raw)
+                if mask.ndim == 1:
+                    mask = mask.reshape(-1, 1)
+                mask_parts.append(mask)
+                frame_parts.append(piece_frame)
+                report["_rows"] = int(local_hi - local_lo)
+            reports.append(report)
+        for seg in dropped:
+            reports.append(
+                {
+                    "subject": seg["subject"],
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "n_samples": seg["n_samples"],
+                    "missing_rate": seg["missing_rate"],
+                    "dropped": "shorter_than_seq_len",
+                    "row_lo": None,
+                    "row_hi": None,
+                    "spec_index": seg["spec_index"],
+                }
+            )
+        reports.sort(key=lambda row: int(row["spec_index"]))
+        if not seq_parts:
+            raise ValueError(
+                "waveform segments produced no rows for "
+                f"split={self.split!r} after the 20% cut."
+            )
+        cursor = 0
+        for report in reports:
+            report.pop("spec_index", None)
+            rows = report.pop("_rows", None)
+            if not rows:
+                continue
+            report["row_lo"] = cursor
+            report["row_hi"] = cursor + int(rows)
+            cursor += int(rows)
+
+        self.seq = torch.tensor(np.concatenate(seq_parts, axis=0), dtype=torch.float32)
+        self.missing_mask = np.concatenate(mask_parts, axis=0)
+        self.full_sequence = pd.concat(frame_parts, ignore_index=True)
+        self.is_segmented_1d = False
+        got = int(self.seq.shape[1]) if self.seq.ndim == 2 else 1
+        if self.x_dim is None:
+            self.x_dim = got
+        elif got != int(self.x_dim):
+            raise ValueError(
+                f"Expected x_dim={self.x_dim}, got {got} "
+                f"for process {self.observation_process!r}."
+            )
+        subject_order = list(dict.fromkeys(seg["subject"] for seg in kept))
+        self.dataset_labels = subject_order
+        self.session_dirs = [sessions[label] for label in subject_order]
+        self.session_dir = self.session_dirs[0]
+        self.waveform_segments = reports
+        print(
+            f"[XhroProper][segments] {self.observation_process} "
+            f"subjects={subject_order} segments={len(kept)} "
+            f"dropped={len(dropped)} rows={int(pre_values.shape[0])} "
+            f"fs≈{self.sampling_freq:.4g} Hz"
+        )
+        self._keep_all_rows = True
+        self.segment_index_per_row = self._aligned_segment_index(
+            self.full_sequence, len(self.seq)
+        )
+        self.filled_run_sec = self._aligned_float_column(
+            self.full_sequence, FILLED_RUN_COL, len(self.seq)
+        )
+        self.observed_per_row = self._aligned_bool_column(
+            self.full_sequence, PRESENT_COL, len(self.seq)
+        )
+        self.filled_gap_spans = self._filled_gap_spans(self.full_sequence, len(self.seq))
+        self.missing_run_spans = self._missing_run_spans(self.full_sequence, len(self.seq))
+        if self.segment_index_per_row is not None:
+            self.split_boundaries = split_boundaries_from_ids(self.segment_index_per_row)
+        self.update_sequence_length(self.seq_len)
+
+    @staticmethod
+    def _share_segment_columns(segments: list[dict]) -> None:
+        """Give every segment a column that any segment already has.
+
+        A later concat would otherwise fill the missing side with NaN and
+        turn a bool present-flag into garbage.
+        """
+        for column, fill in ((PRESENT_COL, True), (FILLED_RUN_COL, 0.0)):
+            if not any(column in seg["frame"].columns for seg in segments):
+                continue
+            for seg in segments:
+                frame = seg["frame"]
+                if column in frame.columns:
+                    continue
+                frame = frame.copy()
+                if fill is True:
+                    frame[column] = np.ones(len(frame), dtype=bool)
+                else:
+                    frame[column] = np.zeros(len(frame), dtype=np.float64)
+                seg["frame"] = frame
+
+    @staticmethod
+    def _zscore_segment_subjects(segments: list[dict]) -> None:
+        """Fit each subject on its own non-test rows, in written order."""
+        by_subject: dict[str, list[dict]] = {}
+        for seg in segments:
+            by_subject.setdefault(seg["subject"], []).append(seg)
+        for subject, segs in by_subject.items():
+            stacked = np.concatenate([seg["values"] for seg in segs], axis=0)
+            n = int(stacked.shape[0])
+            cut = _waveform_head_length(n)
+            non_test = np.zeros(n, dtype=bool)
+            non_test[:cut] = True
+            scaled = _zscore_waveform_subject(stacked, non_test, subject)
+            offset = 0
+            for seg in segs:
+                n_seg = len(seg["values"])
+                seg["scaled"] = scaled[offset : offset + n_seg]
+                seg["subject_offset"] = offset
+                seg["subject_cut"] = cut
+                seg["subject_n"] = n
+                offset += n_seg
+
+    def _log_waveform_segments(self) -> None:
+        """One line per configured range: subject, times, samples, missing, windows."""
+        table = getattr(self, "waveform_segments", None)
+        if not table:
+            return
+        starts = [int(i) for i in (getattr(self, "data_idx", None) or [])]
+        length = getattr(self, "seq_len", None)
+        for row in table:
+            lo = row.get("row_lo")
+            hi = row.get("row_hi")
+            if lo is None or hi is None:
+                windows = 0
+            elif length is None:
+                windows = sum(int(lo) <= s < int(hi) for s in starts)
+            else:
+                need = int(length)
+                windows = sum(int(lo) <= s and s + need <= int(hi) for s in starts)
+            row["windows"] = int(windows)
+            dropped = row.get("dropped")
+            extra = f" dropped={dropped}" if dropped else ""
+            rate = row.get("missing_rate")
+            if rate is None or not np.isfinite(rate):
+                rate_s = "nan"
+            else:
+                rate_s = f"{float(rate):.6g}"
+            print(
+                f"[XhroProper][segment] subject={row['subject']} "
+                f"start={row['start']} end={row['end']} "
+                f"n_samples={row['n_samples']} missing_rate={rate_s} "
+                f"windows={windows}{extra}"
+            )
+
     def window_subject_id(self, index: int) -> str:
         """Session folder name for the window at ``data_idx[index]``."""
         return self.window_subject[index]
@@ -2558,33 +3348,37 @@ class XhroProper(Xhro):
             # Non-overlapping windows, including curriculum resizes, go
             # through ``Xhro.update_sequence_length`` → ``find_indices``.
             if new_seq_len is None:
-                return super().update_sequence_length(None, minimum_nan_ratio)
-            num_frames = int(self.seq.shape[0])
-            requested = int(new_seq_len)
-            seq_len, boundaries = resolve_recut_length(
-                num_frames,
-                requested,
-                getattr(self, "split_boundaries", None),
-                getattr(self, "missing_run_spans", None),
-                getattr(self, "max_gap_window_frac", None),
-                gap_quantile=getattr(self, "dataset_gap_quantile", None),
-            )
-            if (
-                self.overlap
-                and not getattr(self, "strict_non_overlap", False)
-                and _boundary_cuts(boundaries, num_frames) is not None
-            ):
-                if seq_len < requested:
-                    print(
-                        f"[XhroProper] seq_len {requested} exceeds the longest "
-                        f"unbroken span {seq_len}; using {seq_len}."
-                    )
-                begin_window_recut(self)
-                log_gap_split_recut(self, seq_len, num_frames)
-                return self._update_waveform_segment_windows(
-                    seq_len, minimum_nan_ratio, boundaries
+                super().update_sequence_length(None, minimum_nan_ratio)
+            else:
+                num_frames = int(self.seq.shape[0])
+                requested = int(new_seq_len)
+                seq_len, boundaries = resolve_recut_length(
+                    num_frames,
+                    requested,
+                    getattr(self, "split_boundaries", None),
+                    getattr(self, "missing_run_spans", None),
+                    getattr(self, "max_gap_window_frac", None),
+                    gap_quantile=getattr(self, "dataset_gap_quantile", None),
                 )
-            return super().update_sequence_length(new_seq_len, minimum_nan_ratio)
+                if (
+                    self.overlap
+                    and not getattr(self, "strict_non_overlap", False)
+                    and _boundary_cuts(boundaries, num_frames) is not None
+                ):
+                    if seq_len < requested:
+                        print(
+                            f"[XhroProper] seq_len {requested} exceeds the longest "
+                            f"unbroken span {seq_len}; using {seq_len}."
+                        )
+                    begin_window_recut(self)
+                    log_gap_split_recut(self, seq_len, num_frames)
+                    self._update_waveform_segment_windows(
+                        seq_len, minimum_nan_ratio, boundaries
+                    )
+                else:
+                    super().update_sequence_length(new_seq_len, minimum_nan_ratio)
+            self._log_waveform_segments()
+            return
         begin_window_recut(self)
         if new_seq_len is None:
             self.data_idx = [0]
