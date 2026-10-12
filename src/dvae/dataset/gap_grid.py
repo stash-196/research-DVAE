@@ -1,0 +1,598 @@
+"""Native-grid gap keys written next to ``t`` / ``datetime_ns``.
+
+Stages 04–09b may carry:
+
+* ``present`` — bool per row. ``False`` is an inserted NaN row (lost packet).
+* ``segment_id`` — per-row id. A change is a hard segment boundary.
+* ``segment_bounds`` — ``(S, 2)`` half-open ``[start, end)`` pairs, or a 1-d
+  edge array of length ``S + 1``. Used only when ``segment_id`` is absent.
+* ``gap_indices`` — row indices of hard boundaries only (first row of the
+  next piece). Redundant when ``segment_id`` already changes there.
+* a per-gap table, one entry per gap: ``gap_t_start``, ``gap_n_missing``,
+  ``gap_duration_s``, ``gap_filled``, ``gap_kind``, ``gap_index``.
+  ``gap_t_start`` uses the same clock as ``t``. ``gap_index`` is the first
+  inserted row of a filled gap, or the first row after a hard gap.
+
+Old files omit these keys. Callers then keep today's window index rule.
+"""
+
+from __future__ import annotations
+
+import warnings
+
+import numpy as np
+import pandas as pd
+
+PRESENT_COL = "__present"
+SEGMENT_COL = "__segment_id"
+GROUP_COL = "__window_group"
+FILLED_RUN_COL = "__filled_run_sec"
+
+_ROW_KEYS = ("present", "segment_id")
+_TABLE_KEYS = (
+    "gap_t_start",
+    "gap_n_missing",
+    "gap_duration_s",
+    "gap_filled",
+    "gap_kind",
+    "gap_index",
+)
+_ALL_KEYS = _ROW_KEYS + ("segment_bounds", "gap_indices") + _TABLE_KEYS
+_META_COLS = (PRESENT_COL, SEGMENT_COL, GROUP_COL)
+
+
+def npz_has_gap_grid(npz) -> bool:
+    files = npz.files
+    return any(key in files for key in _ALL_KEYS)
+
+
+def attach_gap_grid(df: pd.DataFrame, npz, max_fill_gap_sec) -> pd.DataFrame:
+    """NaN out ``present=False`` rows and tag window groups. No-op if no keys."""
+    if not npz_has_gap_grid(npz):
+        return df
+    n = len(df)
+    t = np.asarray(npz["t"], dtype=np.float64) if "t" in npz.files else None
+    present = _read_present(npz, n)
+    segment_id = _read_segment_id(npz, n)
+    if present is not None:
+        _blank_absent_rows(df, present)
+        df[PRESENT_COL] = present
+    hard = _read_gap_indices(npz)
+    spans = _long_filled_spans(
+        npz, n, t, present, max_fill_gap_sec
+    )
+    if segment_id is not None:
+        df[SEGMENT_COL] = segment_id
+    if segment_id is not None or hard.size or spans:
+        df[GROUP_COL] = window_group_ids(n, segment_id, hard, spans)
+    if present is not None:
+        df[FILLED_RUN_COL] = filled_run_seconds(n, present, t, npz)
+    return df
+
+
+def combine_gap_grid(df: pd.DataFrame) -> pd.DataFrame:
+    """Fold suffixed meta columns after an outer datetime merge.
+
+    A row is present only when every stage that has the flag says so.
+    A window group changes when either stage's group changes. Signal
+    values are left as each stage blanked them: an ECG hole does not
+    NaN a real EEG sample on the same timestamp.
+    """
+    out = df
+    px, py = f"{PRESENT_COL}_x", f"{PRESENT_COL}_y"
+    if px in out.columns or py in out.columns:
+        left = _bool_side(out, px)
+        right = _bool_side(out, py)
+        out[PRESENT_COL] = left & right
+        out = out.drop(columns=[c for c in (px, py) if c in out.columns])
+    for name in (SEGMENT_COL, GROUP_COL):
+        x, y = f"{name}_x", f"{name}_y"
+        if x not in out.columns and y not in out.columns:
+            continue
+        ax = out[x] if x in out.columns else pd.Series(0, index=out.index)
+        ay = out[y] if y in out.columns else pd.Series(0, index=out.index)
+        codes = _factorize_pairs(ax, ay)
+        out[name] = codes
+        out = out.drop(columns=[c for c in (x, y) if c in out.columns])
+    return _combine_filled_run(out)
+
+
+def gap_load_stats(frame: pd.DataFrame) -> dict:
+    """Rows, present fraction, segment runs, and window split points.
+
+    No gap keys: every row counts as present, one segment, no split points.
+    That is the old-file fallback. ``segments`` follows ``segment_id``
+    (or bounds). ``split_points`` follows the window group, so a long
+    filled gap adds cuts without pretending to be a new file segment.
+    """
+    n = int(len(frame))
+    if PRESENT_COL in frame.columns and n:
+        present_frac = float(np.mean(frame[PRESENT_COL].to_numpy(dtype=bool)))
+    else:
+        present_frac = 1.0
+    if SEGMENT_COL in frame.columns and n:
+        sid = frame[SEGMENT_COL].to_numpy()
+        n_segments = 1 + int(np.sum(sid[1:] != sid[:-1])) if n > 1 else 1
+    else:
+        n_segments = 1 if n else 0
+    if GROUP_COL in frame.columns and n > 1:
+        gid = frame[GROUP_COL].to_numpy()
+        n_splits = int(np.sum(gid[1:] != gid[:-1]))
+    else:
+        n_splits = 0
+    return {
+        "rows": n,
+        "present_frac": present_frac,
+        "segments": n_segments,
+        "split_points": n_splits,
+    }
+
+
+def split_boundaries_from_ids(ids) -> np.ndarray:
+    """Sample indices where the per-row id changes. Empty if there is one run."""
+    ids = np.asarray(ids)
+    if ids.size < 2:
+        return np.asarray([], dtype=np.int64)
+    return (np.flatnonzero(ids[1:] != ids[:-1]) + 1).astype(np.int64)
+
+
+def filled_run_seconds(n, present, t, npz) -> np.ndarray:
+    """Seconds of the filled-gap run each row belongs to. Present rows are 0.
+
+    Contiguous ``present=False`` rows default to ``count * median(dt)``.
+    A filled gap-table entry overwrites the rows it covers with
+    ``gap_duration_s``.
+    """
+    n = int(n)
+    dur = np.zeros(n, dtype=np.float64)
+    if present is None or n == 0:
+        return dur
+    flags = np.asarray(present, dtype=bool).reshape(-1)
+    dt = _median_positive_dt(t)
+    i = 0
+    while i < n:
+        if flags[i]:
+            i += 1
+            continue
+        j = i + 1
+        while j < n and not flags[j]:
+            j += 1
+        dur[i:j] = (j - i) * dt
+        i = j
+    table = _gap_table(npz)
+    if table is None or "gap_filled" not in table or "gap_duration_s" not in table:
+        return dur
+    filled = _as_bool(table["gap_filled"]).reshape(-1)
+    duration = np.asarray(table["gap_duration_s"], dtype=np.float64).reshape(-1)
+    n_missing = table.get("gap_n_missing")
+    gap_index = table.get("gap_index")
+    gap_t = table.get("gap_t_start")
+    for i, (is_filled, gap_dur) in enumerate(zip(filled, duration)):
+        if not bool(is_filled) or not np.isfinite(gap_dur):
+            continue
+        count = None
+        if n_missing is not None and np.isfinite(np.asarray(n_missing).reshape(-1)[i]):
+            count = int(np.asarray(n_missing).reshape(-1)[i])
+        start = _locate_gap_start(
+            n,
+            t,
+            None if gap_index is None else np.asarray(gap_index).reshape(-1)[i],
+            None if gap_t is None else np.asarray(gap_t).reshape(-1)[i],
+        )
+        rows = _filled_rows(n, flags, start, count)
+        if rows.size:
+            dur[rows] = float(gap_dur)
+    return dur
+
+
+def recut_threshold_sec(max_fill_gap_sec, filled_nan_log_sec):
+    """Seconds a filled NaN run must exceed to be counted at a re-cut.
+
+    ``max_fill_gap_sec`` wins when it is set, because that is the split
+    rule. Otherwise the log uses ``filled_nan_log_sec``. Both unset → no
+    cutoff (the log prints ``na``).
+    """
+    if max_fill_gap_sec is not None:
+        return float(max_fill_gap_sec)
+    if filled_nan_log_sec is not None:
+        return float(filled_nan_log_sec)
+    return None
+
+
+def count_long_filled_windows(filled_run_sec, starts, seq_len, threshold_sec):
+    """Windows whose rows include a filled run longer than ``threshold_sec``.
+
+    ``None`` threshold means the cutoff is unset. No run array means none
+    of the windows contain a filled gap.
+    """
+    if threshold_sec is None:
+        return None
+    starts = [] if starts is None else list(starts)
+    if filled_run_sec is None or not starts:
+        return 0
+    runs = np.asarray(filled_run_sec, dtype=np.float64).reshape(-1)
+    if seq_len is None:
+        length = int(runs.size)
+    else:
+        length = int(seq_len)
+    if length < 1:
+        return 0
+    limit = float(threshold_sec)
+    n_long = 0
+    for start in starts:
+        s = int(start)
+        piece = runs[s : s + length]
+        if piece.size and np.nanmax(piece) > limit:
+            n_long += 1
+    return n_long
+
+
+def log_window_recut(dataset) -> None:
+    """Print window count and how many hold a too-long filled NaN run."""
+    threshold = recut_threshold_sec(
+        getattr(dataset, "max_fill_gap_sec", None),
+        getattr(dataset, "filled_nan_log_sec", None),
+    )
+    starts = getattr(dataset, "data_idx", None)
+    seq_len = getattr(dataset, "seq_len", None)
+    n_windows = 0 if starts is None else len(starts)
+    n_long = count_long_filled_windows(
+        getattr(dataset, "filled_run_sec", None),
+        starts,
+        seq_len if seq_len is not None else _seq_rows(dataset),
+        threshold,
+    )
+    if seq_len is None:
+        seq_s = "None"
+    else:
+        seq_s = str(int(seq_len))
+    if n_long is None:
+        long_s = "na"
+        thr_s = "unset"
+    else:
+        long_s = str(int(n_long))
+        thr_s = f"{float(threshold):.6g}"
+    name = type(dataset).__name__
+    print(
+        f"[{name}] re-cut seq_len={seq_s} windows={n_windows} "
+        f"long_filled_windows={long_s} threshold_sec={thr_s}"
+    )
+
+
+def _seq_rows(dataset) -> int:
+    seq = getattr(dataset, "seq", None)
+    if seq is None:
+        return 0
+    return int(len(seq))
+
+
+def _median_positive_dt(t) -> float:
+    if t is None:
+        return 0.0
+    tt = np.asarray(t, dtype=np.float64).reshape(-1)
+    if tt.size < 2:
+        return 0.0
+    step = np.diff(tt)
+    step = step[np.isfinite(step) & (step > 0)]
+    if step.size == 0:
+        return 0.0
+    return float(np.median(step))
+
+
+def _combine_filled_run(df: pd.DataFrame) -> pd.DataFrame:
+    x, y = f"{FILLED_RUN_COL}_x", f"{FILLED_RUN_COL}_y"
+    if x not in df.columns and y not in df.columns:
+        return df
+    def _side(column: str) -> np.ndarray:
+        if column not in df.columns:
+            return np.zeros(len(df), dtype=np.float64)
+        return np.asarray(
+            pd.to_numeric(df[column], errors="coerce").fillna(0.0),
+            dtype=np.float64,
+        )
+    df[FILLED_RUN_COL] = np.maximum(_side(x), _side(y))
+    return df.drop(columns=[c for c in (x, y) if c in df.columns])
+
+
+def window_group_ids(n, segment_id, hard_indices, filled_spans) -> np.ndarray:
+    """Contiguous ids. A window may not contain two ids.
+
+    ``filled_spans`` are row-index arrays of filled gaps that must be
+    isolated (the rows themselves, then the samples after them).
+    """
+    n = int(n)
+    cuts = np.zeros(n, dtype=bool)
+    if segment_id is not None and n > 1:
+        sid = np.asarray(segment_id)
+        cuts[1:] |= sid[1:] != sid[:-1]
+    for raw in np.asarray(hard_indices, dtype=np.int64).ravel():
+        gi = int(raw)
+        if 0 < gi < n:
+            cuts[gi] = True
+    for span in filled_spans:
+        rows = np.asarray(span, dtype=np.int64).ravel()
+        if rows.size == 0:
+            continue
+        start = int(rows[0])
+        after = int(rows[-1]) + 1
+        if 0 < start < n:
+            cuts[start] = True
+        if 0 < after < n:
+            cuts[after] = True
+    group = np.zeros(n, dtype=np.int64)
+    gid = 0
+    for i in range(1, n):
+        if cuts[i]:
+            gid += 1
+        group[i] = gid
+    return group
+
+
+def _blank_absent_rows(df: pd.DataFrame, present: np.ndarray) -> None:
+    absent = ~np.asarray(present, dtype=bool)
+    if not absent.any():
+        return
+    for col in list(df.columns):
+        if col == "datetime" or str(col).startswith("__"):
+            continue
+        values = np.asarray(df[col], dtype=np.float64).copy()
+        if values.shape != absent.shape:
+            continue
+        values[absent] = np.nan
+        df[col] = values
+
+
+def _read_present(npz, n: int):
+    if "present" not in npz.files:
+        return None
+    present = np.asarray(npz["present"])
+    if present.ndim == 2 and 1 in present.shape:
+        present = present.reshape(-1)
+    if present.shape != (n,):
+        raise ValueError(
+            f"present length {present.shape} != series length {n}"
+        )
+    return _as_bool(present)
+
+
+def _read_segment_id(npz, n: int):
+    if "segment_id" in npz.files:
+        sid = np.asarray(npz["segment_id"])
+        if sid.ndim == 2 and 1 in sid.shape:
+            sid = sid.reshape(-1)
+        if sid.shape != (n,):
+            raise ValueError(
+                f"segment_id length {sid.shape} != series length {n}"
+            )
+        if sid.dtype.kind == "f" and not np.all(np.isfinite(sid)):
+            raise ValueError("segment_id contains non-finite values")
+        return sid.astype(np.int64)
+    if "segment_bounds" in npz.files:
+        return _segment_id_from_bounds(npz["segment_bounds"], n)
+    return None
+
+
+def _segment_id_from_bounds(bounds, n: int) -> np.ndarray:
+    pairs = _half_open_pairs(bounds, n)
+    sid = np.full(n, -1, dtype=np.int64)
+    for i, (start, end) in enumerate(pairs):
+        a = int(start)
+        b = int(end)
+        if b < a:
+            raise ValueError(
+                f"segment_bounds pair {(a, b)} has end < start"
+            )
+        lo = min(max(a, 0), n)
+        hi = min(max(b, 0), n)
+        sid[lo:hi] = i
+    if np.any(sid < 0):
+        warnings.warn(
+            "segment_bounds did not cover every row; uncovered runs "
+            "become their own window groups.",
+            UserWarning,
+            stacklevel=2,
+        )
+        next_id = int(sid.max()) + 1 if np.any(sid >= 0) else 0
+        i = 0
+        while i < n:
+            if sid[i] >= 0:
+                i += 1
+                continue
+            j = i + 1
+            while j < n and sid[j] < 0:
+                j += 1
+            sid[i:j] = next_id
+            next_id += 1
+            i = j
+    return sid
+
+
+def _half_open_pairs(bounds, n: int) -> np.ndarray:
+    """Return ``(S, 2)`` half-open pairs.
+
+    A 1-d array is the edges. A ``(S, 2)`` array whose ends meet the next
+    start, or whose largest end equals ``n``, is already half-open.
+    Otherwise ends are treated as inclusive.
+    """
+    raw = np.asarray(bounds)
+    if raw.ndim == 1:
+        edges = raw.astype(np.int64).ravel()
+        if edges.size < 2:
+            raise ValueError(
+                f"segment_bounds edge array is too short: shape {raw.shape}"
+            )
+        return np.column_stack([edges[:-1], edges[1:]])
+    if raw.ndim != 2:
+        raise ValueError(f"segment_bounds shape {raw.shape} is not 1-d or 2-d")
+    if raw.shape[1] == 2:
+        pairs = raw.astype(np.int64)
+    elif raw.shape[0] == 2:
+        pairs = raw.T.astype(np.int64)
+    else:
+        raise ValueError(
+            f"segment_bounds shape {raw.shape} is not (S, 2) or (2, S)"
+        )
+    if pairs.size == 0:
+        return pairs.reshape(0, 2)
+    ends = pairs[:, 1]
+    starts = pairs[:, 0]
+    meets = pairs.shape[0] > 1 and bool(np.all(ends[:-1] == starts[1:]))
+    if meets or int(np.max(ends)) == n:
+        return pairs
+    inclusive = pairs.copy()
+    inclusive[:, 1] = inclusive[:, 1] + 1
+    return inclusive
+
+
+def _read_gap_indices(npz) -> np.ndarray:
+    if "gap_indices" not in npz.files:
+        return np.asarray([], dtype=np.int64)
+    return np.asarray(npz["gap_indices"], dtype=np.int64).ravel()
+
+
+def _long_filled_spans(npz, n, t, present, max_fill_gap_sec):
+    if max_fill_gap_sec is None:
+        return []
+    limit = float(max_fill_gap_sec)
+    table = _gap_table(npz)
+    if table is None or "gap_duration_s" not in table or "gap_filled" not in table:
+        warnings.warn(
+            "max_fill_gap_sec is set but the NPZ has no gap_duration_s/"
+            "gap_filled table; filled gaps are not extra split points.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return []
+    duration = np.asarray(table["gap_duration_s"], dtype=np.float64).reshape(-1)
+    filled = _as_bool(table["gap_filled"]).reshape(-1)
+    n_missing = table.get("gap_n_missing")
+    gap_index = table.get("gap_index")
+    gap_t = table.get("gap_t_start")
+    spans = []
+    for i, (is_filled, dur) in enumerate(zip(filled, duration)):
+        if not is_filled:
+            continue
+        if not np.isfinite(dur) or dur <= limit:
+            continue
+        start = _locate_gap_start(
+            n,
+            t,
+            None if gap_index is None else gap_index[i],
+            None if gap_t is None else gap_t[i],
+        )
+        count = None
+        if n_missing is not None and np.isfinite(n_missing[i]):
+            count = int(n_missing[i])
+        rows = _filled_rows(n, present, start, count)
+        if rows.size == 0:
+            warnings.warn(
+                f"filled gap {i} (duration_s={dur}) could not be placed "
+                "on the series; it is not a split point.",
+                UserWarning,
+                stacklevel=2,
+            )
+            continue
+        spans.append(rows)
+    return spans
+
+
+def _gap_table(npz):
+    cols = {}
+    for key in _TABLE_KEYS:
+        if key in npz.files:
+            cols[key] = np.atleast_1d(np.asarray(npz[key]))
+    if not cols:
+        return None
+    lengths = {key: int(np.asarray(value).reshape(-1).shape[0]) for key, value in cols.items()}
+    # gap_kind may be a 0-d label accidentally; a real table shares one length.
+    unique = set(lengths.values())
+    if len(unique) != 1:
+        raise ValueError(
+            "Gap-table columns must share one length, got "
+            + ", ".join(f"{key}={length}" for key, length in sorted(lengths.items()))
+        )
+    return cols
+
+
+def _locate_gap_start(n, t, gap_index, gap_t_start):
+    if gap_index is not None and np.isfinite(gap_index):
+        gi = int(gap_index)
+        if 0 <= gi < n:
+            return gi
+    if (
+        t is not None
+        and gap_t_start is not None
+        and np.isfinite(gap_t_start)
+    ):
+        tt = np.asarray(t, dtype=np.float64).reshape(-1)
+        if tt.shape[0] != n:
+            return None
+        pos = int(np.argmin(np.abs(tt - float(gap_t_start))))
+        tol = _half_sample(tt)
+        if abs(float(tt[pos]) - float(gap_t_start)) <= tol:
+            return pos
+    return None
+
+
+def _half_sample(t: np.ndarray) -> float:
+    if t.size < 2:
+        return 0.0
+    step = np.diff(t)
+    step = step[np.isfinite(step) & (step > 0)]
+    if step.size == 0:
+        return 0.0
+    return 0.5 * float(np.median(step))
+
+
+def _filled_rows(n, present, start, n_missing) -> np.ndarray:
+    if start is None:
+        return np.asarray([], dtype=np.int64)
+    if n_missing is not None and n_missing > 0:
+        end = min(n, start + int(n_missing))
+        return np.arange(start, end, dtype=np.int64)
+    if present is not None:
+        end = start
+        flags = np.asarray(present, dtype=bool)
+        while end < n and not flags[end]:
+            end += 1
+        if end == start:
+            return np.asarray([], dtype=np.int64)
+        return np.arange(start, end, dtype=np.int64)
+    return np.asarray([start], dtype=np.int64)
+
+
+def _as_bool(values) -> np.ndarray:
+    arr = np.asarray(values)
+    if arr.dtype == bool:
+        return arr
+    if arr.dtype.kind in "SUO":
+        text = np.char.lower(np.char.strip(arr.astype(str)))
+        return np.isin(text, ("1", "true", "yes", "y"))
+    return np.asarray(arr, dtype=np.float64) != 0
+
+
+def _bool_side(df: pd.DataFrame, column: str) -> np.ndarray:
+    if column not in df.columns:
+        return np.ones(len(df), dtype=bool)
+    values = df[column]
+    # Outer-join holes are not present.
+    if values.dtype != bool:
+        mask = values.isna()
+        out = _as_bool(values.fillna(0))
+        out = np.asarray(out, dtype=bool).copy()
+        out[np.asarray(mask, dtype=bool)] = False
+        return out
+    # Boolean NA is possible after an outer merge of bool columns.
+    filled = values.astype("boolean").fillna(False)
+    return filled.to_numpy(dtype=bool)
+
+
+def _factorize_pairs(left: pd.Series, right: pd.Series) -> np.ndarray:
+    def _token(value):
+        if pd.isna(value):
+            return ""
+        return str(int(value))
+
+    key = [f"{_token(a)}|{_token(b)}" for a, b in zip(left, right)]
+    codes, _ = pd.factorize(key, sort=False)
+    return np.asarray(codes, dtype=np.int64)

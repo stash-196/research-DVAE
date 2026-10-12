@@ -15,6 +15,7 @@ import torch
 
 from dvae.dataset.xhro_proper_dataset import (
     COARSE_WINDOW_RNG_SEED,
+    dataset_row_group,
     intra_subject_window_starts,
 )
 from dvae.eval.utils.durstewitz_eval_metrics import power_spectrum_error
@@ -39,12 +40,7 @@ def _seq_array(dataset) -> np.ndarray:
 
 
 def _group_index(dataset):
-    group = getattr(dataset, "subject_index_per_row", None)
-    if group is None:
-        group = getattr(dataset, "stay_id_per_row", None)
-    if group is None:
-        return None
-    return np.asarray(group)
+    return dataset_row_group(dataset)
 
 
 def _candidate_starts(dataset, window_len: int) -> np.ndarray:

@@ -207,8 +207,40 @@ def find_indices_srnn(frame_num1, frame_num2, seq_len, input_n=10):
     return idxo1, idxo2
 
 
-def find_indices(num_frames, seq_len, num_indices):
+def _boundary_cuts(boundaries, num_frames):
+    """Sorted sample indices strictly inside ``[1, num_frames)``.
 
+    ``None`` or an empty list means the series is one piece. A window
+    ``[start, start + seq_len)`` crosses a cut ``c`` when
+    ``start < c < start + seq_len``.
+    """
+    if boundaries is None:
+        return None
+    cuts = np.asarray(boundaries, dtype=np.int64).ravel()
+    if cuts.size == 0:
+        return None
+    n = int(num_frames)
+    cuts = np.unique(cuts)
+    cuts = cuts[(cuts > 0) & (cuts < n)]
+    if cuts.size == 0:
+        return None
+    return cuts
+
+
+def longest_unbroken_span(num_frames, boundaries) -> int:
+    """Longest run that does not contain a split boundary."""
+    n = int(num_frames)
+    if n <= 0:
+        return 0
+    cuts = _boundary_cuts(boundaries, n)
+    if cuts is None:
+        return n
+    edges = np.r_[0, cuts, n]
+    return int(np.diff(edges).max())
+
+
+def _find_indices_span(num_frames, seq_len, num_indices):
+    """Historical single-span start picker. Local RNG, never the global one."""
     SEED = 1234567890
     # Local RNG: never reseed NumPy's global generator (it drives the PTF masks).
     rng = np.random.RandomState(SEED)
@@ -228,6 +260,33 @@ def find_indices(num_frames, seq_len, num_indices):
         list2 = list2[:t]
         listf = np.concatenate((list1, list2))
     return listf
+
+
+def find_indices(num_frames, seq_len, num_indices, boundaries=None):
+    """Window starts. ``boundaries`` are sample indices a window must not cross.
+
+    No boundaries (``None`` or empty) is the historical single-span call.
+    With boundaries, the same picker runs inside each piece, each with its
+    own ``RandomState(1234567890)``. Starts are offsets into ``num_frames``.
+    """
+    cuts = _boundary_cuts(boundaries, num_frames)
+    if cuts is None:
+        return _find_indices_span(num_frames, seq_len, num_indices)
+    edges = np.r_[0, cuts, int(num_frames)]
+    parts = []
+    seq_len = int(seq_len)
+    for start, end in zip(edges[:-1], edges[1:]):
+        span = int(end - start)
+        n_idx = span // seq_len
+        if n_idx < 1:
+            continue
+        local = np.asarray(
+            _find_indices_span(span, seq_len, n_idx), dtype=np.int64
+        ).ravel()
+        parts.append(local + int(start))
+    if not parts:
+        return np.asarray([], dtype=np.int64)
+    return np.concatenate(parts)
 
 
 if __name__ == "__main__":

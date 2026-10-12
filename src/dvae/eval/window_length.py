@@ -1,4 +1,4 @@
-"""Cap requested windows to the longest subject or stay.
+"""Cap requested windows to the longest subject, stay, or waveform segment.
 
 Pooled ``len(seq)`` counts every subject. A window cannot cross that
 boundary, so a request longer than one subject used to produce an empty

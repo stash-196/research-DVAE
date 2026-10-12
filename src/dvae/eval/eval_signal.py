@@ -650,6 +650,10 @@ if __name__ == "__main__":
         corpus=optional_config_str(cfg, "DataFrame", "corpus"),
         crop_start_sec=optional_config_float(cfg, "DataFrame", "crop_start_sec"),
         crop_end_sec=optional_config_float(cfg, "DataFrame", "crop_end_sec"),
+        max_fill_gap_sec=optional_config_float(cfg, "DataFrame", "max_fill_gap_sec"),
+        filled_nan_log_sec=optional_config_float(
+            cfg, "DataFrame", "filled_nan_log_sec"
+        ),
         **coarse_dataframe_kwargs(cfg),
     )
 

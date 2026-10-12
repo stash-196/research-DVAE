@@ -20,6 +20,20 @@ Time axis: prefers ``datetime_ns`` on the NPZ (UTC ns + ``tz``). If missing
 (old runs), reconstructs from ``config_snapshot.json`` / inventory ``t_start``
 plus relative ``t``.
 
+Lost packets on the native grid (stages 05–09b, also emitted on stage 04):
+optional keys ``present``, ``segment_id``, ``segment_bounds``, ``gap_indices``,
+and the per-gap table ``gap_t_start`` / ``gap_n_missing`` / ``gap_duration_s`` /
+``gap_filled`` / ``gap_kind`` / ``gap_index``. When they are absent the
+waveform path is unchanged. ``present=False`` is an inserted NaN row and is
+missing in the observation and the missing-data mask. Window starts stay
+inside one ``segment_id`` run, the same way coarse windows stay inside one
+subject. ``[DataFrame] max_fill_gap_sec`` (unset by default) additionally
+splits filled gaps longer than that many seconds. Those split sample
+indices stay on the dataset and are applied again whenever
+``update_sequence_length`` rebuilds windows (curriculum resizes included).
+``filled_nan_log_sec`` is the re-cut log cutoff when ``max_fill_gap_sec``
+is unset. Crop stays time-based.
+
 Session directory
 -----------------
 ``data_dir`` (``path_to_data``) is the dataset root. The folder that
@@ -142,6 +156,15 @@ import numpy as np
 import pandas as pd
 import torch
 
+from .gap_grid import (
+    FILLED_RUN_COL,
+    GROUP_COL,
+    attach_gap_grid,
+    combine_gap_grid,
+    gap_load_stats,
+    log_window_recut,
+    split_boundaries_from_ids,
+)
 from .xhro_dataset import (
     Xhro,
     _resolve_original_observation_process,
@@ -457,6 +480,7 @@ def _df_from_npz(
     columns: dict[str, np.ndarray],
     *,
     t0: pd.Timestamp | None,
+    max_fill_gap_sec=None,
 ) -> pd.DataFrame:
     dt = datetime_from_npz(npz, t0=t0)
     data = {"datetime": dt}
@@ -468,11 +492,12 @@ def _df_from_npz(
                 f"Column {name!r} length {len(a)} != datetime length {n}"
             )
         data[name] = a
-    return pd.DataFrame(data)
+    return attach_gap_grid(pd.DataFrame(data), npz, max_fill_gap_sec)
 
 
 def _align_on_datetime(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
-    return pd.merge(left, right, on="datetime", how="outer", sort=True)
+    merged = pd.merge(left, right, on="datetime", how="outer", sort=True)
+    return combine_gap_grid(merged)
 
 
 def _maybe_resample(df: pd.DataFrame, resample_hz: float | None) -> pd.DataFrame:
@@ -497,13 +522,24 @@ def load_proper_frame(
     base_process: str,
     *,
     resample_hz: float | None = None,
+    max_fill_gap_sec=None,
 ) -> pd.DataFrame:
-    """Build a datetime-indexed table for one observation-process base name."""
+    """Build a datetime-indexed table for one observation-process base name.
+
+    ``max_fill_gap_sec`` unset leaves filled gaps inside windows. Gap-grid
+    keys are read from the stage NPZ when present. ``resample_hz`` is still
+    the unchanged exact reindex; segment indices are on the native grid.
+    """
     inter = session_dir / "intermediates"
     t0 = _infer_t0(session_dir)
 
     def load_stage(name: str):
         return _load_npz(inter / name)
+
+    def frame_from(npz, columns: dict[str, np.ndarray]) -> pd.DataFrame:
+        return _df_from_npz(
+            npz, columns, t0=t0, max_fill_gap_sec=max_fill_gap_sec
+        )
 
     need05 = base_process in {
         "raw_ch1",
@@ -525,10 +561,10 @@ def load_proper_frame(
         frames = []
         if need05:
             z = load_stage("stage05_ecg_filtered.npz")
-            frames.append(_df_from_npz(z, _series_from_stage05(z), t0=t0))
+            frames.append(frame_from(z, _series_from_stage05(z)))
         if need06:
             z = load_stage("stage06_eeg_filtered.npz")
-            frames.append(_df_from_npz(z, _series_from_stage06(z), t0=t0))
+            frames.append(frame_from(z, _series_from_stage06(z)))
         df = frames[0] if len(frames) == 1 else _align_on_datetime(frames[0], frames[1])
         return _maybe_resample(df, resample_hz)
 
@@ -546,25 +582,24 @@ def load_proper_frame(
                 f"{path} has no 'eeg_clean_template' array "
                 f"(found {sorted(z.files)})."
             )
-        df = _df_from_npz(
+        df = frame_from(
             z,
             {
                 "eeg_clean_template": np.asarray(
                     z["eeg_clean_template"], dtype=np.float64
                 )
             },
-            t0=t0,
         )
         return _maybe_resample(df, resample_hz)
 
     if base_process.startswith("ppg_"):
         z = load_stage("stage07_ppg_filtered.npz")
-        df = _df_from_npz(z, _series_from_stage07(z), t0=t0)
+        df = frame_from(z, _series_from_stage07(z))
         return _maybe_resample(df, resample_hz)
 
     if base_process.startswith("acc_"):
         z = load_stage("stage08_acc.npz")
-        df = _df_from_npz(z, _series_from_stage08(z), t0=t0)
+        df = frame_from(z, _series_from_stage08(z))
         return _maybe_resample(df, resample_hz)
 
     raise ValueError(f"Unknown XhroProper observation base: {base_process!r}")
@@ -707,6 +742,13 @@ def _normalize_coarse_test_split(value) -> str:
             f"{_COARSE_TEST_SPLITS}, got {value!r}."
         )
     return key
+
+
+def _optional_nonnegative_float(value, name: str) -> float | None:
+    out = _optional_user_float(value, name)
+    if out is not None and out < 0:
+        raise ValueError(f"{name} must be >= 0, got {out!r}.")
+    return out
 
 
 def _optional_user_float(value, name: str) -> float | None:
@@ -1181,14 +1223,24 @@ def max_group_span(group_index, n_rows: int) -> int:
     return int(np.diff(bounds).max())
 
 
+def dataset_row_group(dataset):
+    """Per-row subject, stay, or waveform segment. None if the series is one piece."""
+    for name in (
+        "subject_index_per_row",
+        "stay_id_per_row",
+        "segment_index_per_row",
+    ):
+        group = getattr(dataset, name, None)
+        if group is not None:
+            return np.asarray(group)
+    return None
+
+
 def dataset_max_window_length(dataset) -> int:
-    """Longest window that stays inside one subject, stay, or the whole series."""
+    """Longest window that stays inside one subject, stay, or waveform segment."""
     seq = getattr(dataset, "seq", None)
     n_rows = 0 if seq is None else int(len(seq))
-    group = getattr(dataset, "subject_index_per_row", None)
-    if group is None:
-        group = getattr(dataset, "stay_id_per_row", None)
-    return max_group_span(group, n_rows)
+    return max_group_span(dataset_row_group(dataset), n_rows)
 
 
 def crop_proper_frame(
@@ -1424,6 +1476,13 @@ class XhroProper(Xhro):
       - crop_start_sec / crop_end_sec: inclusive seconds from the first
         timestamp. Unset means no crop. Waveform path only, after load and
         before the 20% test split.
+      - max_fill_gap_sec: waveform only. Unset keeps filled gaps as NaN
+        inside windows. When set, a filled gap with ``gap_duration_s``
+        greater than this becomes a window split, like a segment boundary.
+        The split indices are stored and reused on every re-cut.
+      - filled_nan_log_sec: waveform log only. When ``max_fill_gap_sec``
+        is unset, a re-cut reports how many windows contain a filled NaN
+        run longer than this. Unset means that count is ``na``.
 
     Omit both ``data_root`` and ``corpus`` to keep today's packet-loss path:
     ``{data_dir}/xhro_packet_loss/grok_output/{dataset_label}_{variant}``.
@@ -1453,6 +1512,8 @@ class XhroProper(Xhro):
         coarse_eeg_max_rel_delta=None,
         crop_start_sec=None,
         crop_end_sec=None,
+        max_fill_gap_sec=None,
+        filled_nan_log_sec=None,
         **kwargs,
     ):
         self.path_to_data = data_dir
@@ -1480,6 +1541,15 @@ class XhroProper(Xhro):
         self.resample_hz = resample_hz
         self.crop_start_sec = crop_start_sec
         self.crop_end_sec = crop_end_sec
+        self.max_fill_gap_sec = _optional_nonnegative_float(
+            max_fill_gap_sec, "max_fill_gap_sec"
+        )
+        self.filled_nan_log_sec = _optional_nonnegative_float(
+            filled_nan_log_sec, "filled_nan_log_sec"
+        )
+        self.segment_index_per_row = None
+        self.split_boundaries = None
+        self.filled_run_sec = None
         self.coarse_mode = False
         base, _suffix = _split_process(self.observation_process)
         if base in COARSE_OBS_COLUMNS:
@@ -1512,7 +1582,10 @@ class XhroProper(Xhro):
             )
 
         the_sequence = load_proper_frame(
-            self.session_dir, base, resample_hz=self.resample_hz
+            self.session_dir,
+            base,
+            resample_hz=self.resample_hz,
+            max_fill_gap_sec=self.max_fill_gap_sec,
         )
         the_sequence = crop_proper_frame(
             the_sequence, self.crop_start_sec, self.crop_end_sec
@@ -1526,10 +1599,14 @@ class XhroProper(Xhro):
         if self.sampling_freq is None:
             self.sampling_freq = 250.0
         log_tag = self.variant if self.variant is not None else self.corpus
+        gap_stats = gap_load_stats(the_sequence)
         print(
             f"[XhroProper][{log_tag}] {self.observation_process} "
-            f"from {self.session_dir}  rows={len(the_sequence)}  "
-            f"fs≈{self.sampling_freq:.4g} Hz"
+            f"from {self.session_dir}  rows={gap_stats['rows']}  "
+            f"fs≈{self.sampling_freq:.4g} Hz  "
+            f"present_frac={gap_stats['present_frac']:.3f}  "
+            f"segments={gap_stats['segments']}  "
+            f"split_points={gap_stats['split_points']}"
         )
 
         if self.split == "test":
@@ -1580,7 +1657,68 @@ class XhroProper(Xhro):
             )
 
         self.seq = the_sequence
+        self.segment_index_per_row = self._aligned_segment_index(
+            self.full_sequence, len(self.seq)
+        )
+        self.filled_run_sec = self._aligned_float_column(
+            self.full_sequence, FILLED_RUN_COL, len(self.seq)
+        )
+        if self.segment_index_per_row is not None:
+            self.split_boundaries = split_boundaries_from_ids(
+                self.segment_index_per_row
+            )
         self.update_sequence_length(self.seq_len)
+
+    def _apply_keep_positions(self, sequence: pd.DataFrame) -> np.ndarray:
+        """Positions ``apply_observation_process`` keeps, in order."""
+        n = len(sequence)
+        base, _suffix = _split_process(self.observation_process)
+        if base in PARITY_PROCESSES:
+            first_valid = sequence.first_valid_index()
+        else:
+            first_valid = self._value_frame(sequence).first_valid_index()
+        if first_valid is None:
+            return np.arange(n, dtype=np.int64)
+        loc = sequence.index.get_loc(first_valid)
+        if isinstance(loc, slice):
+            start = 0 if loc.start is None else int(loc.start)
+        elif isinstance(loc, np.ndarray):
+            start = int(np.flatnonzero(loc)[0])
+        else:
+            start = int(loc)
+        return np.arange(start, n, dtype=np.int64)
+
+    def _aligned_segment_index(self, frame: pd.DataFrame, n_seq: int):
+        """Window-group ids on the same rows as ``seq``. None on old files."""
+        if GROUP_COL not in frame.columns:
+            return None
+        group = frame[GROUP_COL].to_numpy(dtype=np.int64)
+        group = group[self._apply_keep_positions(frame)]
+        if len(group) != int(n_seq):
+            warnings.warn(
+                f"[XhroProper] window groups ({len(group)}) do not match "
+                f"seq ({n_seq}); segment windowing disabled for this series.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return None
+        return group
+
+    def _aligned_float_column(self, frame: pd.DataFrame, column: str, n_seq: int):
+        """One float per ``seq`` row, or None when the frame has no such column."""
+        if column not in frame.columns:
+            return None
+        values = frame[column].to_numpy(dtype=np.float64)
+        values = values[self._apply_keep_positions(frame)]
+        if len(values) != int(n_seq):
+            warnings.warn(
+                f"[XhroProper] {column} length {len(values)} does not match "
+                f"seq ({n_seq}); filled-gap durations are not logged.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return None
+        return values
 
     def _value_frame(self, sequence: pd.DataFrame) -> pd.DataFrame:
         base, _ = _split_process(self.observation_process)
@@ -1766,6 +1904,7 @@ class XhroProper(Xhro):
                 f"result_shape={tuple(self.seq.shape)}"
             )
         self.window_subject = []
+        self.split_boundaries = split_boundaries_from_ids(self.subject_index_per_row)
         self.update_sequence_length(self.seq_len)
 
     def window_subject_id(self, index: int) -> str:
@@ -1774,6 +1913,16 @@ class XhroProper(Xhro):
 
     def update_sequence_length(self, new_seq_len=None, minimum_nan_ratio=None):
         if not getattr(self, "coarse_mode", False):
+            # Overlapping waveform windows use the per-segment stride.
+            # Non-overlapping windows, including curriculum resizes, go
+            # through ``Xhro.update_sequence_length`` → ``find_indices``,
+            # which reads ``split_boundaries`` on every call.
+            bounds = getattr(self, "split_boundaries", None)
+            grouped = getattr(self, "segment_index_per_row", None) is not None
+            if grouped and bounds is not None and len(bounds) > 0 and self.overlap:
+                return self._update_waveform_segment_windows(
+                    new_seq_len, minimum_nan_ratio
+                )
             return super().update_sequence_length(new_seq_len, minimum_nan_ratio)
         if new_seq_len is None:
             self.data_idx = [0]
@@ -1784,6 +1933,7 @@ class XhroProper(Xhro):
             print(
                 "[XhroProper][coarse] seq_len is None; one placeholder window at 0."
             )
+            log_window_recut(self)
             return
         new_seq_len = int(new_seq_len)
         if new_seq_len < 1:
@@ -1796,6 +1946,7 @@ class XhroProper(Xhro):
             self.data_idx = []
             self.window_subject = []
             print("[XhroProper][coarse] no subject rows; window set is empty.")
+            log_window_recut(self)
             return
         if new_seq_len > span:
             print(
@@ -1842,4 +1993,55 @@ class XhroProper(Xhro):
                 chosen = chosen[split_point:]
         self.data_idx = [int(i) for i in np.asarray(chosen).tolist()]
         self.window_subject = [str(self.subject_per_row[i]) for i in self.data_idx]
+        log_window_recut(self)
+        return
+
+    def _update_waveform_segment_windows(self, new_seq_len, minimum_nan_ratio):
+        """Starts that lie inside one segment. Same split rule as coarse windows."""
+        if new_seq_len is None:
+            self.data_idx = [0]
+            print("[XhroProper] seq_len is None; one placeholder window at 0.")
+            log_window_recut(self)
+            return
+        new_seq_len = int(new_seq_len)
+        if new_seq_len < 1:
+            raise ValueError(f"seq_len must be >= 1, got {new_seq_len}.")
+        group = np.asarray(self.segment_index_per_row)
+        span = max_group_span(group, len(group))
+        if span < 1:
+            self.seq_len = new_seq_len
+            self.data_idx = []
+            print("[XhroProper] no rows; window set is empty.")
+            log_window_recut(self)
+            return
+        if new_seq_len > span:
+            print(
+                f"[XhroProper] seq_len {new_seq_len} exceeds the longest "
+                f"segment span {span}; using {span}."
+            )
+            new_seq_len = span
+        self.seq_len = new_seq_len
+        starts = intra_subject_window_starts(
+            group, self.seq_len, overlap=bool(self.overlap)
+        )
+        if minimum_nan_ratio is not None:
+            kept = []
+            for idx in starts:
+                window = self.seq[int(idx) : int(idx) + self.seq_len]
+                nan_ratio = float(np.float16(np.isnan(window)).mean())
+                if nan_ratio <= float(minimum_nan_ratio):
+                    kept.append(int(idx))
+            starts = np.asarray(kept, dtype=np.int64)
+            print(
+                f"[XhroProper] nan_ratio<={minimum_nan_ratio}: "
+                f"windows={len(starts)}"
+            )
+        if self.split == "test":
+            chosen = starts
+        else:
+            chosen = np.array(starts, copy=True)
+            train_idx, val_idx = self.split_dataset(chosen, self.val_indices)
+            chosen = train_idx if self.split == "train" else val_idx
+        self.data_idx = [int(i) for i in np.asarray(chosen).tolist()]
+        log_window_recut(self)
         return

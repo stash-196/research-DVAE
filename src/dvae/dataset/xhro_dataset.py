@@ -7,6 +7,7 @@ from torch.utils.data import Dataset
 import os
 import numpy as np
 import pandas as pd
+from .gap_grid import log_window_recut
 from .utils import data_utils
 from .utils.visualize_nans import plot_nan_heatmap, plot_segment_length_hist
 
@@ -414,13 +415,32 @@ class Xhro(Dataset):
         return self.seq[start_frame:end_frame]
 
     def update_sequence_length(self, new_seq_len=None, minimum_nan_ratio=None):
-        # Only one index representing the start of each sequence
+        # Only one index representing the start of each sequence.
+        # ``split_boundaries`` (sample indices) are kept on the dataset and
+        # applied on every re-cut, including curriculum resizes.
         if new_seq_len is not None:
-            self.seq_len = new_seq_len
-            # Recalculate data_idx based on the new sequence length
             num_frames = self.seq.shape[0]
+            boundaries = getattr(self, "split_boundaries", None)
+            span = data_utils.longest_unbroken_span(num_frames, boundaries)
+            new_seq_len = int(new_seq_len)
+            if (
+                data_utils._boundary_cuts(boundaries, num_frames) is not None
+                and span >= 1
+                and new_seq_len > span
+            ):
+                print(
+                    f"[{type(self).__name__}] seq_len {new_seq_len} exceeds the "
+                    f"longest unbroken span {span}; using {span}."
+                )
+                new_seq_len = span
+            self.seq_len = new_seq_len
+            # Recalculate data_idx based on the new sequence length.
+            # Each span uses the local RandomState inside find_indices.
             all_indices = data_utils.find_indices(
-                num_frames, self.seq_len, num_frames // self.seq_len
+                num_frames,
+                self.seq_len,
+                num_frames // self.seq_len,
+                boundaries=boundaries,
             )
 
             if minimum_nan_ratio is not None:
@@ -462,6 +482,7 @@ class Xhro(Dataset):
             self.data_idx = [0]
             print("[Dataset] Using entire sequence (seq_len is None). Total frames: 1")
 
+        log_window_recut(self)
         return
 
 
