@@ -115,8 +115,9 @@ if __name__ == "__main__":
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
     experiment_name = (
-        "20260930-"
-        + "Lorenz_ep20000_auto0-0.8_miss0.1-0.7_shPLRNN_hdim40_L80_clip10_eStop200_otf"
+        "20261013-"
+        + "XHROproper_pktloss_rowsBCD_segABC_rt-rx_ep20000_ss0-7_MTRNN9d_clip10_raw_all_4d_hdim200_eStop500"
+        # + "20260930-Lorenz_ep20000_auto0-0.8_miss0.1-0.7_shPLRNN_hdim40_L80_clip10_eStop200_otf"
         # + "20260921-Lorenz_..._indicate"  # prior indicate twin
         # + "XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_raw_ch1-4_1d_sep_hdim200_eStop500"
     )
@@ -125,28 +126,29 @@ if __name__ == "__main__":
     dataset_name = [
         # "Xhro",
         # "XhroPacketLoss",
+        "XhroProper",  # rows (b)-(d): packet-loss XHRO3506, see row_cells below
         # "PhysioNet2012",
-        "Lorenz63",
+        # "Lorenz63",
         # "SHO",
         # "DampedSHO"
     ]
 
     models = [
-        "RNN",
+        # "RNN",
         # "VRNN",
-        # "MT_RNN",
+        "MT_RNN",
         # "MT_VRNN"
     ]
     rnn_types = [
         # "PLRNN",
-        # "RNN",
-        "shPLRNN",  # Hess/Durstewitz shallow PLRNN cell; no GTF. Set hidden_sh_size (L).
+        "RNN",
+        # "shPLRNN",  # Hess/Durstewitz shallow PLRNN cell; no GTF. Set hidden_sh_size (L).
         # "LSTM",
     ]
 
     # Change to dictionary of lists
     # Network
-    x_dim = [1]  # Lorenz only_x / indicate doubles x_dim below
+    x_dim = [4]  # raw_all: ch1, ch2 ECG; ch3, ch4 EEG
     if dataset_name[0] == "PhysioNet2012":
         x_dim = [5]
     # dense_x = [1]
@@ -154,7 +156,7 @@ if __name__ == "__main__":
     z_dim = [9]
     dense_z = [[16, 32]]
 
-    dim_rnn = [40]  # M — match prior Lorenz LSTM/RNN hdim40 sweeps
+    dim_rnn = [200]  # usual MT-RNN; was 40 for Lorenz shPLRNN. M — match prior Lorenz LSTM/RNN hdim40 sweeps
     # shPLRNN hidden width L (typically L >= M = dim_rnn). Unused when type_rnn=RNN.
     hidden_sh_size = [80]  # L = 2M
     alphas = [
@@ -182,7 +184,7 @@ if __name__ == "__main__":
         early_stop_patience = [200]
     save_frequency = [200]
     gradient_clip = [10.0]
-    optimize_alphas = [False]  # unused for shPLRNN; A already sigmoid-constrained
+    optimize_alphas = [True]
     sampling_method = [
         "ss",
         # "ptf",
@@ -330,6 +332,50 @@ if __name__ == "__main__":
     # (no variant suffix; mask_label ignored). data_root overrides that parent.
     corpus = ["None"]
     data_root = ["None"]
+    # Waveform crop / block mask / selection / warm-up keys. Single values
+    # (blank = template default) unless row_cells below overrides them.
+    crop_start_sec = [""]
+    crop_end_sec = [""]
+    block_mask_file = [""]
+    block_mask_mode = [""]
+    val_criteria = ["recon,spectrum"]
+    warmup_order = ["window_first"]
+    warmup_patience_start_frac = [0.2]
+    warmup_patience_start = [""]
+
+    # Rows (b)-(d) of the Planned trainings table: one cell per stream x
+    # segment. realtime and retrans have different recording ids, so the
+    # pair is listed here instead of crossing dataset_label x mask_label.
+    # Each cell is merged into every config and suffixed onto the tag.
+    # Empty list = the plain grid above.
+    XHRO_PKTLOSS_SESSIONS = {
+        "realtime": "XHRO3506_20260622T142410000+0900",
+        "retrans": "XHRO3506_20260622T142411000+0900",
+    }
+    PKTLOSS_SEGMENTS = {  # seconds from each session's first timestamp
+        "segA": (4440.0, 4740.0),  # row (b)
+        "segB": (5070.0, 5670.0),  # row (c)
+        "segC": (5670.0, 6270.0),  # row (d)
+    }
+    # v2 block flags; not_good rows -> NaN / present=false. TODO: set the
+    # real v2 flags npz (keys t0, dirty, lowamp, good). A missing file
+    # raises at load, so these configs cannot train unmasked by accident.
+    PKTLOSS_BLOCK_MASK_FILE = "TODO_SET_v2_block_flags_XHRO3506.npz"
+    row_cells = []
+    if dataset_name[0] == "XhroProper":
+        for _seg, (_lo, _hi) in PKTLOSS_SEGMENTS.items():
+            for _stream, _rec in XHRO_PKTLOSS_SESSIONS.items():
+                row_cells.append(
+                    {
+                        "dataset_label": _rec,
+                        "mask_label": _stream,
+                        "crop_start_sec": _lo,
+                        "crop_end_sec": _hi,
+                        "block_mask_file": PKTLOSS_BLOCK_MASK_FILE,
+                        "block_mask_mode": "not_good",
+                        "_tag_suffix": f"{_stream}_{_seg}",
+                    }
+                )
     # Coarse XhroProper only (other datasets ignore these). Single values so
     # the existing grid does not grow. See xhro_proper_coarse_example().
     # Waveform multi-range runs are also off this grid. See
@@ -523,6 +569,14 @@ if __name__ == "__main__":
             # with no variant suffix. data_root overrides that parent.
             "corpus": corpus,
             "data_root": data_root,
+            "crop_start_sec": crop_start_sec,
+            "crop_end_sec": crop_end_sec,
+            "block_mask_file": block_mask_file,
+            "block_mask_mode": block_mask_mode,
+            "val_criteria": val_criteria,
+            "warmup_order": warmup_order,
+            "warmup_patience_start_frac": warmup_patience_start_frac,
+            "warmup_patience_start": warmup_patience_start,
             "coarse_test_split": coarse_test_split,
             "coarse_eeg_artifact_mask": coarse_eeg_artifact_mask,
             "coarse_eeg_artifact_k": coarse_eeg_artifact_k,
@@ -599,6 +653,16 @@ if __name__ == "__main__":
         model_name: get_configurations_for_model(params)
         for model_name, params in model_params.items()
     }
+    if row_cells:
+        _expanded = {}
+        for model_name, configs in all_configs.items():
+            _expanded[model_name] = []
+            for config in configs:
+                for cell in row_cells:
+                    merged = {**config, **cell}
+                    merged["tag"] = f"{config['tag']}_{merged.pop('_tag_suffix')}"
+                    _expanded[model_name].append(merged)
+        all_configs = _expanded
 
     for model_name, configs in all_configs.items():
         print(f"Number of configurations for {model_name}: {len(configs)}")
