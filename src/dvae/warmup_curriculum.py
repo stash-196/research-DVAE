@@ -4,9 +4,11 @@ Two `[Training]` keys. Blank keys take the new-run defaults:
 
 * `warmup_order` blank is `window_first`. The sequence grows to
   `sequence_len` first, while the autonomous fraction stays at
-  `auto_warm_start` (full teacher forcing when that start is 0), then
-  autonomous and noise, then KL. `auto_first` is the previous order:
-  autonomous and noise together, then KL, then sequence length.
+  `auto_warm_start` (full teacher forcing when that start is 0). A
+  window bump does not reset autonomous, noise, or KL. Those ramps then
+  run once, at the full length. `auto_first` is the previous nested
+  order: a full autonomous ramp, then KL, at every window length, and
+  each sequence-length bump resets autonomous, KL, and noise.
 * `warmup_patience_start` blank is 2. The patience that fires each bump
   grows linearly from that start to `early_stop_patience` across the
   planned bumps. The final stop, once every phase is done, always uses
@@ -17,10 +19,11 @@ Two `[Training]` keys. Blank keys take the new-run defaults:
 restores `auto_first` and the single patience when those two keys are
 blank. An explicit order or an explicit patience still wins.
 
-Planned bumps are counted once from the config: window steps + autonomous
-steps + KL steps. A sequence-length bump still resets KL and the autonomous
-fraction, so `auto_first` can fire more bump events than that sum. Those
-extra events sit at the end of the schedule and use `early_stop_patience`.
+`window_first` counts window bumps + autonomous bumps + KL bumps.
+`auto_first` counts the nested total
+``window_steps * inner + window_steps + inner``, where ``inner`` is
+autonomous bumps plus KL bumps. With KL off that is
+``window_steps * auto_steps + window_steps + auto_steps``.
 
 Step counts replay the live bump arithmetic, including the `0.1` float
 residue (KL and a 0-to-limit autonomous ramp each take 11 steps, not 10).
@@ -229,6 +232,29 @@ def autonomous_step_count(
     return steps
 
 
+def planned_bump_count(
+    order: str,
+    window_steps: int,
+    autonomous_steps: int,
+    kl_steps: int,
+) -> int:
+    """How many bump triggers the patience schedule stretches across.
+
+    ``window_first`` runs each phase once: windows at the start values,
+    then one autonomous ramp, then KL if it is enabled.
+
+    ``auto_first`` repeats the inner ramp after every window reset,
+    including one ramp at the final length:
+    ``window_steps * inner + window_steps + inner``, with
+    ``inner = autonomous_steps + kl_steps``.
+    """
+    inner = int(autonomous_steps) + int(kl_steps)
+    windows = int(window_steps)
+    if resolve_warmup_order(order) == ORDER_WINDOW_FIRST:
+        return windows + inner
+    return windows * inner + windows + inner
+
+
 def patience_at_bump(
     bump_index: int,
     n_planned: int,
@@ -240,8 +266,7 @@ def patience_at_bump(
     Index 0 is the first bump and uses `patience_start`. The last planned
     bump (index `n_planned - 1`) uses `early_stop_patience`. One planned
     bump uses the start; the final stop is a separate check and always
-    uses the full patience. Indexes past the schedule stay at the full
-    patience (the extra `auto_first` bumps after a window reset).
+    uses the full     patience. An index past the schedule stays at the full patience.
     """
     start = float(patience_start)
     early = float(early_stop_patience)
@@ -273,6 +298,7 @@ class BumpResult:
     sequence_len: int
     auto_bumped: bool
     noise_bumped: bool
+    reset_warmups: bool = False
 
 
 class WarmupCurriculum:
@@ -328,7 +354,12 @@ class WarmupCurriculum:
             bump=self.bump,
         )
         self.kl_steps = kl_step_count(self.enable_kl, self.bump)
-        self.n_planned = self.window_steps + self.autonomous_steps + self.kl_steps
+        self.n_planned = planned_bump_count(
+            self.order,
+            self.window_steps,
+            self.autonomous_steps,
+            self.kl_steps,
+        )
 
     def finished(self, auto, noise, kl, sequence_len) -> bool:
         kl_done = (not self.enable_kl) or kl >= 1.0
@@ -358,7 +389,12 @@ class WarmupCurriculum:
         )
 
     def apply_bump(self, auto, noise, kl, sequence_len) -> BumpResult:
-        """One bump. Window bumps reset KL, auto, and (optionally) noise."""
+        """One bump.
+
+        ``auto_first`` window bumps reset KL and the autonomous fraction,
+        and reset noise when ``noise_reset_on_window`` is set.
+        ``window_first`` window bumps leave those values alone.
+        """
         auto = float(auto)
         noise = float(noise)
         kl = float(kl)
@@ -381,6 +417,7 @@ class WarmupCurriculum:
                 break
         auto_bumped = False
         noise_bumped = False
+        reset_warmups = False
         if kind == "auto":
             auto, noise, auto_bumped, noise_bumped = _advance_auto_noise(
                 auto,
@@ -397,11 +434,13 @@ class WarmupCurriculum:
                 self.sequence_len,
                 sequence_len + int(self.bump * self.sequence_len),
             )
-            if self.enable_kl:
-                kl = 0.0
-            auto = self.auto_start
-            if self.noise_reset_on_window and self.enable_noise:
-                noise = self.noise_start
+            if self.order != ORDER_WINDOW_FIRST:
+                if self.enable_kl:
+                    kl = 0.0
+                auto = self.auto_start
+                if self.noise_reset_on_window and self.enable_noise:
+                    noise = self.noise_start
+                reset_warmups = True
         return BumpResult(
             kind=kind,
             auto=auto,
@@ -410,6 +449,7 @@ class WarmupCurriculum:
             sequence_len=sequence_len,
             auto_bumped=auto_bumped,
             noise_bumped=noise_bumped,
+            reset_warmups=reset_warmups,
         )
 
 
@@ -478,6 +518,7 @@ def simulate_recon_warmup(
                     "sequence_len": sequence_len,
                     "auto_bumped": False,
                     "noise_bumped": False,
+                    "reset_warmups": False,
                 }
             )
             return Simulation(events, active_each, True)
@@ -504,6 +545,7 @@ def simulate_recon_warmup(
                     "sequence_len": sequence_len,
                     "auto_bumped": bumped.auto_bumped,
                     "noise_bumped": bumped.noise_bumped,
+                    "reset_warmups": bumped.reset_warmups,
                 }
             )
             patience = 0

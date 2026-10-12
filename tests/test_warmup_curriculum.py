@@ -21,6 +21,7 @@ from dvae.warmup_curriculum import (
     format_patience,
     kl_step_count,
     patience_at_bump,
+    planned_bump_count,
     simulate_recon_warmup,
     warmup_action,
     warmup_settings_from_config,
@@ -233,7 +234,9 @@ def test_auto_first_order_resets_after_each_window():
     assert curriculum.window_steps == 2
     assert curriculum.autonomous_steps == 11
     assert curriculum.kl_steps == 11
-    assert curriculum.n_planned == 2 + 11 + 11
+    # Nested: a full inner ramp at each length, plus the window bumps.
+    inner = 11 + 11
+    assert curriculum.n_planned == 2 * inner + 2 + inner
     sim = simulate_recon_warmup(
         _flat(90),
         curriculum,
@@ -247,14 +250,13 @@ def test_auto_first_order_resets_after_each_window():
     body = kinds[:-1]
     phase = ["auto"] * 11 + ["kl"] * 11 + ["window"]
     assert body == phase * 2 + ["auto"] * 11 + ["kl"] * 11
-    # Restarts make more bump events than the config sum. The schedule
-    # length stays the sum; it is not multiplied by the resets.
-    assert len(body) > curriculum.n_planned
+    assert len(body) == curriculum.n_planned
     for event in sim.events:
         if event["kind"] == "window":
             assert event["auto"] == 0.0
             assert event["noise"] == 0.0
             assert event["kl"] == 0.0
+            assert event["reset_warmups"] is True
             assert event["sequence_len"] > event["sequence_before"]
 
 
@@ -302,6 +304,64 @@ def test_window_first_holds_teacher_forcing_until_sequence_len():
     assert first_auto["auto_bumped"] and first_auto["noise_bumped"]
     assert first_auto["auto"] > 0.0
     assert sim.events[w + a]["kind"] == "kl"
+    assert all(not event["reset_warmups"] for event in windows)
+
+
+def test_window_first_never_resets_auto_on_a_window_bump():
+    curriculum = _curriculum(
+        order="window_first",
+        auto_start=0.0,
+        auto_limit=1.0,
+        enable_noise=True,
+        noise_start=0.0,
+        noise_limit=1.0,
+        noise_reset_on_window=True,
+        enable_kl=True,
+        initial_sequence_len=80,
+        sequence_len=100,
+    )
+    bumped = curriculum.apply_bump(auto=0.4, noise=0.3, kl=0.5, sequence_len=80)
+    assert bumped.kind == "window"
+    assert bumped.sequence_len == 90
+    assert bumped.auto == pytest.approx(0.4)
+    assert bumped.noise == pytest.approx(0.3)
+    assert bumped.kl == pytest.approx(0.5)
+    assert bumped.reset_warmups is False
+
+    # Same inputs under auto_first still take the autonomous branch first.
+    # Force the window branch by sitting at the ramp limits.
+    legacy = _curriculum(
+        order="auto_first",
+        auto_start=0.0,
+        auto_limit=1.0,
+        enable_noise=True,
+        noise_start=0.0,
+        noise_limit=1.0,
+        noise_reset_on_window=True,
+        enable_kl=True,
+        initial_sequence_len=80,
+        sequence_len=100,
+    )
+    reset = legacy.apply_bump(auto=1.0, noise=1.0, kl=1.0, sequence_len=80)
+    assert reset.kind == "window"
+    assert reset.auto == pytest.approx(0.0)
+    assert reset.noise == pytest.approx(0.0)
+    assert reset.kl == pytest.approx(0.0)
+    assert reset.reset_warmups is True
+    held = curriculum.apply_bump(auto=1.0, noise=1.0, kl=1.0, sequence_len=80)
+    assert held.kind == "window"
+    assert held.auto == pytest.approx(1.0)
+    assert held.noise == pytest.approx(1.0)
+    assert held.kl == pytest.approx(1.0)
+    assert held.reset_warmups is False
+
+
+def test_patience_length_is_nested_only_for_auto_first():
+    assert planned_bump_count("window_first", 3, 2, 0) == 3 + 2
+    assert planned_bump_count("auto_first", 3, 2, 0) == 3 * 2 + 3 + 2
+    assert planned_bump_count("window_first", 3, 2, 4) == 3 + 2 + 4
+    assert planned_bump_count("auto_first", 3, 2, 4) == 3 * (2 + 4) + 3 + (2 + 4)
+    assert planned_bump_count("auto_first", 0, 2, 4) == 2 + 4
 
 
 def test_disabled_phases_are_skipped_in_both_orders():

@@ -1421,7 +1421,8 @@ class LearningAlgorithm:
                             current_sequence_len
                         )
                     )
-                    logger.info("Resetting KL & auto & noise warm-ups")
+                    if bumped.reset_warmups:
+                        logger.info("Resetting KL & auto & noise warm-ups")
                 else:
                     logger.info("Unknown early stop condition")
                 if bumped.kind != "none":
