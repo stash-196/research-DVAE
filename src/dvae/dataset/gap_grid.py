@@ -389,17 +389,81 @@ def log_window_recut(dataset) -> None:
     )
 
 
-def filled_gap_frac_cuts(spans, seq_len, frac, num_frames) -> np.ndarray:
-    """Cuts that isolate filled gaps longer than ``frac * seq_len`` samples.
+def missing_row_mask(values, present=None) -> np.ndarray:
+    """True on rows that are real missing data.
 
-    ``frac`` unset returns no cuts. The comparison is strict, in samples,
-    and uses the sequence length of this re-cut. A qualifying gap is cut
-    at its first row and at the first row after it, same as
-    ``max_fill_gap_sec``.
+    A row is missing when any observation cell is NaN, or when ``present``
+    is False (even if the stored values are finite). ``+inf`` and ``-inf``
+    are not missing. Training-time masks are not an input.
+    """
+    arr = np.asarray(values, dtype=np.float64)
+    if arr.ndim == 0:
+        arr = arr.reshape(1, 1)
+    elif arr.ndim == 1:
+        arr = arr.reshape(-1, 1)
+    if arr.shape[0] == 0:
+        return np.zeros(0, dtype=bool)
+    missing = np.isnan(arr).any(axis=1)
+    if present is not None:
+        flags = np.asarray(present, dtype=bool).reshape(-1)
+        if flags.shape[0] != missing.shape[0]:
+            raise ValueError(
+                f"present length {flags.shape[0]} != series length {missing.shape[0]}"
+            )
+        missing = np.logical_or(missing, ~flags)
+    return missing
+
+
+def contiguous_run_lengths(mask) -> np.ndarray:
+    """Lengths of contiguous True runs. Empty when nothing is missing."""
+    flags = np.asarray(mask, dtype=bool).reshape(-1)
+    if flags.size == 0 or not flags.any():
+        return np.asarray([], dtype=np.int64)
+    padded = np.concatenate([[False], flags, [False]])
+    edges = np.diff(padded.astype(np.int8))
+    starts = np.flatnonzero(edges == 1)
+    ends = np.flatnonzero(edges == -1)
+    return (ends - starts).astype(np.int64)
+
+
+def gap_length_quantile(lengths, quantile) -> float | None:
+    """Linear quantile of missing-run lengths. None when there are no runs."""
+    if quantile is None:
+        return None
+    runs = np.asarray(lengths, dtype=np.float64).reshape(-1)
+    if runs.size == 0:
+        return None
+    return float(np.quantile(runs, float(quantile)))
+
+
+def gap_split_limit(seq_len, frac, gap_quantile):
+    """Sample threshold for one re-cut, or None when the rule is off.
+
+    The rule is off when ``frac`` is unset. Otherwise the threshold is
+    ``frac * seq_len``, raised to ``gap_quantile`` when that length is set.
     """
     if frac is None or seq_len is None:
-        return np.asarray([], dtype=np.int64)
+        return None
     limit = float(frac) * int(seq_len)
+    if gap_quantile is not None:
+        limit = max(limit, float(gap_quantile))
+    return limit
+
+
+def filled_gap_frac_cuts(
+    spans, seq_len, frac, num_frames, gap_quantile=None
+) -> np.ndarray:
+    """Cuts that isolate missing runs longer than the gap-split threshold.
+
+    ``frac`` unset returns no cuts. The comparison is strict, in samples,
+    and uses the sequence length of this re-cut. The threshold is
+    ``max(frac * seq_len, gap_quantile)`` when the quantile length is set.
+    A qualifying run is cut at its first row and at the first row after it,
+    same as ``max_fill_gap_sec``.
+    """
+    limit = gap_split_limit(seq_len, frac, gap_quantile)
+    if limit is None:
+        return np.asarray([], dtype=np.int64)
     n = int(num_frames)
     cuts = []
     for span in spans or []:
@@ -417,6 +481,31 @@ def filled_gap_frac_cuts(spans, seq_len, frac, num_frames) -> np.ndarray:
     return np.unique(np.asarray(cuts, dtype=np.int64))
 
 
+def log_gap_split_recut(dataset, seq_len, num_frames) -> None:
+    """Log the quantile gap length, the effective threshold, and split count."""
+    frac = getattr(dataset, "max_gap_window_frac", None)
+    qlen = getattr(dataset, "dataset_gap_quantile", None)
+    name = type(dataset).__name__
+    q_s = "na" if qlen is None else f"{float(qlen):.6g}"
+    limit = gap_split_limit(seq_len, frac, qlen)
+    if limit is None:
+        print(
+            f"[{name}] gap_quantile_len={q_s} "
+            f"gap_split_threshold=off gap_splits=0"
+        )
+        return
+    spans = getattr(dataset, "missing_run_spans", None)
+    if spans is None:
+        spans = getattr(dataset, "filled_gap_spans", None)
+    cuts = filled_gap_frac_cuts(
+        spans, seq_len, frac, num_frames, gap_quantile=qlen
+    )
+    print(
+        f"[{name}] gap_quantile_len={q_s} "
+        f"gap_split_threshold={float(limit):.6g} gap_splits={int(cuts.size)}"
+    )
+
+
 def combine_boundaries(base, extra, num_frames):
     """Union of split indices strictly inside the series. None if there are none."""
     parts = []
@@ -431,12 +520,15 @@ def combine_boundaries(base, extra, num_frames):
     return _boundary_cuts(np.concatenate(parts), num_frames)
 
 
-def resolve_recut_length(num_frames, requested, base_boundaries, spans, frac):
+def resolve_recut_length(
+    num_frames, requested, base_boundaries, spans, frac, gap_quantile=None
+):
     """Sequence length and the split indices for this re-cut.
 
     ``max_gap_window_frac`` depends on the length, so a cap that shortens
     the window is applied again until the cuts stop changing. No cuts
-    leaves the requested length alone.
+    leaves the requested length alone. ``gap_quantile`` is the stored
+    missing-run quantile, in samples. None leaves the fraction alone.
     """
     n = int(num_frames)
     seq_len = int(requested)
@@ -444,7 +536,9 @@ def resolve_recut_length(num_frames, requested, base_boundaries, spans, frac):
     boundaries = combine_boundaries(base_boundaries, None, n)
     while seq_len not in seen:
         seen.add(seq_len)
-        extra = filled_gap_frac_cuts(spans, seq_len, frac, n)
+        extra = filled_gap_frac_cuts(
+            spans, seq_len, frac, n, gap_quantile=gap_quantile
+        )
         boundaries = combine_boundaries(base_boundaries, extra, n)
         if boundaries is None:
             return seq_len, None

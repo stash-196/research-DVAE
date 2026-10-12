@@ -13,6 +13,7 @@ from .gap_grid import (
     dataset_missing_rate,
     filter_window_starts,
     log_current_nan_window_rule,
+    log_gap_split_recut,
     log_window_recut,
     observed_row_mask,
     resolve_recut_length,
@@ -491,12 +492,16 @@ class Xhro(Dataset):
         if new_seq_len is not None:
             num_frames = self.seq.shape[0]
             requested = int(new_seq_len)
+            spans = getattr(self, "missing_run_spans", None)
+            if spans is None:
+                spans = getattr(self, "filled_gap_spans", None)
             seq_len, boundaries = resolve_recut_length(
                 num_frames,
                 requested,
                 getattr(self, "split_boundaries", None),
-                getattr(self, "filled_gap_spans", None),
+                spans,
                 getattr(self, "max_gap_window_frac", None),
+                gap_quantile=getattr(self, "dataset_gap_quantile", None),
             )
             if boundaries is not None and seq_len < requested:
                 print(
@@ -504,6 +509,7 @@ class Xhro(Dataset):
                     f"longest unbroken span {seq_len}; using {seq_len}."
                 )
             self.seq_len = seq_len
+            log_gap_split_recut(self, self.seq_len, num_frames)
             # Recalculate data_idx based on the new sequence length.
             # Each span uses the local RandomState inside find_indices.
             strict = bool(getattr(self, "strict_non_overlap", False))
@@ -535,6 +541,7 @@ class Xhro(Dataset):
             # Use entire sequence if seq_len is None
             self.data_idx = [0]
             print("[Dataset] Using entire sequence (seq_len is None). Total frames: 1")
+            log_gap_split_recut(self, None, getattr(self.seq, "shape", [0])[0])
             log_current_nan_window_rule(self, 0, minimum_nan_ratio)
 
         log_window_recut(self)

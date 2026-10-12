@@ -66,6 +66,8 @@ class DatasetConfig:
     # dataset_missing_rate + max_window_nan_excess.
     legacy_windowing: bool = False
     max_gap_window_frac: float | None = 0.25
+    # None disables the quantile term. 0.99 is the blank-key default.
+    gap_split_quantile: float | None = 0.99
     start_on_observed: bool = True
     strict_non_overlap: bool = True
     max_window_nan_ratio: float | None = None

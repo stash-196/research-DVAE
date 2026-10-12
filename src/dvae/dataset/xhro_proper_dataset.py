@@ -31,9 +31,14 @@ subject. ``[DataFrame] max_fill_gap_sec`` (unset by default) additionally
 splits filled gaps longer than that many seconds. Those split sample
 indices stay on the dataset and are applied again whenever
 ``update_sequence_length`` rebuilds windows (curriculum resizes included).
-``[DataFrame] max_gap_window_frac`` (default 0.25) splits a filled gap
-whose sample count is longer than that fraction of the current sequence
-length, and is recomputed on every re-cut. ``[DataFrame] start_on_observed``
+``[DataFrame] max_gap_window_frac`` (default 0.25) splits a contiguous
+missing run (NaN or ``present=False``) only when its length exceeds
+``max(fraction * sequence length, dataset_gap_quantile)``.
+``[DataFrame] gap_split_quantile`` (default 0.99) is that quantile of
+the missing-run lengths, computed once after the block mask and the
+time crop, before windowing. Empty or ``none`` drops the quantile term.
+The comparison is recomputed on every re-cut. ``legacy_windowing`` true
+disables the split when the fraction key is blank. ``[DataFrame] start_on_observed``
 (default true) moves a start that lands on ``present=False`` forward to
 the next observed sample in the same segment. ``[DataFrame]
 strict_non_overlap`` (default true) tiles each segment with abutting
@@ -186,9 +191,13 @@ from .gap_grid import (
     _blank_absent_rows,
     attach_gap_grid,
     combine_gap_grid,
+    contiguous_run_lengths,
     dataset_missing_rate,
     filter_window_starts,
+    gap_length_quantile,
     gap_load_stats,
+    log_gap_split_recut,
+    missing_row_mask,
     groups_from_boundaries,
     log_current_nan_window_rule,
     log_window_recut,
@@ -809,6 +818,8 @@ def _optional_nonnegative_float(value, name: str) -> float | None:
 # A blank NaN ratio is not a fixed cap: it uses the missing rate + excess.
 DEFAULT_MAX_WINDOW_NAN_EXCESS = 0.2
 DEFAULT_MAX_GAP_WINDOW_FRAC = 0.25
+DEFAULT_GAP_SPLIT_QUANTILE = 0.99
+_QUANTILE_OFF = {"", "none", "null", "empty"}
 _WINDOW_DEFAULT = object()
 _FLOAT_OFF = {"off", "unset", "false", "no"}
 
@@ -834,6 +845,36 @@ def _window_float_spec(value, name: str, default: float | None):
     return _optional_nonnegative_float(value, name), False
 
 
+def _window_quantile(value, default: float | None) -> float | None:
+    """Blank uses ``default``. Empty or ``none`` disables the quantile term."""
+    if value is _WINDOW_DEFAULT or value is None:
+        return default
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _QUANTILE_OFF or text in _FLOAT_OFF:
+            return None
+    try:
+        quantile = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"gap_split_quantile must be in [0, 1], got {value!r}."
+        ) from exc
+    if not np.isfinite(quantile) or quantile < 0 or quantile > 1:
+        raise ValueError(f"gap_split_quantile must be in [0, 1], got {value!r}.")
+    return quantile
+
+
+def gap_split_quantile_from_config(cfg):
+    """Missing key keeps the default. An empty value or ``none`` disables it."""
+    section, option = "DataFrame", "gap_split_quantile"
+    if not cfg.has_section(section) or not cfg.has_option(section, option):
+        return _WINDOW_DEFAULT
+    raw = cfg.get(section, option)
+    if raw is None:
+        return ""
+    return raw
+
+
 def resolve_windowing(
     legacy_windowing=_WINDOW_DEFAULT,
     start_on_observed=_WINDOW_DEFAULT,
@@ -841,6 +882,7 @@ def resolve_windowing(
     max_window_nan_ratio=_WINDOW_DEFAULT,
     max_window_nan_excess=_WINDOW_DEFAULT,
     max_gap_window_frac=_WINDOW_DEFAULT,
+    gap_split_quantile=_WINDOW_DEFAULT,
 ) -> dict:
     """Defaults for the window rules, and the legacy override.
 
@@ -885,6 +927,9 @@ def resolve_windowing(
         "max_gap_window_frac": _window_float(
             max_gap_window_frac, "max_gap_window_frac", frac_default
         ),
+        "gap_split_quantile": _window_quantile(
+            gap_split_quantile, DEFAULT_GAP_SPLIT_QUANTILE
+        ),
     }
 
 
@@ -903,6 +948,7 @@ def windowing_from_config(cfg) -> dict:
         max_gap_window_frac=optional_config_str(
             cfg, "DataFrame", "max_gap_window_frac"
         ),
+        gap_split_quantile=gap_split_quantile_from_config(cfg),
     )
 
 
@@ -1788,9 +1834,14 @@ class XhroProper(Xhro):
         both NaN rules when ``max_window_nan_ratio`` is blank, and
         restores recon-only selection when ``val_criteria`` is blank.
       - max_gap_window_frac: waveform only. Blank is 0.25 (off when
-        ``legacy_windowing`` is true). A filled gap with more samples
-        than this fraction of the current sequence length is a split
-        for that re-cut only. ``off`` disables it.
+        ``legacy_windowing`` is true). A contiguous missing run longer
+        than ``max(fraction * sequence length, gap quantile)`` is a
+        split for that re-cut only. ``off`` disables the rule.
+      - gap_split_quantile: waveform only. Blank is 0.99. The 0.99
+        quantile of contiguous missing-run lengths on the loaded series
+        after the block mask and the time crop, before windowing.
+        Empty or ``none`` disables the quantile term. ``legacy_windowing``
+        true disables the whole split when the fraction key is blank.
       - start_on_observed: waveform and coarse. Blank is true (false when
         ``legacy_windowing`` is true). True moves a start on a missing
         sample forward to the next observed sample that still fits in
@@ -1856,6 +1907,7 @@ class XhroProper(Xhro):
         strict_non_overlap=_WINDOW_DEFAULT,
         max_window_nan_ratio=_WINDOW_DEFAULT,
         max_window_nan_excess=_WINDOW_DEFAULT,
+        gap_split_quantile=_WINDOW_DEFAULT,
         block_mask_file=None,
         block_mask_mode=None,
         **kwargs,
@@ -1898,6 +1950,7 @@ class XhroProper(Xhro):
             max_window_nan_ratio=max_window_nan_ratio,
             max_window_nan_excess=max_window_nan_excess,
             max_gap_window_frac=max_gap_window_frac,
+            gap_split_quantile=gap_split_quantile,
         )
         self.legacy_windowing = windowing["legacy_windowing"]
         self.max_gap_window_frac = windowing["max_gap_window_frac"]
@@ -1906,7 +1959,10 @@ class XhroProper(Xhro):
         self.max_window_nan_ratio = windowing["max_window_nan_ratio"]
         self.max_window_nan_ratio_off = windowing["max_window_nan_ratio_off"]
         self.max_window_nan_excess = windowing["max_window_nan_excess"]
+        self.gap_split_quantile = windowing["gap_split_quantile"]
         self.dataset_missing_rate = None
+        self.dataset_gap_quantile = None
+        self.missing_run_spans = []
         self.block_mask_file = (
             None if _is_unset(block_mask_file) else str(block_mask_file).strip()
         )
@@ -1973,9 +2029,17 @@ class XhroProper(Xhro):
             if PRESENT_COL in the_sequence.columns
             else None
         )
-        self.dataset_missing_rate = dataset_missing_rate(
-            the_sequence[obs_cols].to_numpy(dtype=np.float64), present
-        )
+        obs_values = the_sequence[obs_cols].to_numpy(dtype=np.float64)
+        self.dataset_missing_rate = dataset_missing_rate(obs_values, present)
+        # Once, on the same post-crop series. Empty or none leaves this unset
+        # so the fraction term stands alone.
+        if self.gap_split_quantile is None:
+            self.dataset_gap_quantile = None
+        else:
+            self.dataset_gap_quantile = gap_length_quantile(
+                contiguous_run_lengths(missing_row_mask(obs_values, present)),
+                self.gap_split_quantile,
+            )
         if "datetime" in the_sequence.columns:
             # native rate from median Δt
             deltas = the_sequence["datetime"].diff().dt.total_seconds().dropna()
@@ -2055,6 +2119,9 @@ class XhroProper(Xhro):
         self.filled_gap_spans = self._filled_gap_spans(
             self.full_sequence, len(self.seq)
         )
+        self.missing_run_spans = self._missing_run_spans(
+            self.full_sequence, len(self.seq)
+        )
         if self.segment_index_per_row is not None:
             self.split_boundaries = split_boundaries_from_ids(
                 self.segment_index_per_row
@@ -2131,9 +2198,9 @@ class XhroProper(Xhro):
     def _filled_gap_spans(self, frame: pd.DataFrame, n_seq: int):
         """Contiguous ``present=False`` runs, in ``seq`` row indices.
 
-        These are the filled NaN gaps. ``max_gap_window_frac`` decides
-        which of them split a given re-cut. A length mismatch yields no
-        spans, so the re-cut keeps the baked boundaries only.
+        The gap-split rule uses ``_missing_run_spans`` (NaN or
+        ``present=False``). These present-only runs stay available for
+        the filled-gap log. A length mismatch yields no spans.
         """
         if PRESENT_COL not in frame.columns:
             return []
@@ -2158,6 +2225,46 @@ class XhroProper(Xhro):
                 continue
             j = i + 1
             while j < n and not present[j]:
+                j += 1
+            rows = loc[i:j]
+            rows = rows[rows >= 0]
+            if rows.size:
+                spans.append(rows.astype(np.int64, copy=False))
+            i = j
+        return spans
+
+    def _missing_run_spans(self, frame: pd.DataFrame, n_seq: int):
+        """Contiguous missing runs in ``seq`` row indices.
+
+        A row is missing when any observation cell is NaN or ``present``
+        is False. These are the runs ``max_gap_window_frac`` can split.
+        A length mismatch yields no spans.
+        """
+        values = self._value_frame(frame).to_numpy(dtype=np.float64)
+        present = None
+        if PRESENT_COL in frame.columns:
+            present = frame[PRESENT_COL].to_numpy(dtype=bool)
+        mask = missing_row_mask(values, present)
+        keep = self._apply_keep_positions(frame)
+        loc = np.full(len(frame), -1, dtype=np.int64)
+        loc[keep] = np.arange(len(keep), dtype=np.int64)
+        if int((loc >= 0).sum()) != int(n_seq):
+            warnings.warn(
+                f"[XhroProper] missing-run rows do not match seq ({n_seq}); "
+                "max_gap_window_frac will not add splits.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return []
+        spans = []
+        i = 0
+        n = int(mask.shape[0])
+        while i < n:
+            if not mask[i]:
+                i += 1
+                continue
+            j = i + 1
+            while j < n and mask[j]:
                 j += 1
             rows = loc[i:j]
             rows = rows[rows >= 0]
@@ -2382,8 +2489,9 @@ class XhroProper(Xhro):
                 num_frames,
                 requested,
                 getattr(self, "split_boundaries", None),
-                getattr(self, "filled_gap_spans", None),
+                getattr(self, "missing_run_spans", None),
                 getattr(self, "max_gap_window_frac", None),
+                gap_quantile=getattr(self, "dataset_gap_quantile", None),
             )
             if (
                 self.overlap
@@ -2395,6 +2503,7 @@ class XhroProper(Xhro):
                         f"[XhroProper] seq_len {requested} exceeds the longest "
                         f"unbroken span {seq_len}; using {seq_len}."
                     )
+                log_gap_split_recut(self, seq_len, num_frames)
                 return self._update_waveform_segment_windows(
                     seq_len, minimum_nan_ratio, boundaries
                 )

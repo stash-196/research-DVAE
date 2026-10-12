@@ -244,7 +244,13 @@ def test_masked_rows_are_gaps_for_starts_fraction_and_nan_ratio(tmp_path):
 
     # 100 masked rows exceed 0.5 * 120, so the run is a split. The interior
     # piece is shorter than the window, so nothing starts inside it.
-    split = _load(tmp_path, seq_len=120, max_gap_window_frac=0.5, **common)
+    split = _load(
+        tmp_path,
+        seq_len=120,
+        max_gap_window_frac=0.5,
+        gap_split_quantile="none",
+        **common,
+    )
     assert split.seq_len == 120
     assert split.split_boundaries is None
     assert not any(s < 140 and s + split.seq_len > 40 for s in split.data_idx)

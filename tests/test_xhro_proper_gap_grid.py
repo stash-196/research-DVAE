@@ -337,6 +337,7 @@ def test_template_has_gap_keys():
     assert "max_fill_gap_sec = {max_fill_gap_sec}" in text
     assert "filled_nan_log_sec = {filled_nan_log_sec}" in text
     assert "max_gap_window_frac = {max_gap_window_frac}" in text
+    assert "gap_split_quantile = 0.99" in text
     assert "start_on_observed = {start_on_observed}" in text
     assert "max_window_nan_ratio = {max_window_nan_ratio}" in text
     assert "max_window_nan_excess = {max_window_nan_excess}" in text
@@ -528,6 +529,7 @@ def test_max_gap_window_frac_is_recomputed_on_recut(tmp_path):
         tmp_path,
         seq_len=20,
         max_gap_window_frac=0.5,
+        gap_split_quantile="none",
         max_window_nan_ratio="off",
     )
     # 8 samples is not longer than 0.5 * 20, so the hole stays inside a window.
@@ -600,6 +602,7 @@ def test_default_fraction_splits_and_legacy_keeps_an_explicit_key(tmp_path):
     assert blank["max_window_nan_ratio_off"] is False
     assert blank["max_window_nan_excess"] == pytest.approx(0.2)
     assert blank["max_gap_window_frac"] == pytest.approx(0.25)
+    assert blank["gap_split_quantile"] == pytest.approx(0.99)
     legacy = resolve_windowing(legacy_windowing=True)
     assert legacy["start_on_observed"] is False
     assert legacy["strict_non_overlap"] is False
@@ -607,6 +610,10 @@ def test_default_fraction_splits_and_legacy_keeps_an_explicit_key(tmp_path):
     assert legacy["max_window_nan_ratio_off"] is False
     assert legacy["max_window_nan_excess"] is None
     assert legacy["max_gap_window_frac"] is None
+    assert legacy["gap_split_quantile"] == pytest.approx(0.99)
+    assert resolve_windowing(gap_split_quantile="none")["gap_split_quantile"] is None
+    assert resolve_windowing(gap_split_quantile="")["gap_split_quantile"] is None
+    assert resolve_windowing(gap_split_quantile="empty")["gap_split_quantile"] is None
     assert resolve_windowing(max_window_nan_ratio="off")["max_window_nan_ratio_off"]
     assert resolve_windowing(max_window_nan_excess="off")["max_window_nan_excess"] is None
     mixed = resolve_windowing(legacy_windowing=True, start_on_observed=True)
@@ -621,16 +628,33 @@ def test_default_fraction_splits_and_legacy_keeps_an_explicit_key(tmp_path):
     from_cfg = windowing_from_config(cfg)
     assert from_cfg["legacy_windowing"] is True
     assert from_cfg["max_gap_window_frac"] == pytest.approx(0.5)
+    assert from_cfg["gap_split_quantile"] == pytest.approx(0.99)
     assert from_cfg["start_on_observed"] is False
+    cfg.set("DataFrame", "gap_split_quantile", "none")
+    assert windowing_from_config(cfg)["gap_split_quantile"] is None
+    cfg.set("DataFrame", "gap_split_quantile", "")
+    assert windowing_from_config(cfg)["gap_split_quantile"] is None
 
     n = 100
     present = np.ones(n, dtype=bool)
-    present[30:38] = False
+    present[32:40] = False
     _session(tmp_path, n, present=present, segment_id=np.zeros(n, dtype=np.int64))
-    # 8 samples is longer than 0.25 * 10, so the default fraction splits.
-    split = _load(tmp_path, seq_len=10, max_window_nan_ratio="off")
+    # The only missing run is 8 samples, so the 0.99 quantile is 8 and
+    # 8 > 8 does not split. The tile at 30 still contains the hole.
+    # Dropping the quantile restores the fraction split.
+    lone = _load(tmp_path, seq_len=10, max_window_nan_ratio="off")
+    assert lone.gap_split_quantile == pytest.approx(0.99)
+    assert lone.dataset_gap_quantile == pytest.approx(8)
+    assert any(start < 40 and start + lone.seq_len > 32 for start in lone.data_idx)
+    split = _load(
+        tmp_path,
+        seq_len=10,
+        max_window_nan_ratio="off",
+        gap_split_quantile="none",
+    )
+    assert split.dataset_gap_quantile is None
     assert split.max_gap_window_frac == pytest.approx(0.25)
-    assert not any(start < 38 and start + split.seq_len > 30 for start in split.data_idx)
+    assert not any(start < 40 and start + split.seq_len > 32 for start in split.data_idx)
 
 
 def test_missing_rate_counts_absent_rows_and_ignores_inf():
@@ -733,3 +757,110 @@ def test_relative_nan_excess_uses_the_loaded_series(tmp_path, capsys):
     assert indicated.dataset_missing_rate == pytest.approx(0.1)
     assert not np.isnan(np.asarray(indicated.seq)).any()
     assert 0 in indicated.data_idx
+
+
+def _covers(ds, start, end) -> bool:
+    return any(int(s) < end and int(s) + ds.seq_len > start for s in ds.data_idx)
+
+
+def test_gap_split_uses_the_run_length_quantile(tmp_path, capsys):
+    from dvae.dataset.gap_grid import (
+        PRESENT_COL,
+        contiguous_run_lengths,
+        gap_length_quantile,
+        missing_row_mask,
+    )
+
+    # A finite present=false row is a missing run. inf is not.
+    values = np.array([1.0, 2.0, np.inf, np.nan])
+    row_present = np.array([True, False, True, True])
+    mask = missing_row_mask(values, row_present)
+    assert list(mask.tolist()) == [False, True, False, True]
+    assert list(contiguous_run_lengths(mask).tolist()) == [1, 1]
+
+    n = 200
+    present = np.ones(n, dtype=bool)
+    present[40:52] = False
+    present[list(range(80, 140, 2)) + list(range(170, 200, 2))] = False
+    _session(tmp_path, n, present=present, segment_id=np.zeros(n, dtype=np.int64))
+    sess = tmp_path / "xhro_packet_loss" / "grok_output" / "REC1_realtime"
+    frame = load_proper_frame(sess, "raw_ch1")
+    full_q = gap_length_quantile(
+        contiguous_run_lengths(
+            missing_row_mask(
+                frame["ch1"].to_numpy(dtype=np.float64),
+                frame[PRESENT_COL].to_numpy(dtype=bool),
+            )
+        ),
+        0.99,
+    )
+    head = 160
+    head_q = gap_length_quantile(
+        contiguous_run_lengths(
+            missing_row_mask(
+                frame["ch1"].to_numpy(dtype=np.float64)[:head],
+                frame[PRESENT_COL].to_numpy(dtype=bool)[:head],
+            )
+        ),
+        0.99,
+    )
+    assert full_q != pytest.approx(head_q)
+
+    capsys.readouterr()
+    ds = _load(
+        tmp_path,
+        seq_len=20,
+        val_indices=0.0,
+        max_window_nan_ratio="off",
+    )
+    assert ds.gap_split_quantile == pytest.approx(0.99)
+    assert ds.dataset_gap_quantile == pytest.approx(full_q)
+    assert not _covers(ds, 40, 52)
+    out = capsys.readouterr().out
+    limit = max(0.25 * ds.seq_len, ds.dataset_gap_quantile)
+    assert f"gap_quantile_len={ds.dataset_gap_quantile:.6g}" in out
+    assert f"gap_split_threshold={limit:.6g}" in out
+    assert "gap_splits=2" in out
+
+    held = _load(tmp_path, split="test", seq_len=20, max_window_nan_ratio="off")
+    assert held.dataset_gap_quantile == pytest.approx(ds.dataset_gap_quantile)
+
+    capsys.readouterr()
+    ds.update_sequence_length(60)
+    assert ds.dataset_gap_quantile == pytest.approx(full_q)
+    assert _covers(ds, 40, 52)
+    recut = capsys.readouterr().out
+    wide_limit = max(0.25 * 60, full_q)
+    assert f"gap_quantile_len={full_q:.6g}" in recut
+    assert f"gap_split_threshold={wide_limit:.6g}" in recut
+    assert "gap_splits=0" in recut
+
+    fraction_only = _load(
+        tmp_path,
+        seq_len=20,
+        val_indices=0.0,
+        max_window_nan_ratio="off",
+        gap_split_quantile="none",
+    )
+    assert fraction_only.dataset_gap_quantile is None
+    assert not _covers(fraction_only, 40, 52)
+
+    legacy = _load(
+        tmp_path,
+        seq_len=20,
+        val_indices=0.0,
+        legacy_windowing=True,
+        max_window_nan_ratio="off",
+    )
+    assert legacy.max_gap_window_frac is None
+    assert _covers(legacy, 40, 52)
+
+    elapsed = (frame["datetime"] - frame["datetime"].min()).dt.total_seconds()
+    cropped = _load(
+        tmp_path,
+        seq_len=20,
+        val_indices=0.0,
+        max_window_nan_ratio="off",
+        crop_end_sec=float(elapsed.iloc[head - 1]),
+    )
+    assert cropped.dataset_gap_quantile == pytest.approx(head_q)
