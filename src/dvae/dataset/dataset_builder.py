@@ -60,6 +60,8 @@ class DatasetConfig:
     # Waveform multi-subject ranges. None keeps dataset_label + crop_*.
     # Inline "subject:start-end[,start-end]; ..." or a yaml/csv path.
     segments: str | None = None
+    # Short-range cutoff when seq_len is unset (eval). None uses seq_len.
+    segment_min_len: int | None = None
     # XhroProper waveform. None keeps filled gaps inside windows.
     # filled_nan_log_sec is the re-cut log cutoff when max_fill is unset.
     max_fill_gap_sec: float | None = None

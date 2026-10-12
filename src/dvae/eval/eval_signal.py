@@ -75,6 +75,7 @@ from dvae.dataset.xhro_proper_dataset import (
     coarse_dataframe_kwargs,
     optional_config_float,
     optional_config_str,
+    training_initial_sequence_len,
     windowing_from_config,
 )
 from dvae.eval.window_length import apply_eval_seq_len, dataset_max_window_length
@@ -661,6 +662,9 @@ if __name__ == "__main__":
         overlap=cfg.getboolean("DataFrame", "overlap"),
         with_nan=cfg.getboolean("DataFrame", "with_nan", fallback=False),
         seq_len=None,
+        # Same short-range cutoff the training loader used. Window length
+        # stays unset until apply_eval_seq_len.
+        segment_min_len=training_initial_sequence_len(cfg),
         device=device,
         dataset_label=cfg.get("DataFrame", "dataset_label", fallback=None),
         mask_label=eval_mask_label,
