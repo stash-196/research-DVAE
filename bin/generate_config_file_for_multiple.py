@@ -115,8 +115,9 @@ if __name__ == "__main__":
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
     experiment_name = (
-        "20260921-"
-        + "Lorenz_ep20000_auto0-0.8_miss0.1-0.7_shPLRNN_hdim40_L80_clip10_eStop200_indicate"
+        "20260930-"
+        + "Lorenz_ep20000_auto0-0.8_miss0.1-0.7_shPLRNN_hdim40_L80_clip10_eStop200_otf"
+        # + "20260921-Lorenz_..._indicate"  # prior indicate twin
         # + "XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_raw_ch1-4_1d_sep_hdim200_eStop500"
     )
     print("Experiment name:", experiment_name)
@@ -409,12 +410,12 @@ if __name__ == "__main__":
         ]
     elif dataset_name[0] == "Lorenz63":
         observation_process = [
-            # "only_x",
+            "only_x",  # OTF (no mask channel); twin of Sep-21 only_x_indicate
             # "only_xy",
             # "only_xz",
             # "all_xyz",
             # "only_x_interpolate",
-            "only_x_indicate",
+            # "only_x_indicate",
             # "only_x_w_noise",
             # "raw_noisy",
             # "relative_powers",
