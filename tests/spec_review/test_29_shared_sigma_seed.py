@@ -340,7 +340,7 @@ def test_per_unit_sigmas_still_train_log_and_round_trip(tmp_path):
     plt.close("all")
 
 
-def test_alpha_figure_uses_base10_and_the_epoch_log_does_not(tmp_path):
+def test_alpha_figure_and_the_epoch_log_use_base10(tmp_path):
     sigma = np.array([1.0, -0.5], dtype=np.float64)
     base10 = 1.0 / (1.0 + np.power(10.0, -sigma))
     natural = 1.0 / (1.0 + np.exp(-sigma))
@@ -366,8 +366,9 @@ def test_alpha_figure_uses_base10_and_the_epoch_log_does_not(tmp_path):
         assert not np.allclose(line, 1.0 / (1.0 + np.exp(-row)))
 
     text = (ROOT / "src" / "dvae" / "learning_algo.py").read_text()
-    assert "alphas = 1 / (1 + np.exp(-sigmas_history[:, epoch]))" in text
-    assert "alphas = 1 / (1 + np.exp(-sigmas_history[:, -1]))" in text
+    assert "alphas = sigmoid_10(sigmas_history[:, epoch])" in text
+    assert "alphas = sigmoid_10(sigmas_history[:, -1])" in text
+    assert "np.exp(-sigmas_history" not in text
 
 
 def test_block_weight_masks_are_unchanged_by_the_sigma_seed():
