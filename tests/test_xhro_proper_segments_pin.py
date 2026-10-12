@@ -1,8 +1,6 @@
 """Pinning checks for the XhroProper waveform ``segments`` key.
 
-Synthetic NPZ only. Each test names the spec item it locks. Tests that
-start with ``test_pin_fail_`` lock a behavior that does not meet the spec,
-so a later fix has to update the assertion.
+Synthetic NPZ only. Each test names the spec item it locks.
 """
 
 from __future__ import annotations
@@ -24,6 +22,7 @@ from dvae.dataset.xhro_proper_dataset import (
     crop_waveform_segment,
     optional_config_str,
     parse_waveform_segments,
+    training_initial_sequence_len,
     _waveform_head_length,
 )
 from dvae.eval.utils.spectrum_validation import capture_fixed_spectrum_windows
@@ -480,7 +479,7 @@ def test_pin_valid_windows_come_from_the_non_test_head_only(tmp_path):
     assert train.data_idx and valid.data_idx
 
 
-def test_pin_fail_tail_follows_written_order_not_clock_order(tmp_path):
+def test_pin_each_segment_keeps_its_own_tail_in_written_order(tmp_path):
     """Each segment contributes its own tail, in the order written.
 
     Listing the later interval first still holds out that interval's own
@@ -664,7 +663,7 @@ def test_pin_interpolate_does_not_cross_the_join(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# (6) validation errors, and the sidecar path is not confined
+# (6) validation errors, and the sidecar must resolve inside data_dir
 # ---------------------------------------------------------------------------
 
 
@@ -720,7 +719,7 @@ def test_pin_short_segment_dropped_and_all_short_raises(tmp_path):
             _load(tmp_path, segments=tiny, seq_len=16)
 
 
-def test_pin_fail_sidecar_path_reads_outside_data_dir(tmp_path, monkeypatch):
+def test_pin_sidecar_must_resolve_inside_data_dir(tmp_path, monkeypatch):
     """A sidecar that resolves outside data_dir is rejected.
 
     Absolute paths and ``..`` relatives that leave data_dir raise. An
@@ -752,7 +751,68 @@ def test_pin_fail_sidecar_path_reads_outside_data_dir(tmp_path, monkeypatch):
     assert kept.dataset_labels == ["subj_a"]
 
 
-def test_pin_fail_subject_name_can_leave_data_root(tmp_path):
+def test_pin_symlink_sidecar_and_nested_dotdot_stay_inside_data_dir(tmp_path):
+    """Resolution, not the written string, decides confinement.
+
+    A symlink inside data_dir that points at a file outside it raises.
+    ``foo/../../outside.yaml`` raises the same way. A relative name that
+    exists only in the process cwd is not opened.
+    """
+    data = tmp_path / "data"
+    data.mkdir()
+    n = 40
+    elapsed = _elapsed(n)
+    _write_subject(data, "subj_a", np.linspace(-1.0, 1.0, n))
+    end = float(elapsed[-1])
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sidecar = outside / "segments.yaml"
+    body = yaml.safe_dump({"subj_a": [[0.0, end]]})
+    sidecar.write_text(body, encoding="utf-8")
+    link = data / "link.yaml"
+    link.symlink_to(sidecar)
+    with pytest.raises(ValueError, match="outside data_dir"):
+        _load(data, segments="link.yaml", seq_len=16)
+    (data / "foo").mkdir()
+    nested = "foo/../../outside/segments.yaml"
+    with pytest.raises(ValueError, match="outside data_dir"):
+        _load(data, segments=nested, seq_len=16)
+    cwd_only = tmp_path / "cwd_only.yaml"
+    cwd_only.write_text(body, encoding="utf-8")
+    old = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        with pytest.raises(ValueError, match="not found"):
+            _load(data, segments="cwd_only.yaml", seq_len=16)
+        # When both exist, the file under data_dir wins. The cwd copy names
+        # a subject that is not on disk, so reading it would raise.
+        (data / "both.yaml").write_text(body, encoding="utf-8")
+        (tmp_path / "both.yaml").write_text(
+            yaml.safe_dump({"no_such": [[0.0, end]]}),
+            encoding="utf-8",
+        )
+        kept = _load(data, segments="both.yaml", seq_len=16)
+    finally:
+        os.chdir(old)
+    assert kept.dataset_labels == ["subj_a"]
+
+
+def test_pin_parser_without_data_dir_is_not_confined(tmp_path):
+    """``data_dir=None`` is the parser-only case and still opens any file.
+
+    The loader always passes ``path_to_data``, so this does not open a
+    hole in ``XhroProper``. It stays unconfined on purpose.
+    """
+    outside = tmp_path / "outside.yaml"
+    outside.write_text(
+        yaml.safe_dump({"subj_a": [[0.0, 1.0]]}),
+        encoding="utf-8",
+    )
+    rows = parse_waveform_segments(str(outside), data_dir=None)
+    assert rows == [{"subject": "subj_a", "start": 0.0, "end": 1.0}]
+
+
+def test_pin_subject_token_must_stay_inside_data_root(tmp_path):
     """A subject token cannot be a path that walks out of data_root.
 
     A session id that is a symlink to a directory outside the session
@@ -765,6 +825,12 @@ def test_pin_fail_subject_name_can_leave_data_root(tmp_path):
     _write_subject(tmp_path / "escaped", "evil", np.linspace(-1.0, 1.0, n))
     end = _fmt(float(elapsed[-1]))
     spec = f"../escaped/evil:0-{end}"
+    for token in (".", "..", ".hidden", "-bad", "a/b", "a\\b"):
+        with pytest.raises(ValueError, match="session id"):
+            parse_waveform_segments(f"{token}:0-1")
+    # Session ids used by the corpus stay valid tokens.
+    assert parse_waveform_segments("g.2:0-1")[0]["subject"] == "g.2"
+    assert parse_waveform_segments("a+b:0-1")[0]["subject"] == "a+b"
     with pytest.raises(ValueError, match="session id"):
         parse_waveform_segments(spec)
     with pytest.raises(ValueError, match="session id"):
@@ -873,7 +939,7 @@ def test_pin_per_segment_log_fields(tmp_path, capsys):
 
 
 # ---------------------------------------------------------------------------
-# (9) eval reads segments; seq_len=None changes the short-segment cut
+# (9) eval drops the same short ranges as training, so the test rows match
 # ---------------------------------------------------------------------------
 
 
@@ -930,7 +996,7 @@ def test_pin_long_segments_match_between_training_seq_len_and_eval_none(tmp_path
     _same(training.seq, eval_like.seq, atol=1e-5)
 
 
-def test_pin_fail_eval_seq_len_none_keeps_short_segment_and_shifts_the_tail(tmp_path):
+def test_pin_eval_segment_min_len_matches_training_test_rows(tmp_path):
     """Eval keeps ``seq_len`` unset and passes the training cutoff.
 
     ``segment_min_len`` is the constructor ``seq_len`` training used, so
@@ -954,11 +1020,63 @@ def test_pin_fail_eval_seq_len_none_keeps_short_segment_and_shifts_the_tail(tmp_
     assert eval_like.waveform_segments[0]["dropped"] == "shorter_than_seq_len"
 
 
-def test_pin_fail_strict_test_split_keeps_only_the_val_slice(tmp_path):
+def test_pin_omitting_segment_min_len_keeps_the_short_range(tmp_path):
+    """The match depends on ``segment_min_len``.
+
+    ``seq_len=None`` with the cutoff omitted keeps the short range and
+    shifts the 20% tail. Eval does not take this path: it passes
+    ``training_initial_sequence_len``.
+    """
+    n = 100
+    elapsed = _elapsed(n)
+    _write_subject(tmp_path, "subj_a", np.arange(n, dtype=np.float64))
+    short = f"0-{_fmt(float(elapsed[7]))}"
+    long = f"{_fmt(float(elapsed[20]))}-{_fmt(float(elapsed[99]))}"
+    spec = f"subj_a:{short},{long}"
+    training = _load(tmp_path, segments=spec, split="test", seq_len=16)
+    omitted = _load(tmp_path, segments=spec, split="test", seq_len=None)
+    assert training.waveform_segments[0]["dropped"] == "shorter_than_seq_len"
+    assert omitted.waveform_segments[0]["dropped"] is None
+    assert len(omitted.full_sequence) != len(training.full_sequence)
+    train_clock = training.full_sequence["datetime"].reset_index(drop=True)
+    omit_clock = omitted.full_sequence["datetime"].reset_index(drop=True)
+    assert not train_clock.equals(omit_clock)
+
+
+def test_pin_training_initial_sequence_len_is_the_shared_cutoff():
+    """Training and eval share one cutoff.
+
+    Unset ``initial_sequence_len`` falls back to ``sequence_len // 10``,
+    the same fallback the training loader used before the helper. Training
+    passes that value as ``seq_len`` and does not set ``segment_min_len``.
+    Eval passes it as ``segment_min_len`` and leaves ``seq_len`` unset.
+    """
+    import configparser
+
+    fallback = configparser.ConfigParser()
+    fallback.read_string("[DataFrame]\nsequence_len = 160\n")
+    assert training_initial_sequence_len(fallback) == 160 // 10
+    explicit = configparser.ConfigParser()
+    explicit.read_string(
+        "[DataFrame]\nsequence_len = 160\ninitial_sequence_len = 40\n"
+    )
+    assert training_initial_sequence_len(explicit) == 40
+    train_src = Path("src/dvae/learning_algo.py").read_text()
+    start = train_src.index(
+        "initial_sequence_len = training_initial_sequence_len(self.cfg)"
+    )
+    block = train_src[start : start + 1800]
+    assert "seq_len=initial_sequence_len" in block
+    assert "segment_min_len" not in block
+
+
+def test_pin_strict_test_windows_use_the_val_slice(tmp_path):
     """Default strict windowing sends split='test' through Xhro.split_dataset.
 
     With ``val_indices=0`` that slice is empty, so a strict test loader has
-    no windows. The overlap segment path keeps every test window instead.
+    no windows. The test rows are still both subjects' tails. The overlap
+    segment path keeps every test window instead. This window slice predates
+    the per-segment tail and is not the row-match rule.
     """
     n = 100
     elapsed = _elapsed(n)
