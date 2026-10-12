@@ -12,6 +12,7 @@ import yaml
 
 from dvae.dataset.xhro_proper_dataset import (
     XhroProper,
+    _waveform_head_length,
     optional_config_str,
     parse_waveform_segments,
 )
@@ -259,16 +260,18 @@ def test_multi_segment_one_subject_windows_do_not_span(tmp_path):
     assert len(dataset.waveform_segments) == 2
     assert dataset.waveform_segments[0]["n_samples"] == 120
     assert dataset.waveform_segments[1]["n_samples"] == 120
-    # Subject tail is 20% of 240, so the join stays inside the train head.
+    # Each segment holds out its own last 20%, so the join is that head.
+    head = _waveform_head_length(120)
+    assert head == 96
     join = int(dataset.waveform_segments[1]["row_lo"])
-    assert join == 120
+    assert join == head
     assert join in set(int(cut) for cut in dataset.split_boundaries)
     _assert_windows_inside_one_segment(dataset)
     clock = dataset.full_sequence["datetime"]
     gap = clock.diff().dt.total_seconds().iloc[join]
     assert gap > 0.004 * 2
     # No sample was inserted to close that gap.
-    assert len(dataset.full_sequence) == 120 + (120 - (240 // 5))
+    assert len(dataset.full_sequence) == head + head
 
 
 def test_yaml_and_csv_sidecars_match_inline(tmp_path):

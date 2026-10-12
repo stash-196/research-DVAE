@@ -78,14 +78,22 @@ Times are inclusive seconds from that subject's first timestamp. Ranges
 on one subject may not share a timestamp, including a shared endpoint.
 Each range is loaded and cropped on its own, then concatenated in the
 order written. The join does not resample and does not insert or delete
-samples to close a gap, so missing values stay NaN. Normalisation is
-per subject: nanmean / nanstd on that subject's non-test rows (the same
-last-20% row cut as one waveform), applied to every row of that
-subject. A non-test std below ``1e-8`` sets that column to NaN for the
+samples to close a gap, so missing values stay NaN. Each segment holds
+out its own last 20% of rows, the same ``iloc[: -n // 5]`` head as one
+waveform. Normalisation is per subject: nanmean / nanstd on all of that
+subject's non-test rows (those heads), applied to every row of that
+subject, including each tail. A non-test std below ``1e-8`` sets that
+column to NaN for the
 subject. Segment edges are window splits, in addition to the existing
 gap splits, so a window stays inside one segment. A range shorter than
-``seq_len`` is warned and dropped; if every range is that short,
-loading raises. Leave ``segments`` unset to keep ``dataset_label`` plus
+``seq_len`` is warned and dropped; eval leaves ``seq_len`` unset and
+passes ``segment_min_len`` (the training ``initial_sequence_len``) so
+the same ranges are dropped and the 20% test rows match. If every range
+is that short, loading raises. A sidecar is opened only when it
+resolves inside ``data_dir``; an absolute path or ``..`` that leaves
+that directory raises. A subject token is a session id, not a path, and
+the resolved session directory must stay inside the session parent.
+Leave ``segments`` unset to keep ``dataset_label`` plus
 ``crop_start_sec`` / ``crop_end_sec`` with the same rows and values.
 Setting ``segments`` together with either crop key raises.
 
@@ -328,6 +336,21 @@ def optional_config_str(cfg, section: str, option: str) -> str | None:
     return text
 
 
+def training_initial_sequence_len(cfg) -> int:
+    """Sequence length the training loader is constructed with.
+
+    Eval leaves window ``seq_len`` unset and passes this value as
+    ``segment_min_len``, so a short waveform range is dropped before the
+    20% cut on both paths.
+    """
+    sequence_len = cfg.getint("DataFrame", "sequence_len")
+    return int(
+        cfg.getint(
+            "DataFrame", "initial_sequence_len", fallback=sequence_len // 10
+        )
+    )
+
+
 def _normalize_corpus(corpus) -> str | None:
     if _is_unset(corpus):
         return None
@@ -400,6 +423,15 @@ def _session_dir(
     parent = _session_parent(path_to_data, data_root, normalized)
     name = _session_folder_name(recording_id, variant, normalized)
     return parent / name
+
+
+def _resolved_inside(path: Path, root: Path) -> bool:
+    """True when ``path`` resolves to ``root`` or a file under it."""
+    try:
+        path.resolve().relative_to(root.resolve())
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return True
 
 
 def _require_session_dir(
@@ -1731,6 +1763,9 @@ _SEGMENT_RANGE_RE = re.compile(
     rf"^\s*({_SEGMENT_NUMBER})\s*-\s*({_SEGMENT_NUMBER})\s*$"
 )
 _SEGMENT_FILE_SUFFIXES = (".yaml", ".yml", ".csv")
+# One path component. Packet-loss ids may contain ``+``; ``..`` and
+# separators would walk out of the session parent.
+_SUBJECT_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*\Z")
 
 
 def _parse_segment_number(text, *, what: str) -> float:
@@ -1743,6 +1778,20 @@ def _parse_segment_number(text, *, what: str) -> float:
     return float(value)
 
 
+def _reject_path_subject(name: str) -> None:
+    """Reject a subject token that is a path rather than a session id."""
+    if (
+        "/" in name
+        or "\\" in name
+        or name in {".", ".."}
+        or _SUBJECT_TOKEN_RE.fullmatch(name) is None
+    ):
+        raise ValueError(
+            f"waveform subject {name!r} must be a session id "
+            "(letters, digits, '.', '_', '+', '-'), not a path."
+        )
+
+
 def _segment_record(subject, start, end) -> dict:
     """One inclusive ``[start, end]`` range, in seconds."""
     name = "" if subject is None else str(subject).strip()
@@ -1750,6 +1799,7 @@ def _segment_record(subject, start, end) -> dict:
         raise ValueError(f"waveform segment is missing a subject, got {subject!r}.")
     if any(ch in name for ch in ",;"):
         raise ValueError(f"waveform subject {name!r} cannot contain ',' or ';'.")
+    _reject_path_subject(name)
     start_f = _parse_segment_number(start, what=f"segment {name!r} start")
     end_f = _parse_segment_number(end, what=f"segment {name!r} end")
     if start_f >= end_f:
@@ -1812,20 +1862,31 @@ def _segments_path(spec: str, data_dir) -> Path | None:
 
     Only ``.yaml``, ``.yml``, and ``.csv`` are files. A missing file with
     one of those suffixes raises; anything else is parsed as inline text.
+
+    When ``data_dir`` is set, the file must resolve inside that directory.
+    An absolute path or a ``..`` relative path that leaves ``data_dir``
+    raises. ``data_dir`` None is the parser-only case (an absolute path
+    with no dataset root) and is not confined.
     """
     text = str(spec).strip()
     suffix = Path(text).suffix.lower()
     if suffix not in _SEGMENT_FILE_SUFFIXES:
         return None
     raw = Path(text)
-    candidates = [raw]
-    if data_dir is not None and not raw.is_absolute():
-        candidates.append(Path(str(data_dir)) / text)
-    for cand in candidates:
-        if cand.is_file():
-            return cand
-    tried = ", ".join(str(cand) for cand in candidates)
-    raise ValueError(f"segments file not found: {text} (tried {tried}).")
+    if data_dir is None:
+        if raw.is_file():
+            return raw
+        raise ValueError(f"segments file not found: {text} (tried {raw}).")
+    root = Path(str(data_dir))
+    candidate = raw if raw.is_absolute() else root / raw
+    resolved = candidate.resolve()
+    if not _resolved_inside(resolved, root):
+        raise ValueError(
+            f"segments file {text} resolves outside data_dir {root.resolve()}."
+        )
+    if not resolved.is_file():
+        raise ValueError(f"segments file not found: {text} (tried {resolved}).")
+    return resolved
 
 
 def _segments_from_csv(path: Path) -> list[dict]:
@@ -1937,7 +1998,9 @@ def parse_waveform_segments(spec, *, data_dir=None) -> list[dict]:
     ``subject:start-end[,start-end]; subject:start-end``, a ``.yaml`` /
     ``.yml`` / ``.csv`` path, or a list of triples / mappings. Times are
     seconds from that subject's first timestamp. ``start >= end`` and
-    overlapping ranges on one subject raise here. A missing sidecar raises.
+    overlapping ranges on one subject raise here. A missing sidecar
+    raises. With ``data_dir`` set, a sidecar that resolves outside that
+    directory raises. A subject token must be a session id, not a path.
     """
     if isinstance(spec, (list, tuple)):
         rows = _segments_from_sequence(spec)
@@ -2320,9 +2383,14 @@ class XhroProper(Xhro):
       - segments: waveform only. Unset keeps ``dataset_label`` and the crop
         keys, with the same rows and values. Inline
         ``subject:start-end[,start-end]; subject:start-end``, or a
-        ``.yaml`` / ``.yml`` / ``.csv`` path. Times are inclusive seconds
-        from that subject's first timestamp. Each range is cropped on its
-        own; normalisation is per subject. See "Waveform segments".
+        ``.yaml`` / ``.yml`` / ``.csv`` path resolved inside ``data_dir``.
+        Subject tokens are session ids, not paths. Times are inclusive
+        seconds from that subject's first timestamp. Each range is cropped
+        on its own and holds out its own last 20% of rows. Normalisation
+        is per subject, on all non-test rows. See "Waveform segments".
+      - segment_min_len: waveform segments only. Unset uses ``seq_len`` as
+        the short-range cutoff. Eval sets this to the training
+        ``initial_sequence_len`` and leaves ``seq_len`` unset.
       - max_fill_gap_sec: waveform only. Unset keeps filled gaps as NaN
         inside windows. When set, a filled gap with ``gap_duration_s``
         greater than this becomes a window split, like a segment boundary.
@@ -2402,6 +2470,7 @@ class XhroProper(Xhro):
         crop_start_sec=None,
         crop_end_sec=None,
         segments=None,
+        segment_min_len=None,
         max_fill_gap_sec=None,
         filled_nan_log_sec=None,
         legacy_windowing=_WINDOW_DEFAULT,
@@ -2442,6 +2511,9 @@ class XhroProper(Xhro):
         self.crop_start_sec = crop_start_sec
         self.crop_end_sec = crop_end_sec
         self.segments = None if _is_unset(segments) else segments
+        self.segment_min_len = (
+            None if _is_unset(segment_min_len) else segment_min_len
+        )
         self.waveform_segments = None
         self._keep_all_rows = False
         self.max_fill_gap_sec = _optional_nonnegative_float(
@@ -3012,10 +3084,10 @@ class XhroProper(Xhro):
     def _init_waveform_segments(self, base: str, suffix: str | None) -> None:
         """Load each configured range on its own and split windows at the joins.
 
-        Normalisation uses each subject's non-test rows (the waveform
-        last-20% cut on that subject's ranges, in the order written) and
-        is applied to every row of that subject. Gap-split rules still
-        run later, on top of these segment edges.
+        Each kept segment holds out its own last 20% of rows. Normalisation
+        uses all of a subject's non-test rows (those heads) and is applied
+        to every row of that subject. Gap-split rules still run later, on
+        top of these segment edges.
         """
         if not _is_unset(self.crop_start_sec) or not _is_unset(self.crop_end_sec):
             raise ValueError(
@@ -3043,6 +3115,9 @@ class XhroProper(Xhro):
         sessions: dict[str, Path] = {}
         frames: dict[str, pd.DataFrame] = {}
         mask_weight: list[tuple[int, float]] = []
+        session_parent = _session_parent(
+            self.path_to_data, self.data_root, self.corpus
+        )
         for label in named:
             try:
                 session_dir = _require_session_dir(
@@ -3054,6 +3129,11 @@ class XhroProper(Xhro):
                 )
             except FileNotFoundError as exc:
                 raise ValueError(f"unknown subject {label!r}: {exc}") from exc
+            if not _resolved_inside(session_dir, session_parent):
+                raise ValueError(
+                    f"subject {label!r} resolves outside data_root "
+                    f"({session_dir.resolve()})."
+                )
             frame = load_proper_frame(
                 session_dir,
                 base,
@@ -3075,6 +3155,7 @@ class XhroProper(Xhro):
         next_group = 0
         kept: list[dict] = []
         dropped: list[dict] = []
+        min_len = self._waveform_segment_min_len()
         for spec_index, spec in enumerate(specs):
             label = spec["subject"]
             cropped = crop_waveform_segment(
@@ -3097,11 +3178,11 @@ class XhroProper(Xhro):
                 "present": present,
                 "frame": cropped,
             }
-            if self.seq_len is not None and len(cropped) < int(self.seq_len):
+            if min_len is not None and len(cropped) < min_len:
                 msg = (
                     f"[XhroProper][segment] {label} [{spec['start']}, {spec['end']}] "
                     f"has {len(cropped)} samples, shorter than seq_len "
-                    f"{int(self.seq_len)}; dropping it."
+                    f"{min_len}; dropping it."
                 )
                 print("WARNING " + msg)
                 warnings.warn(msg, UserWarning, stacklevel=2)
@@ -3111,9 +3192,10 @@ class XhroProper(Xhro):
             kept.append(record)
 
         if not kept:
+            shown = "unset" if min_len is None else str(min_len)
             raise ValueError(
                 "every waveform segment is shorter than "
-                f"seq_len={int(self.seq_len)}; dropped {len(dropped)} segment(s)."
+                f"seq_len={shown}; dropped {len(dropped)} segment(s)."
             )
 
         self._share_segment_columns(kept)
@@ -3157,16 +3239,12 @@ class XhroProper(Xhro):
         frame_parts = []
         reports = []
         for seg in kept:
-            offset = int(seg["subject_offset"])
             n_seg = len(seg["values"])
-            cut = int(seg["subject_cut"])
-            n_sub = int(seg["subject_n"])
+            cut = int(seg["segment_cut"])
             if self.split == "test":
-                keep_lo, keep_hi = cut, n_sub
+                local_lo, local_hi = cut, n_seg
             else:
-                keep_lo, keep_hi = 0, cut
-            local_lo = max(keep_lo, offset) - offset
-            local_hi = min(keep_hi, offset + n_seg) - offset
+                local_lo, local_hi = 0, cut
             report = {
                 "subject": seg["subject"],
                 "start": seg["start"],
@@ -3262,6 +3340,20 @@ class XhroProper(Xhro):
             self.split_boundaries = split_boundaries_from_ids(self.segment_index_per_row)
         self.update_sequence_length(self.seq_len)
 
+    def _waveform_segment_min_len(self) -> int | None:
+        """Samples a range must have, or None when short ranges are kept.
+
+        ``segment_min_len`` wins, so eval can drop the ranges training
+        dropped while ``seq_len`` stays unset for windowing. Otherwise the
+        constructor ``seq_len`` is the cutoff.
+        """
+        raw = self.segment_min_len
+        if _is_unset(raw):
+            raw = self.seq_len
+        if raw is None:
+            return None
+        return int(raw)
+
     @staticmethod
     def _share_segment_columns(segments: list[dict]) -> None:
         """Give every segment a column that any segment already has.
@@ -3285,24 +3377,34 @@ class XhroProper(Xhro):
 
     @staticmethod
     def _zscore_segment_subjects(segments: list[dict]) -> None:
-        """Fit each subject on its own non-test rows, in written order."""
+        """Fit each subject on the heads of its segments.
+
+        Each segment's test tail is its own last 20% of rows. The scale
+        uses every non-test row of that subject and is applied to the
+        tails as well.
+        """
         by_subject: dict[str, list[dict]] = {}
         for seg in segments:
             by_subject.setdefault(seg["subject"], []).append(seg)
         for subject, segs in by_subject.items():
-            stacked = np.concatenate([seg["values"] for seg in segs], axis=0)
-            n = int(stacked.shape[0])
-            cut = _waveform_head_length(n)
-            non_test = np.zeros(n, dtype=bool)
-            non_test[:cut] = True
+            parts = []
+            mask_parts = []
+            for seg in segs:
+                values = seg["values"]
+                n_seg = int(len(values))
+                cut = _waveform_head_length(n_seg)
+                seg["segment_cut"] = cut
+                parts.append(values)
+                mask = np.zeros(n_seg, dtype=bool)
+                mask[:cut] = True
+                mask_parts.append(mask)
+            stacked = np.concatenate(parts, axis=0)
+            non_test = np.concatenate(mask_parts)
             scaled = _zscore_waveform_subject(stacked, non_test, subject)
             offset = 0
             for seg in segs:
-                n_seg = len(seg["values"])
+                n_seg = int(len(seg["values"]))
                 seg["scaled"] = scaled[offset : offset + n_seg]
-                seg["subject_offset"] = offset
-                seg["subject_cut"] = cut
-                seg["subject_n"] = n
                 offset += n_seg
 
     def _log_waveform_segments(self) -> None:
