@@ -32,31 +32,84 @@ def draw_loss_warmup_lines(
         ax.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
 
 
-def val_criteria_plot_series(criteria, val_loss, val_spectrum, val_criteria_score):
-    """One validation series per selected criterion, then the combined score.
+def val_criteria_plot_series(
+    criteria,
+    val_loss,
+    val_spectrum,
+    val_criteria_score,
+    include_spectrum=None,
+):
+    """Raw recon, spectrum error when it was computed, then the selection score.
 
-    ``recon`` is the validation loss. ``spectrum`` is the free-run spectral
-    error. The normalised sum is included only when more than one criterion
-    is selected. Arrays are used as given (already sliced to the current epoch).
+    Checkpoint selection does not decide the panels. ``recon`` is always
+    the raw validation loss. ``spectrum`` is the raw free-run spectral
+    error, included when ``include_spectrum`` is true. The default is true
+    when ``val_spectrum`` is an array, so passing ``None`` does not invent
+    a zero series. The selection score is included only when more than one
+    criterion is selected. Each entry is ``(name, values, selected)``.
+    Arrays are used as given (already sliced to the current epoch).
     """
     names = tuple(criteria)
-    series = []
-    for name in names:
-        if name == "recon":
-            series.append(("recon", np.asarray(val_loss, dtype=float)))
-        elif name == "spectrum":
-            series.append(("spectrum", np.asarray(val_spectrum, dtype=float)))
-        else:
-            raise ValueError(f"no validation plot series for criterion {name!r}")
-    if len(names) > 1:
+    if include_spectrum is None:
+        include_spectrum = val_spectrum is not None
+    series = [
+        ("recon", np.asarray(val_loss, dtype=float), "recon" in names),
+    ]
+    if include_spectrum:
+        if val_spectrum is None:
+            raise ValueError(
+                "spectrum was requested but val_spectrum is missing."
+            )
         series.append(
-            ("combined", np.asarray(val_criteria_score, dtype=float))
+            (
+                "spectrum",
+                np.asarray(val_spectrum, dtype=float),
+                "spectrum" in names,
+            )
+        )
+    if len(names) > 1 and val_criteria_score is not None:
+        series.append(
+            ("combined", np.asarray(val_criteria_score, dtype=float), True)
         )
     return series
 
 
-def _style_loss_panel(ax, values, label, title, ylabel):
+def _criteria_panel_title(model_name, name, selected):
+    """Legend title. Selected metrics are marked; the score panel is not."""
+    if name == "combined":
+        return f"{model_name}: selection score"
+    label = "spectrum error" if name == "spectrum" else name
+    if selected:
+        return f"{model_name}: {label} (selected)"
+    return f"{model_name}: {label}"
+
+
+def _mark_best_epoch(ax, values, best_epoch):
+    """Black circle at the checkpoint epoch. Skipped when it is not drawable."""
+    if best_epoch is None:
+        return
+    idx = int(best_epoch)
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    if idx < 0 or idx >= arr.size:
+        return
+    y = float(arr[idx])
+    if not np.isfinite(y):
+        return
+    ax.plot(
+        [idx],
+        [y],
+        linestyle="None",
+        marker="o",
+        color="black",
+        markersize=8,
+        label="best epoch",
+        zorder=5,
+    )
+
+
+def _style_loss_panel(ax, values, label, title, ylabel, best_epoch=None):
     ax.plot(values, label=label)
+    _mark_best_epoch(ax, values, best_epoch)
     ax.legend(fontsize=16, title=title, title_fontsize=20)
     ax.set_xlabel("epochs", fontdict={"size": 16})
     ax.set_ylabel(ylabel, fontdict={"size": 16})
@@ -75,10 +128,21 @@ def build_val_criteria_figure(
     model_name,
     auto_sampling_method,
     noise_sampling_method,
+    best_epoch=None,
+    include_spectrum=None,
 ):
-    """Figure of validation criteria. One axes per series, loss-plot markers."""
+    """One axes per plotted metric, with warm-up lines and a best-epoch marker.
+
+    Recon is always drawn. Spectrum is drawn when it was computed.
+    The selection score is drawn when more than one criterion is selected.
+    ``best_epoch`` is a point on each series, not another vertical line.
+    """
     series = val_criteria_plot_series(
-        criteria, val_loss, val_spectrum, val_criteria_score
+        criteria,
+        val_loss,
+        val_spectrum,
+        val_criteria_score,
+        include_spectrum=include_spectrum,
     )
     n_panels = max(len(series), 1)
     fig, axes = plt.subplots(
@@ -90,7 +154,7 @@ def build_val_criteria_figure(
         "spectrum": "spectrum error",
         "combined": "normalised sum",
     }
-    for ax, (name, values) in zip(axes[:, 0], series):
+    for ax, (name, values, selected) in zip(axes[:, 0], series):
         draw_loss_warmup_lines(
             ax,
             model_name,
@@ -105,8 +169,9 @@ def build_val_criteria_figure(
             ax,
             values,
             "validation",
-            f"{model_name}: {name}",
+            _criteria_panel_title(model_name, name, selected),
             ylabel.get(name, name),
+            best_epoch=best_epoch,
         )
     if n_panels > 1:
         fig.tight_layout()
@@ -127,6 +192,8 @@ def visualize_val_criteria(
     noise_sampling_method,
     save_figures_dir,
     tag,
+    best_epoch=None,
+    include_spectrum=None,
 ):
     """Save validation criteria over epochs at the loss-figure cadence."""
     plt.clf()
@@ -142,6 +209,8 @@ def visualize_val_criteria(
         model_name,
         auto_sampling_method,
         noise_sampling_method,
+        best_epoch=best_epoch,
+        include_spectrum=include_spectrum,
     )
     fig_file = os.path.join(save_figures_dir, f"vis_training_val_criteria_{tag}.png")
     fig.savefig(fig_file)

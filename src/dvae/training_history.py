@@ -25,6 +25,13 @@ Series that were not persisted before this module (checkpoint or pickle):
 ``val_spectrum`` and ``val_criteria_score`` were stored when those criteria
 were on, but a reload did not copy them back into the running arrays.
 ``sigmas_history`` / ``A_sigmas_history`` were in the final pickle only.
+
+A new history always stores the raw ``val_spectrum`` series (not divided
+by the first epoch) and ``val_metric_reference``, the first-epoch recon
+and spectrum values. ``spectrum_monitored`` is false only when the legacy
+switch skipped the spectrum windows. The validation figure is redrawn
+from those fields: raw recon, raw spectrum error when monitoring was on,
+and the stored selection score when more than one criterion was selected.
 """
 
 from __future__ import annotations
@@ -156,6 +163,16 @@ def _plain_stats(dataset_stats) -> dict:
     return out
 
 
+def _float_reference(reference):
+    """Copy a criterion map to plain floats. Empty stays unset."""
+    if not reference:
+        return None
+    out = {}
+    for name, value in dict(reference).items():
+        out[str(name)] = float(value)
+    return out or None
+
+
 def build_training_history(
     *,
     end,
@@ -170,11 +187,18 @@ def build_training_history(
     dataset_stats,
     sigmas_history=None,
     a_sigmas_history=None,
+    metric_reference=None,
+    spectrum_monitored=True,
 ) -> dict:
     """One dict for the checkpoint ``loss_log`` and for ``loss_model.pckl``.
 
     ``end`` is the exclusive epoch bound (the epoch just finished, plus one).
-    ``None`` keeps each array as given.
+    ``None`` keeps each array as given. ``val_loss`` and ``val_spectrum``
+    stay the raw per-epoch values. ``val_metric_reference`` is the
+    first-epoch normaliser (recon, and spectrum when it was scored).
+    ``metric_reference`` wins; otherwise a non-empty ``val_reference`` is
+    stored under that same key. ``spectrum_monitored`` records whether the
+    spectrum windows were built.
     """
     from dvae.run_options import criteria_log_fields
     from dvae.timescale_history import attach_timescale_history
@@ -193,6 +217,12 @@ def build_training_history(
         "none" if noise_sampling_method is None else str(noise_sampling_method)
     )
     history["delta_threshold"] = float(delta_threshold)
+    history["spectrum_monitored"] = bool(spectrum_monitored)
+    metric = _float_reference(metric_reference)
+    if metric is None:
+        metric = _float_reference(val_reference)
+    if metric:
+        history["val_metric_reference"] = metric
     history["dataset_stats"] = _plain_stats(dataset_stats)
     shown = history["kl_warm_values"]
     history["kl_warm_epochs"] = warmup_change_epochs(shown)
@@ -306,6 +336,39 @@ def _criteria_names(history):
     return tuple(part.strip() for part in str(raw).split(",") if part.strip())
 
 
+def _best_epoch_index(history, n):
+    """Last saved best-epoch index, when it lands inside the plotted prefix."""
+    saved = history.get("best_state_epochs")
+    if saved is None:
+        return None
+    arr = np.asarray(saved, dtype=float).reshape(-1)
+    if arr.size == 0 or not np.isfinite(arr[-1]):
+        return None
+    idx = int(arr[-1])
+    if abs(float(arr[-1]) - idx) > 1e-6:
+        return None
+    if 0 <= idx < int(n):
+        return idx
+    return None
+
+
+def _spectrum_for_figure(history, criteria):
+    """Whether the redraw includes spectrum, and the raw series or None.
+
+    A file that records ``spectrum_monitored`` uses that flag. Older
+    pickles include spectrum only when the series or the criterion is
+    present. A missing series is left as None so the figure does not
+    invent a zero line.
+    """
+    if "spectrum_monitored" in history:
+        include = bool(history["spectrum_monitored"])
+    else:
+        include = "val_spectrum" in history or "spectrum" in criteria
+    if include and "val_spectrum" in history:
+        return True, np.asarray(history["val_spectrum"], dtype=float).reshape(-1)
+    return False, None
+
+
 def regenerate_training_figures(history, save_figures_dir, tag=None):
     """Redraw the training figures from a history dict. No data and no model.
 
@@ -390,11 +453,19 @@ def regenerate_training_figures(history, save_figures_dir, tag=None):
         file_tag,
         log_scale=True,
     )
+    include_spectrum, spectrum = _spectrum_for_figure(history, criteria)
+    if spectrum is not None:
+        spectrum = spectrum[:n]
+    score = (
+        _series("val_criteria_score")
+        if "val_criteria_score" in history
+        else None
+    )
     visualize_val_criteria(
         criteria,
         val_loss,
-        _series("val_spectrum"),
-        _series("val_criteria_score"),
+        spectrum,
+        score,
         kl_warm_epochs,
         auto_warm_epochs,
         noise_warm_epochs,
@@ -404,6 +475,8 @@ def regenerate_training_figures(history, save_figures_dir, tag=None):
         noise_method,
         save_figures_dir,
         file_tag,
+        best_epoch=_best_epoch_index(history, n),
+        include_spectrum=include_spectrum,
     )
     if model_name in ("VRNN", "MT_VRNN"):
         visualize_recon_loss(

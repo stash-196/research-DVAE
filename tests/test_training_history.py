@@ -9,6 +9,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 
+import matplotlib.figure
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -128,6 +129,13 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
     )
     assert loaded["dataset_stats"]["gap_quantile_len"] == 9.0
     assert loaded["dataset_stats"]["nan_ratio_threshold"] == 0.325
+    # Raw spectrum, not the first-epoch ratio 0.3 / 0.3.
+    np.testing.assert_allclose(loaded["val_spectrum"], [0.3, 1.3, 2.3, 3.3])
+    assert loaded["val_spectrum"][0] == 0.3
+    assert loaded["val_metric_reference"] == {"recon": 0.5, "spectrum": 0.3}
+    assert loaded["spectrum_monitored"] is True
+    assert loaded["val_criteria_reference"]["recon"] == 0.5
+    assert loaded["val_criteria_reference"]["spectrum"] == 0.3
 
     restored = series_or_new(loaded, "sequence_len_values", 6, fill="hold")
     np.testing.assert_allclose(restored[:4], [80, 80, 100, 100])
@@ -139,6 +147,15 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
 
     captured = {}
     real_savefig = plt.savefig
+    real_fig_save = matplotlib.figure.Figure.savefig
+
+    def _vertical_colors(ax):
+        colors = []
+        for line in ax.lines:
+            x = np.asarray(line.get_xdata(), dtype=float)
+            if x.size >= 2 and np.allclose(x, x[0]):
+                colors.append(line.get_color())
+        return colors
 
     def _save(fig_path, *args, **kwargs):
         fig = plt.gcf()
@@ -164,7 +181,29 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
             captured["n_axes"] = len(fig.axes)
         return real_savefig(fig_path, *args, **kwargs)
 
+    def _fig_save(self, fig_path, *args, **kwargs):
+        name = str(fig_path)
+        if "val_criteria" in name:
+            key = "legacy" if "val_criteria_legacy" in name else (
+                "recon" if "val_criteria_recononly" in name else "both"
+            )
+            captured[key] = {
+                "titles": [
+                    ax.get_legend().get_title().get_text() for ax in self.axes
+                ],
+                "ylabels": [ax.get_ylabel() for ax in self.axes],
+                "best": [
+                    float(np.asarray(line.get_ydata(), dtype=float).reshape(-1)[0])
+                    for ax in self.axes
+                    for line in ax.lines
+                    if line.get_label() == "best epoch"
+                ],
+                "warmup": [_vertical_colors(ax) for ax in self.axes],
+            }
+        return real_fig_save(self, fig_path, *args, **kwargs)
+
     monkeypatch.setattr(plt, "savefig", _save)
+    monkeypatch.setattr(matplotlib.figure.Figure, "savefig", _fig_save)
     out = tmp_path / "figs"
     written = regenerate_training_figures(loaded, out)
     names = {Path(path).name for path in written}
@@ -200,6 +239,68 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
     assert "gap split threshold: 20" in text
     assert "block mask fraction: 0.05" in text
     assert captured["shift_label"] == "samples"
+    both = captured["both"]
+    assert both["titles"] == [
+        "MT_VRNN: recon (selected)",
+        "MT_VRNN: spectrum error (selected)",
+        "MT_VRNN: selection score",
+    ]
+    assert both["ylabels"] == ["loss", "spectrum error", "normalised sum"]
+    # best_state_epochs ends at 2: raw recon 2.5, raw spectrum 2.3, score 4.
+    assert both["best"] == [2.5, 2.3, 4.0]
+    for colors in both["warmup"]:
+        assert "c" in colors
+        assert "r" in colors
+        assert "m" in colors
+
+    recon_only = build_training_history(
+        end=4,
+        model_name="MT_VRNN",
+        tag="recononly",
+        auto_sampling_method="ss",
+        noise_sampling_method="none",
+        delta_threshold=1e-4,
+        val_criteria=("recon",),
+        val_reference={"recon": 0.5},
+        metric_reference={"recon": 0.5, "spectrum": 0.3},
+        spectrum_monitored=True,
+        series=_series(),
+        dataset_stats=_stats(),
+    )
+    recon_path = tmp_path / "recon_only.pckl"
+    save_training_history(recon_path, recon_only)
+    recon_loaded = load_training_history(recon_path)
+    np.testing.assert_allclose(recon_loaded["val_spectrum"], [0.3, 1.3, 2.3, 3.3])
+    assert recon_loaded["val_metric_reference"] == {"recon": 0.5, "spectrum": 0.3}
+    assert recon_loaded["spectrum_monitored"] is True
+    assert "val_criteria_reference" not in recon_loaded
+    regenerate_training_figures(recon_loaded, tmp_path / "recon_figs")
+    assert captured["recon"]["titles"] == [
+        "MT_VRNN: recon (selected)",
+        "MT_VRNN: spectrum error",
+    ]
+    assert captured["recon"]["best"] == [2.5, 2.3]
+    assert "MT_VRNN: selection score" not in captured["recon"]["titles"]
+
+    legacy = build_training_history(
+        end=4,
+        model_name="RNN",
+        tag="legacy",
+        auto_sampling_method="none",
+        noise_sampling_method="none",
+        delta_threshold=1e-4,
+        val_criteria=("recon",),
+        val_reference=None,
+        metric_reference={"recon": 0.5},
+        spectrum_monitored=False,
+        series=_series(),
+        dataset_stats=_stats(),
+    )
+    assert legacy["spectrum_monitored"] is False
+    assert legacy["val_metric_reference"] == {"recon": 0.5}
+    regenerate_training_figures(legacy, tmp_path / "legacy_figs")
+    assert captured["legacy"]["titles"] == ["RNN: recon (selected)"]
+    assert captured["legacy"]["best"] == [2.5]
 
     # The same redraw from a checkpoint loss_log, without using the weights.
     checkpoint = tmp_path / "MT_VRNN_checkpoint.pt"

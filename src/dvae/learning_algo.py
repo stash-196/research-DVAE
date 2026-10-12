@@ -62,7 +62,9 @@ from dvae.run_options import (
     normalised_criterion_sum,
     parse_checkpoint_every_n_epochs,
     parse_optional_int,
+    legacy_defaults_from_config,
     resolve_val_criteria,
+    spectrum_monitoring_enabled,
 )
 from dvae.model import (
     build_VRNN,
@@ -320,14 +322,23 @@ class LearningAlgorithm:
         epoch. Every selected component is logged on that multi-criterion
         path.
         """
-        if "spectrum" in self._val_criteria:
+        if self._spectrum_windows is not None:
             val_spectrum[epoch] = self._score_spectrum_validation()
-            if len(self._val_criteria) == 1:
-                logger.info(
-                    "Val spectrum error (free-run half): {:.6f}".format(
-                        val_spectrum[epoch]
-                    )
+            self.logger.info(
+                "Val spectrum error (free-run half): {:.6f}".format(
+                    val_spectrum[epoch]
                 )
+            )
+        if self._metric_reference is None:
+            reference = {"recon": float(val_loss[epoch])}
+            if self._spectrum_windows is not None:
+                reference["spectrum"] = float(val_spectrum[epoch])
+            self._metric_reference = reference
+            self.logger.info(
+                "Val metric reference (first validation epoch {}): {}".format(
+                    epoch, self._metric_reference
+                )
+            )
         if len(self._val_criteria) == 1:
             if self._val_criteria[0] == "recon":
                 return float(val_loss[epoch])
@@ -336,19 +347,19 @@ class LearningAlgorithm:
         for name in self._val_criteria:
             raw = val_loss[epoch] if name == "recon" else val_spectrum[epoch]
             components[name] = float(raw)
-            logger.info(
+            self.logger.info(
                 "Val criterion {}: {:.6f}".format(name, components[name])
             )
         if self._val_reference is None:
             self._val_reference = dict(components)
-            logger.info(
+            self.logger.info(
                 "Val criteria reference (first validation epoch {}): {}".format(
                     epoch, self._val_reference
                 )
             )
         score = normalised_criterion_sum(components, self._val_reference)
         val_criteria_score[epoch] = score
-        logger.info("Val criteria normalised sum: {:.6f}".format(score))
+        self.logger.info("Val criteria normalised sum: {:.6f}".format(score))
         return score
 
     def train(self, profiler=None):
@@ -419,6 +430,7 @@ class LearningAlgorithm:
         log_file = os.path.join(save_dir, "log.txt")
         logger_type = self.cfg.getint("User", "logger_type")
         logger = get_logger(log_file, logger_type)
+        self.logger = logger
 
         # Print basic information
         for log in self.get_basic_info():
@@ -494,17 +506,23 @@ class LearningAlgorithm:
         # Blank val_criteria is recon,spectrum: each term divided by its
         # first validation epoch, then summed. Explicit recon, or
         # legacy_defaults / legacy_windowing, stays on the raw val_loss
-        # comparison.
+        # comparison. The figure still records raw recon and spectrum
+        # unless that legacy switch is on and spectrum is not selected.
         # spectrum scores fixed free-run windows and does not resize them.
         self._val_criteria = resolve_val_criteria(self.cfg)
         self._val_reference = None
+        self._metric_reference = None
+        self._monitor_spectrum = spectrum_monitoring_enabled(
+            self._val_criteria,
+            legacy=legacy_defaults_from_config(self.cfg),
+        )
         self._checkpoint_every = parse_checkpoint_every_n_epochs(
             self.cfg.get("Training", "checkpoint_every_n_epochs", fallback="0")
         )
         self._spectrum_windows = None
         self._spectrum_tf_steps = None
         self._spectrum_observation = dataset_config.observation_process
-        if "spectrum" in self._val_criteria:
+        if self._monitor_spectrum:
             n_windows = parse_optional_int(
                 self.cfg.get("Training", "val_spectrum_n_windows", fallback=None),
                 10,
@@ -695,6 +713,11 @@ class LearningAlgorithm:
                         restored[name] = float(saved_ref[name])
                 if len(restored) == len(self._val_criteria):
                     self._val_reference = restored
+            saved_metrics = loss_log.get("val_metric_reference")
+            if isinstance(saved_metrics, dict) and saved_metrics:
+                self._metric_reference = {
+                    str(name): float(saved_metrics[name]) for name in saved_metrics
+                }
 
         # Blank warmup_order is window_first. A blank warmup_patience_start
         # is max(1, round(frac * early_stop_patience)), frac 0.2.
@@ -749,6 +772,8 @@ class LearningAlgorithm:
                 delta_threshold=delta_threshold,
                 val_criteria=self._val_criteria,
                 val_reference=self._val_reference,
+                metric_reference=self._metric_reference,
+                spectrum_monitored=self._monitor_spectrum,
                 series={
                     "train_loss": train_loss,
                     "val_loss": val_loss,
@@ -1573,6 +1598,12 @@ class LearningAlgorithm:
                     self.noise_sampling_method,
                     save_figures_dir,
                     tag,
+                    best_epoch=(
+                        cur_best_epoch
+                        if 0 <= cur_best_epoch <= epoch
+                        else None
+                    ),
+                    include_spectrum=self._monitor_spectrum,
                 )
                 visualize_total_loss(
                     train_loss[: epoch + 1],

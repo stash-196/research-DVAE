@@ -22,6 +22,7 @@ from dvae.run_options import (
     parse_val_criteria,
     resolve_mask_label_override,
     resolve_val_criteria,
+    spectrum_monitoring_enabled,
 )
 
 
@@ -110,6 +111,10 @@ def test_val_criteria_default_is_normalised_recon_and_spectrum():
     assert parse_checkpoint_every_n_epochs("off") == 0
     assert parse_checkpoint_every_n_epochs("0") == 0
     assert parse_checkpoint_every_n_epochs("5") == 5
+    assert spectrum_monitoring_enabled(("recon",), legacy=False) is True
+    assert spectrum_monitoring_enabled(("recon",), legacy=True) is False
+    assert spectrum_monitoring_enabled(("recon", "spectrum"), legacy=True) is True
+    assert spectrum_monitoring_enabled(("spectrum",), legacy=False) is True
 
 
 def test_mask_label_suffix_only_when_override_differs():
@@ -219,6 +224,18 @@ def _vertical_line_colors(ax):
     return colors
 
 
+def _panel_titles(fig):
+    return [ax.get_legend().get_title().get_text() for ax in fig.axes]
+
+
+def _best_epoch_ys(ax):
+    ys = []
+    for line in ax.lines:
+        if line.get_label() == "best epoch":
+            ys.append(float(np.asarray(line.get_ydata(), dtype=float).reshape(-1)[0]))
+    return ys
+
+
 def test_val_criteria_figure_matches_loss_plot_markers(tmp_path):
     from dvae.visualizers.visualize_training_metrics import (
         build_val_criteria_figure,
@@ -226,15 +243,38 @@ def test_val_criteria_figure_matches_loss_plot_markers(tmp_path):
         visualize_val_criteria,
     )
 
-    recon_only = val_criteria_plot_series(("recon",), [1.0, 0.5], [9.0], [3.0])
-    assert [name for name, _ in recon_only] == ["recon"]
+    monitored = val_criteria_plot_series(
+        ("recon",), [1.0, 0.5], [9.0, 4.0], [3.0, 1.0]
+    )
+    assert [(name, selected) for name, _, selected in monitored] == [
+        ("recon", True),
+        ("spectrum", False),
+    ]
+    legacy = val_criteria_plot_series(("recon",), [1.0, 0.5], None, None)
+    assert [name for name, _, _ in legacy] == ["recon"]
+    forced_off = val_criteria_plot_series(
+        ("recon",),
+        [1.0, 0.5],
+        [9.0, 4.0],
+        None,
+        include_spectrum=False,
+    )
+    assert [name for name, _, _ in forced_off] == ["recon"]
+    with pytest.raises(ValueError, match="val_spectrum is missing"):
+        val_criteria_plot_series(
+            ("recon",), [1.0], None, None, include_spectrum=True
+        )
     both = val_criteria_plot_series(
         ("recon", "spectrum"),
         [1.0, 0.5],
         [4.0, 2.0],
         [2.0, 1.0],
     )
-    assert [name for name, _ in both] == ["recon", "spectrum", "combined"]
+    assert [(name, selected) for name, _, selected in both] == [
+        ("recon", True),
+        ("spectrum", True),
+        ("combined", True),
+    ]
 
     kl = [0, 3]
     auto = [0, 4]
@@ -252,6 +292,7 @@ def test_val_criteria_figure_matches_loss_plot_markers(tmp_path):
         "VRNN",
         "ss",
         "ss",
+        best_epoch=1,
     )
     assert len(fig.axes) == 3
     assert [ax.get_ylabel() for ax in fig.axes] == [
@@ -259,6 +300,12 @@ def test_val_criteria_figure_matches_loss_plot_markers(tmp_path):
         "spectrum error",
         "normalised sum",
     ]
+    assert _panel_titles(fig) == [
+        "VRNN: recon (selected)",
+        "VRNN: spectrum error (selected)",
+        "VRNN: selection score",
+    ]
+    assert [_best_epoch_ys(ax) for ax in fig.axes] == [[0.5], [2.0], [1.0]]
     for ax in fig.axes:
         colors = _vertical_line_colors(ax)
         assert colors.count("c") == len(kl)
@@ -266,6 +313,8 @@ def test_val_criteria_figure_matches_loss_plot_markers(tmp_path):
         assert colors.count("g") == len(noise)
         assert colors.count("m") == len(seq)
         assert ax.get_xlabel() == "epochs"
+        labels = [text.get_text() for text in ax.get_legend().get_texts()]
+        assert labels == ["validation", "best epoch"]
     rnn = build_val_criteria_figure(
         ("recon",),
         [1.0, 0.4],
@@ -280,14 +329,39 @@ def test_val_criteria_figure_matches_loss_plot_markers(tmp_path):
         "none",
     )
     assert len(rnn.axes) == 1
+    assert _panel_titles(rnn) == ["RNN: recon (selected)"]
+    assert _best_epoch_ys(rnn.axes[0]) == []
     rnn_colors = _vertical_line_colors(rnn.axes[0])
     assert "c" not in rnn_colors
     assert "r" not in rnn_colors
     assert rnn_colors.count("m") == len(seq)
+    recorded = build_val_criteria_figure(
+        ("recon",),
+        [1.0, 0.4],
+        [8.0, 3.0],
+        None,
+        kl,
+        auto,
+        noise,
+        seq,
+        "RNN",
+        "none",
+        "none",
+        best_epoch=1,
+    )
+    assert len(recorded.axes) == 2
+    assert _panel_titles(recorded) == [
+        "RNN: recon (selected)",
+        "RNN: spectrum error",
+    ]
+    assert [_best_epoch_ys(ax) for ax in recorded.axes] == [[0.4], [3.0]]
+    for ax in recorded.axes:
+        colors = _vertical_line_colors(ax)
+        assert colors.count("m") == len(seq)
     path = visualize_val_criteria(
         ("recon",),
         [1.0, 0.4],
-        None,
+        [8.0, 3.0],
         None,
         kl,
         [],
@@ -298,6 +372,8 @@ def test_val_criteria_figure_matches_loss_plot_markers(tmp_path):
         "none",
         str(tmp_path),
         "unit",
+        best_epoch=0,
+        include_spectrum=True,
     )
     assert path.endswith("vis_training_val_criteria_unit.png")
     assert (tmp_path / "vis_training_val_criteria_unit.png").stat().st_size > 0

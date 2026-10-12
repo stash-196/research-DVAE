@@ -2,10 +2,13 @@
 
 ``val_criteria`` defaults to recon and spectrum. A blank key keeps that
 pair: each term is divided by its first validation epoch and the sum is
-the selection score. ``[DataFrame] legacy_defaults`` true, or the same
-switch under its old name ``legacy_windowing``, keeps reconstruction-only
-selection when ``val_criteria`` is blank. An explicit ``val_criteria =
-recon`` does that on its own.
+the selection score. The validation figure still plots raw recon and the
+spectrum error every epoch; the list only chooses the checkpoint.
+``[DataFrame] legacy_defaults`` true, or the same switch under its old
+name ``legacy_windowing``, keeps reconstruction-only selection when
+``val_criteria`` is blank, and then skips the spectrum windows unless
+spectrum is explicitly selected. An explicit ``val_criteria = recon``
+selects on raw ``val_loss`` and still records the spectrum error.
 Checkpoint cadence and the in-domain eval path stay off unless set.
 """
 
@@ -130,6 +133,17 @@ def normalised_criterion_sum(components: dict, reference: dict) -> float:
             )
         total += current / ref_value
     return total
+
+
+def spectrum_monitoring_enabled(criteria, legacy: bool = False) -> bool:
+    """Score the fixed spectrum windows even when selection ignores them.
+
+    The legacy switch is the exception: with it on, the windows are built
+    only when ``spectrum`` is one of the selection criteria.
+    """
+    if "spectrum" in tuple(criteria):
+        return True
+    return not bool(legacy)
 
 
 def criteria_log_fields(criteria, val_spectrum, val_criteria_score, reference, end):
