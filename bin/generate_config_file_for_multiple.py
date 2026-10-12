@@ -362,6 +362,7 @@ if __name__ == "__main__":
             # "coarse_eeg_hr_acc_tod",
             # "coarse_full",
             # "ecg_removed_eeg",
+            # "ecg_removed_eeg_scale",
         ]
     elif dataset_name[0] == "PhysioNet2012":
         observation_process = [
