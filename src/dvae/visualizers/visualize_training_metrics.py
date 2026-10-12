@@ -4,7 +4,6 @@ import numpy as np
 
 from dvae.eval.aggregate_plot_style import (
     apply_paper_ready_line_style,
-    save_figure,
     setup_plot_y_axis,
 )
 
@@ -1352,30 +1351,46 @@ def visualize_alpha_history(
 
 
 # One row per fixed window, one column per timestep of that window.
+# The last flag fixes a linear cosine axis on [-1, 1].
 _DRIFT_STEP_PANELS = (
-    ("e2", r"$e_t^{2}$", "tab:blue"),
-    ("ed", r"$e_t d_t$", "tab:green"),
-    ("d2", r"$d_t^{2}$", "tab:orange"),
+    ("e2", r"$e_t^{2}$", "tab:blue", False),
+    ("ed", r"$e_t d_t$", "tab:green", False),
+    ("d2", r"$d_t^{2}$", "tab:orange", False),
+    ("cos", r"$\cos_t$", "tab:red", True),
 )
 
 
-def build_drift_timestep_figure(terms, flip=None, normalized=False):
-    """Three stacked panels of per-window drift trajectories.
+def _align_drift_timestep_axes(fig, axes, time):
+    """Same x limits and ticks. Y labels share a left edge. Y scales stay per panel."""
+    left = float(time[0])
+    right = float(time[-1]) if time.size > 1 else left + 1.0
+    axes[-1].set_xlim(left, right)
+    fig.canvas.draw()
+    xticks = np.asarray(axes[-1].get_xticks(), dtype=float)
+    for ax in axes:
+        ax.set_xlim(left, right)
+        ax.set_xticks(xticks)
+    fig.align_ylabels(axes)
 
-    ``terms`` maps ``e2``, ``ed``, and ``d2`` to arrays shaped
+
+def build_drift_timestep_figure(terms, flip=None, normalized=False):
+    """Four stacked panels of per-window drift trajectories.
+
+    ``terms`` maps ``e2``, ``ed``, ``d2``, and ``cos`` to arrays shaped
     ``(window, time)``. Each panel draws every window faintly and the
-    mean across windows as a solid line. The time axis is shared.
-    ``flip`` marks the teacher-forced boundary when it is known.
-    Styling follows ``aggregate_plot_style``.
+    mean across windows as a solid line. The time axis, its limits, and
+    its ticks are shared. Each panel keeps its own y scale. The cosine
+    panel is linear on ``[-1, 1]``. ``flip`` marks the teacher-forced
+    boundary when it is known. Styling follows ``aggregate_plot_style``.
     """
     saved_style = plt.rcParams.copy()
     apply_paper_ready_line_style()
     try:
         fig, axes = plt.subplots(
-            3, 1, sharex=True, figsize=(12, 14), squeeze=True
+            len(_DRIFT_STEP_PANELS), 1, sharex=True, figsize=(12, 18), squeeze=True
         )
         time = None
-        for ax, (key, label, color) in zip(axes, _DRIFT_STEP_PANELS):
+        for ax, (key, label, color, cosine_axis) in zip(axes, _DRIFT_STEP_PANELS):
             values = np.asarray(terms[key], dtype=float)
             if values.ndim != 2:
                 raise ValueError(
@@ -1399,8 +1414,12 @@ def build_drift_timestep_figure(terms, flip=None, normalized=False):
                     label="window" if index == 0 else "_nolegend_",
                     zorder=1,
                 )
-            with np.errstate(all="ignore"):
-                mean = np.nanmean(values, axis=0)
+            finite = np.isfinite(values)
+            count = finite.sum(axis=0)
+            summed = np.sum(np.where(finite, values, 0.0), axis=0)
+            mean = np.full(count.shape, np.nan, dtype=float)
+            ok = count > 0
+            mean[ok] = summed[ok] / count[ok]
             ax.plot(
                 time,
                 mean,
@@ -1419,21 +1438,35 @@ def build_drift_timestep_figure(terms, flip=None, normalized=False):
                     label="_nolegend_",
                     zorder=2,
                 )
-            ylabel = label + (r" / var" if normalized else "")
+            if cosine_axis:
+                ylabel = label
+            else:
+                ylabel = label + (r" / var" if normalized else "")
             ax.set_ylabel(ylabel)
-            setup_plot_y_axis(ax, values)
+            if cosine_axis:
+                ax.set_yscale("linear")
+                ax.set_ylim(-1.0, 1.0)
+                ax.set_autoscaley_on(False)
+            else:
+                setup_plot_y_axis(ax, values)
             ax.legend(loc="upper right")
         axes[-1].set_xlabel(r"$t$")
+        _align_drift_timestep_axes(fig, axes, time)
         return fig
     finally:
         plt.rcParams.update(saved_style)
 
 
 def save_drift_timestep_figure(terms, path, flip=None, normalized=False):
-    """Write the three-panel drift trajectory figure."""
+    """Write the four-panel drift trajectory figure."""
     fig = build_drift_timestep_figure(terms, flip=flip, normalized=normalized)
     try:
-        save_figure(fig, path)
+        try:
+            fig.tight_layout()
+        except Exception:
+            pass
+        fig.align_ylabels(fig.axes)
+        fig.savefig(path, bbox_inches="tight", pad_inches=0.3)
     finally:
         plt.close(fig)
 
