@@ -1216,14 +1216,15 @@ def visualize_alpha_history_and_spectrums(
 
     alphas_from_periods = dt / periods
     periods_max, periods_min = np.max(periods), np.min(periods)
-    # Default range matches the historical MT figure: natural sigmoid of the
-    # largest stored sigma, divided by 10. A custom transform (PLRNN diagonal A)
-    # uses that same rule on the transformed values.
-    if alpha_from_sigma is None:
-        alpha_range_min = 1 / (1 + np.exp(-np.max(sigmas_history))) / 10
-    else:
-        transformed_max = float(np.max(alpha_from_sigma(sigmas_history)))
-        alpha_range_min = max(transformed_max, 1e-8) / 10
+    # Default is MT_RNN.sigmoid_10: 1 / (1 + 10 ** (-sigma)). A custom
+    # transform (PLRNN diagonal A) uses that same range rule.
+    from dvae.visualizers.visualize_training_metrics import mt_alpha_from_sigma
+
+    transform = mt_alpha_from_sigma if alpha_from_sigma is None else alpha_from_sigma
+    transformed_max = float(
+        np.max(np.asarray(transform(sigmas_history), dtype=np.float64))
+    )
+    alpha_range_min = max(transformed_max, 1e-8) / 10
     alpha_range_max = 1.1
     ylim_max = max(dt / alpha_range_min, periods_max)
     ylim_min = min(dt / alpha_range_max, periods_min)
@@ -1267,10 +1268,7 @@ def visualize_alpha_history_and_spectrums(
         n_plot = min(num_alphas, int(max_curves))
     annotate = n_plot <= len(alpha_colors)
     for i in range(n_plot):
-        if alpha_from_sigma is None:
-            alphas = 1 / (1 + np.exp(-sigmas_history[i]))
-        else:
-            alphas = np.asarray(alpha_from_sigma(sigmas_history[i]), dtype=np.float64)
+        alphas = np.asarray(transform(sigmas_history[i]), dtype=np.float64)
         periods_from_alpha = dt / alphas
         curve_color = alpha_colors[i % len(alpha_colors)]
         ax1.plot(periods_from_alpha, label=f"α {i+1}", color=curve_color)

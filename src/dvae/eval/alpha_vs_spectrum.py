@@ -1,16 +1,15 @@
 """Eval figure: timescale trajectories beside the signal power spectrum.
 
-MT_RNN / MT_VRNN historically drew this from ``loss_model.pckl``
-``sigmas_history`` inside spectrum analysis, converting logits with a
-natural sigmoid. The call was gated on the MT model name, the spectrum
-panel title was hardcoded to Lorenz63, and the spectra themselves came
-from a dataset if/elif (Lorenz63, SHO, DampedSHO, Xhro) that did not
-include XhroProper or XhroPacketLoss. After the benchmark rewrite the
-call sat below a ``return`` and was then deleted, so no dataset wrote
-the figure. This module draws it for whatever dataset produced the
-channel benchmarks, including XHRO, whenever a timescale history exists.
-PLRNN / shPLRNN use ``A_sigmas`` (diagonal A via the cell's base-10
-sigmoid).
+MT_RNN / MT_VRNN draw this from ``loss_model.pckl`` ``sigmas_history``,
+converting logits with the model's base-10 sigmoid (``MT_RNN.sigmoid_10``).
+The call was gated on the MT model name, the spectrum panel title was
+hardcoded to Lorenz63, and the spectra themselves came from a dataset
+if/elif (Lorenz63, SHO, DampedSHO, Xhro) that did not include XhroProper
+or XhroPacketLoss. After the benchmark rewrite the call sat below a
+``return`` and was then deleted, so no dataset wrote the figure. This
+module draws it for whatever dataset produced the channel benchmarks,
+including XHRO, whenever a timescale history exists. PLRNN / shPLRNN
+use ``A_sigmas`` (diagonal A via the same base-10 sigmoid).
 """
 
 import os
@@ -24,7 +23,7 @@ def eval_timescale_tracks(loaded_data, model_name):
     """Return plot tracks present in a loss pickle.
 
     Each track is ``{"history", "kind", "explain"}``.
-    ``kind="mt"`` keeps the historical natural-sigmoid figure.
+    ``kind="mt"`` uses the model's base-10 sigmoid in the figure.
     ``kind="plrnn"`` is diagonal A. When both exist, the PLRNN file uses
     explain ``diagA`` so it does not replace the MT figure.
     """
@@ -145,8 +144,8 @@ def save_alpha_vs_spectrum_figures(
 
     Any dataset is eligible once a timescale history and channel benchmarks
     exist. The spectrum panel is titled with that dataset name. Lorenz MT
-    runs still read ``Lorenz63\\nPower Spectrum`` and still use the natural
-    sigmoid. PLRNN tracks pass the base-10 diagonal-A transform.
+    runs still read ``Lorenz63\\nPower Spectrum`` and use the model's
+    base-10 sigmoid. PLRNN tracks pass the same base-10 map explicitly.
     """
     tracks = eval_timescale_tracks(loaded_data, model_name)
     spectra = gt_power_spectra(channel_benchmarks)
