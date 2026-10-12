@@ -1,7 +1,10 @@
-"""Training and eval switches that stay off unless a config or CLI asks.
+"""Training and eval switches.
 
-Blank, ``None``, and ``off`` keep today's reconstruction validation, checkpoint
-cadence, and in-domain eval paths.
+``val_criteria`` defaults to recon and spectrum. A blank key keeps that
+pair: each term is divided by its first validation epoch and the sum is
+the selection score. ``[DataFrame] legacy_windowing`` true, or an explicit
+``val_criteria = recon``, keeps reconstruction-only selection.
+Checkpoint cadence and the in-domain eval path stay off unless set.
 """
 
 from __future__ import annotations
@@ -10,7 +13,9 @@ import math
 import re
 
 _OFF = {"", "none", "null", "off", "false", "no"}
+_VAL_UNSET = {"", "none", "null"}
 _VAL_CRITERIA = ("recon", "spectrum")
+DEFAULT_VAL_CRITERIA = ("recon", "spectrum")
 
 
 def _text(raw) -> str:
@@ -19,24 +24,39 @@ def _text(raw) -> str:
     return str(raw).strip()
 
 
-def parse_val_criteria(raw) -> tuple[str, ...]:
-    """Comma-separated validation criteria. Default is ``('recon',)``.
+def legacy_windowing_enabled(raw) -> bool:
+    """True only for an explicit true/yes/on. Blank stays false."""
+    return _text(raw).lower() in {"1", "true", "yes", "y", "on"}
+
+
+def parse_val_criteria(raw, legacy_windowing=False) -> tuple[str, ...]:
+    """Comma-separated validation criteria.
+
+    Blank and ``None`` are ``recon,spectrum``. ``legacy_windowing`` true
+    changes that blank default back to ``recon``. An explicit ``recon``
+    is always recon only, and an explicit list is kept as written.
 
     ``recon`` is the reconstruction validation loss. ``spectrum`` is the
-    free-run spectral error. Blank, ``None``, and ``off`` mean ``recon``.
-
-    One entry is used raw, so ``recon`` keeps the historical ``val_loss``
-    comparison. Two entries are added after each is divided by its own
-    value at the first validation epoch. That sum is lower-is-better.
-    Each first-epoch value must be finite and non-zero.
+    free-run spectral error. One entry is used raw, so ``recon`` keeps
+    the historical ``val_loss`` comparison. Two entries are added after
+    each is divided by its own value at the first validation epoch. That
+    sum is lower-is-better. Each first-epoch value must be finite and
+    non-zero.
     """
     text = _text(raw)
-    if text.lower() in _OFF:
+    lowered = text.lower()
+    if lowered in _VAL_UNSET:
+        if legacy_windowing:
+            return ("recon",)
+        return DEFAULT_VAL_CRITERIA
+    if lowered in {"off", "false", "no", "recon"}:
         return ("recon",)
     parts = [part.strip().lower() for part in text.split(",")]
     parts = [part for part in parts if part]
     if not parts:
-        return ("recon",)
+        if legacy_windowing:
+            return ("recon",)
+        return DEFAULT_VAL_CRITERIA
     unknown = [part for part in parts if part not in _VAL_CRITERIA]
     if unknown:
         raise ValueError(
@@ -46,6 +66,24 @@ def parse_val_criteria(raw) -> tuple[str, ...]:
     if len(parts) != len(set(parts)):
         raise ValueError(f"val_criteria repeats an entry, got {raw!r}.")
     return tuple(parts)
+
+
+def resolve_val_criteria(cfg) -> tuple[str, ...]:
+    """Read ``[Training] val_criteria`` and ``[DataFrame] legacy_windowing``.
+
+    A missing ``val_criteria`` key falls back to the older ``val_criterion``
+    name. Blank uses the default pair unless legacy windowing is on.
+    """
+    if cfg.has_option("Training", "val_criteria"):
+        raw = cfg.get("Training", "val_criteria")
+    elif cfg.has_option("Training", "val_criterion"):
+        raw = cfg.get("Training", "val_criterion")
+    else:
+        raw = None
+    legacy = False
+    if cfg.has_section("DataFrame") and cfg.has_option("DataFrame", "legacy_windowing"):
+        legacy = legacy_windowing_enabled(cfg.get("DataFrame", "legacy_windowing"))
+    return parse_val_criteria(raw, legacy_windowing=legacy)
 
 
 def normalised_criterion_sum(components: dict, reference: dict) -> float:

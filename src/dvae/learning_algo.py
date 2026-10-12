@@ -56,7 +56,7 @@ from dvae.run_options import (
     normalised_criterion_sum,
     parse_checkpoint_every_n_epochs,
     parse_optional_int,
-    parse_val_criteria,
+    resolve_val_criteria,
 )
 from dvae.model import (
     build_VRNN,
@@ -465,14 +465,11 @@ class LearningAlgorithm:
         logger.info("Training samples: {}".format(train_num))
         logger.info("Validation samples: {}".format(val_num))
 
-        # Default recon: best-model and early stopping stay on val_loss.
+        # Blank val_criteria is recon,spectrum: each term divided by its
+        # first validation epoch, then summed. Explicit recon, or
+        # legacy_windowing, stays on the raw val_loss comparison.
         # spectrum scores fixed free-run windows and does not resize them.
-        # A list normalises each term by its first validation epoch and sums.
-        if self.cfg.has_option("Training", "val_criteria"):
-            criteria_raw = self.cfg.get("Training", "val_criteria")
-        else:
-            criteria_raw = self.cfg.get("Training", "val_criterion", fallback="recon")
-        self._val_criteria = parse_val_criteria(criteria_raw)
+        self._val_criteria = resolve_val_criteria(self.cfg)
         self._val_reference = None
         self._checkpoint_every = parse_checkpoint_every_n_epochs(
             self.cfg.get("Training", "checkpoint_every_n_epochs", fallback="0")

@@ -12,6 +12,8 @@ from dvae.eval.utils.spectrum_validation import (
     capture_fixed_spectrum_windows,
     score_spectrum_windows,
 )
+import configparser
+
 from dvae.run_options import (
     criteria_log_fields,
     eval_output_dir,
@@ -19,6 +21,7 @@ from dvae.run_options import (
     parse_checkpoint_every_n_epochs,
     parse_val_criteria,
     resolve_mask_label_override,
+    resolve_val_criteria,
 )
 
 
@@ -46,14 +49,34 @@ class _Subjects(_Series):
         self.subject_index_per_row = np.asarray(index, dtype=np.int64)
 
 
-def test_val_criteria_default_is_raw_recon():
-    assert parse_val_criteria(None) == ("recon",)
-    assert parse_val_criteria("") == ("recon",)
-    assert parse_val_criteria("None") == ("recon",)
+def test_val_criteria_default_is_normalised_recon_and_spectrum():
+    assert parse_val_criteria(None) == ("recon", "spectrum")
+    assert parse_val_criteria("") == ("recon", "spectrum")
+    assert parse_val_criteria("None") == ("recon", "spectrum")
     assert parse_val_criteria("recon") == ("recon",)
+    assert parse_val_criteria("off") == ("recon",)
+    assert parse_val_criteria("", legacy_windowing=True) == ("recon",)
+    assert parse_val_criteria(None, legacy_windowing=True) == ("recon",)
+    assert parse_val_criteria("recon,spectrum", legacy_windowing=True) == (
+        "recon",
+        "spectrum",
+    )
     assert parse_val_criteria("spectrum") == ("spectrum",)
     assert parse_val_criteria("recon,spectrum") == ("recon", "spectrum")
     assert parse_val_criteria("spectrum, recon") == ("spectrum", "recon")
+    cfg = configparser.ConfigParser()
+    cfg.add_section("Training")
+    cfg.add_section("DataFrame")
+    assert resolve_val_criteria(cfg) == ("recon", "spectrum")
+    cfg.set("DataFrame", "legacy_windowing", "true")
+    assert resolve_val_criteria(cfg) == ("recon",)
+    cfg.set("Training", "val_criteria", "recon")
+    assert resolve_val_criteria(cfg) == ("recon",)
+    cfg.set("Training", "val_criteria", "recon,spectrum")
+    assert resolve_val_criteria(cfg) == ("recon", "spectrum")
+    cfg.remove_option("Training", "val_criteria")
+    cfg.set("Training", "val_criterion", "recon")
+    assert resolve_val_criteria(cfg) == ("recon",)
     with pytest.raises(ValueError):
         parse_val_criteria("both")
     with pytest.raises(ValueError):
