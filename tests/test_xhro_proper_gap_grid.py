@@ -115,14 +115,18 @@ def test_old_npz_recut_matches_find_indices(tmp_path, capsys):
     assert list(ds.data_idx) == list(
         np.asarray(find_indices(n, 16, n // 16, strict_non_overlap=True)).tolist()
     )
-    # This fixture's first window is mostly NaN, so the 0.3 default drops it.
+    # This fixture's first window is mostly NaN. The relative default
+    # (missing rate + 0.2) still drops it. The rate itself is 5/200.
     filtered = _load(tmp_path, seq_len=16)
-    assert filtered.max_window_nan_ratio == pytest.approx(0.3)
+    assert filtered.max_window_nan_ratio is None
+    assert filtered.max_window_nan_excess == pytest.approx(0.2)
+    assert filtered.dataset_missing_rate == pytest.approx(5 / 200)
     assert 0 not in filtered.data_idx
     legacy = _load(tmp_path, seq_len=16, legacy_windowing=True)
     assert legacy.strict_non_overlap is False
     assert legacy.start_on_observed is False
     assert legacy.max_window_nan_ratio is None
+    assert legacy.max_window_nan_excess is None
     assert legacy.max_gap_window_frac is None
     assert list(legacy.data_idx) == list(
         np.asarray(find_indices(n, 16, n // 16)).tolist()
@@ -335,6 +339,7 @@ def test_template_has_gap_keys():
     assert "max_gap_window_frac = {max_gap_window_frac}" in text
     assert "start_on_observed = {start_on_observed}" in text
     assert "max_window_nan_ratio = {max_window_nan_ratio}" in text
+    assert "max_window_nan_excess = {max_window_nan_excess}" in text
     assert "strict_non_overlap = {strict_non_overlap}" in text
     assert "legacy_windowing = {legacy_windowing}" in text
 
@@ -579,7 +584,8 @@ def test_max_window_nan_ratio_filters_recuts_unless_overridden(tmp_path):
         Path(__file__).resolve().parents[1] / "src/dvae/learning_algo.py"
     ).read_text()
     assert "minimum_nan_ratio=0.3" in text
-    assert open_windows.max_window_nan_ratio == pytest.approx(0.3)
+    assert open_windows.max_window_nan_ratio is None
+    assert open_windows.max_window_nan_excess == pytest.approx(0.2)
 
 
 def test_default_fraction_splits_and_legacy_keeps_an_explicit_key(tmp_path):
@@ -590,13 +596,19 @@ def test_default_fraction_splits_and_legacy_keeps_an_explicit_key(tmp_path):
     assert blank["legacy_windowing"] is False
     assert blank["start_on_observed"] is True
     assert blank["strict_non_overlap"] is True
-    assert blank["max_window_nan_ratio"] == pytest.approx(0.3)
+    assert blank["max_window_nan_ratio"] is None
+    assert blank["max_window_nan_ratio_off"] is False
+    assert blank["max_window_nan_excess"] == pytest.approx(0.2)
     assert blank["max_gap_window_frac"] == pytest.approx(0.25)
     legacy = resolve_windowing(legacy_windowing=True)
     assert legacy["start_on_observed"] is False
     assert legacy["strict_non_overlap"] is False
     assert legacy["max_window_nan_ratio"] is None
+    assert legacy["max_window_nan_ratio_off"] is False
+    assert legacy["max_window_nan_excess"] is None
     assert legacy["max_gap_window_frac"] is None
+    assert resolve_windowing(max_window_nan_ratio="off")["max_window_nan_ratio_off"]
+    assert resolve_windowing(max_window_nan_excess="off")["max_window_nan_excess"] is None
     mixed = resolve_windowing(legacy_windowing=True, start_on_observed=True)
     assert mixed["start_on_observed"] is True
     assert mixed["strict_non_overlap"] is False
@@ -619,3 +631,105 @@ def test_default_fraction_splits_and_legacy_keeps_an_explicit_key(tmp_path):
     split = _load(tmp_path, seq_len=10, max_window_nan_ratio="off")
     assert split.max_gap_window_frac == pytest.approx(0.25)
     assert not any(start < 38 and start + split.seq_len > 30 for start in split.data_idx)
+
+
+def test_missing_rate_counts_absent_rows_and_ignores_inf():
+    from dvae.dataset.gap_grid import dataset_missing_rate
+
+    values = np.array([[1.0, np.nan], [2.0, 3.0], [np.inf, 4.0]])
+    assert dataset_missing_rate(values) == pytest.approx(1 / 6)
+    present = np.array([True, False, True])
+    # The finite row with present=false counts. inf does not.
+    assert dataset_missing_rate(values, present) == pytest.approx(0.5)
+
+
+def test_relative_nan_excess_uses_the_loaded_series(tmp_path, capsys):
+    n = 100
+    ch1 = np.arange(n, dtype=np.float64) + 1.0
+    ch1[0:4] = np.nan
+    ch1[10:12] = np.nan
+    ch1[90:94] = np.nan
+    _session(tmp_path, n, ch1=ch1)
+    common = dict(
+        seq_len=10,
+        start_on_observed=False,
+        max_gap_window_frac="off",
+        val_indices=0.0,
+    )
+    capsys.readouterr()
+    ds = _load(tmp_path, **common)
+    # 10 NaNs on the full 100 rows, including the held-out tail.
+    assert ds.dataset_missing_rate == pytest.approx(0.1)
+    assert ds.max_window_nan_ratio is None
+    assert ds.max_window_nan_excess == pytest.approx(0.2)
+    # 4/10 is above 0.3; 2/10 is not.
+    assert 0 not in ds.data_idx
+    assert 10 in ds.data_idx
+    out = capsys.readouterr().out
+    assert "dataset_missing_rate=0.1" in out
+    assert "threshold=0.3 (relative)" in out
+    assert "windows_dropped=1" in out
+
+    held = _load(tmp_path, split="test", **common)
+    assert held.dataset_missing_rate == pytest.approx(ds.dataset_missing_rate)
+
+    capsys.readouterr()
+    rate_before = ds.dataset_missing_rate
+    ds.update_sequence_length(20)
+    assert ds.dataset_missing_rate == pytest.approx(rate_before)
+    recut = capsys.readouterr().out
+    assert "dataset_missing_rate=0.1" in recut
+    assert "windows_dropped=" in recut
+
+    capsys.readouterr()
+    wide = _load(tmp_path, max_window_nan_excess=0.95, **common)
+    assert 0 in wide.data_idx
+    wide_out = capsys.readouterr().out
+    assert "threshold=1.05 (relative, >=1)" in wide_out
+    assert "windows_dropped=0" in wide_out
+
+    absolute = _load(
+        tmp_path,
+        legacy_windowing=True,
+        max_window_nan_ratio=0.0,
+        max_window_nan_excess=0.2,
+        **common,
+    )
+    assert absolute.max_window_nan_ratio == pytest.approx(0.0)
+    assert 0 not in absolute.data_idx
+    assert 10 not in absolute.data_idx
+
+    legacy = _load(
+        tmp_path,
+        legacy_windowing=True,
+        max_window_nan_excess=0.0,
+        seq_len=10,
+        start_on_observed=False,
+        max_gap_window_frac="off",
+        val_indices=0.0,
+    )
+    assert legacy.max_window_nan_ratio is None
+    assert legacy.max_window_nan_excess == pytest.approx(0.0)
+    assert 0 in legacy.data_idx
+
+    off = _load(tmp_path, max_window_nan_ratio="off", **common)
+    assert off.max_window_nan_ratio_off is True
+    assert 0 in off.data_idx
+
+    sess = tmp_path / "xhro_packet_loss" / "grok_output" / "REC1_realtime"
+    frame = load_proper_frame(sess, "raw_ch1")
+    elapsed = (frame["datetime"] - frame["datetime"].min()).dt.total_seconds()
+    cropped = _load(tmp_path, crop_end_sec=float(elapsed.iloc[79]), **common)
+    assert cropped.dataset_missing_rate == pytest.approx(6 / 80)
+
+    indicated = _load(
+        tmp_path,
+        observation_process="raw_ch1_indicate",
+        x_dim=2,
+        **common,
+    )
+    # The 0/1 indicate channel is finite, and imputation clears the NaNs the
+    # filter sees. The rate stays the pre-process observation rate.
+    assert indicated.dataset_missing_rate == pytest.approx(0.1)
+    assert not np.isnan(np.asarray(indicated.seq)).any()
+    assert 0 in indicated.data_idx

@@ -8,6 +8,11 @@ import os
 import numpy as np
 import pandas as pd
 from .gap_grid import (
+    PRESENT_COL,
+    apply_nan_window_kwargs,
+    dataset_missing_rate,
+    filter_window_starts,
+    log_current_nan_window_rule,
     log_window_recut,
     observed_row_mask,
     resolve_recut_length,
@@ -84,7 +89,9 @@ class Xhro(Dataset):
         self.start_on_observed = bool(kwargs.get("start_on_observed", True))
         self.strict_non_overlap = bool(kwargs.get("strict_non_overlap", True))
         self.max_gap_window_frac = kwargs.get("max_gap_window_frac", 0.25)
-        self.max_window_nan_ratio = kwargs.get("max_window_nan_ratio", 0.3)
+        # Blank ratio uses dataset_missing_rate + excess (default 0.2).
+        apply_nan_window_kwargs(self, kwargs)
+        self.dataset_missing_rate = None
         self.filled_gap_spans = kwargs.get("filled_gap_spans", None)
         self.observed_per_row = kwargs.get("observed_per_row", None)
 
@@ -117,6 +124,9 @@ class Xhro(Dataset):
             )
         # see if directory of filename exists
         the_sequence = select_observation_window_slice(self.dataset_label, the_sequence)
+        # Once, on the whole loaded series, before the train/test cut and
+        # before observation processing hides real gaps.
+        self.dataset_missing_rate = self._missing_rate(the_sequence)
 
         if self.split == "test":  # use the Latter 20% of the data for testing
             the_sequence = the_sequence[-the_sequence.shape[0] // 5 :]
@@ -169,6 +179,37 @@ class Xhro(Dataset):
         # torch.Size([80000, 1])
 
         self.update_sequence_length(self.seq_len)
+
+    def _values_for_missing_rate(self, sequence):
+        """Observation columns only, with no indicate channel and no trim."""
+        process = self.observation_process
+        cols = None
+        original = select_columns_for_obs_conditions["original"]
+        coarsed = select_columns_for_obs_conditions["coarsed"]
+        if process in original:
+            cols = original[process]
+        else:
+            base = _resolve_original_observation_process(process)
+            if base is not None:
+                cols = original[base]
+            elif process in coarsed:
+                cols = coarsed[process]
+        if cols is not None:
+            values = sequence[list(cols)].to_numpy(dtype=np.float64)
+        elif process in {"only_x_interpolate", "only_x_indicate"}:
+            values = sequence.iloc[:, 0].to_numpy(dtype=np.float64)
+        else:
+            values = sequence.select_dtypes(include="number").to_numpy(dtype=np.float64)
+        if values.ndim == 1:
+            values = values.reshape(-1, 1)
+        return values
+
+    def _missing_rate(self, sequence) -> float:
+        present = None
+        columns = getattr(sequence, "columns", [])
+        if PRESENT_COL in columns:
+            present = sequence[PRESENT_COL].to_numpy(dtype=bool)
+        return dataset_missing_rate(self._values_for_missing_rate(sequence), present)
 
     def _extract_missing_mask(self, sequence):
         """
@@ -427,12 +468,6 @@ class Xhro(Dataset):
         end_frame = min(start_frame + self.seq_len, len(self.seq))
         return self.seq[start_frame:end_frame]
 
-    def _minimum_nan_ratio(self, minimum_nan_ratio):
-        """Explicit argument wins. Otherwise the config threshold, or None."""
-        if minimum_nan_ratio is not None:
-            return minimum_nan_ratio
-        return getattr(self, "max_window_nan_ratio", None)
-
     def _window_starts(self, starts, boundaries):
         """Honor ``start_on_observed``. Off leaves the starts unchanged."""
         if not getattr(self, "start_on_observed", False):
@@ -486,33 +521,7 @@ class Xhro(Dataset):
                 observed=observed,
             )
             all_indices = self._window_starts(all_indices, boundaries)
-            minimum_nan_ratio = self._minimum_nan_ratio(minimum_nan_ratio)
-
-            if minimum_nan_ratio is not None:
-                total_frames_before = len(all_indices)  # Total frames before filtering
-                print(f"[Dataset] Total frames before filtering: {total_frames_before}")
-                valid_frames = []
-                for idx in all_indices:
-                    seq_slice = self.seq[idx : idx + self.seq_len]
-                    nan_ratio = np.float16(np.isnan(seq_slice)).mean()
-                    if nan_ratio <= minimum_nan_ratio:
-                        valid_frames.append(idx)
-                valid_frames = np.array(valid_frames)
-                total_frames_after = len(valid_frames)  # Total frames after filtering
-                disregarded_frames = (
-                    total_frames_before - total_frames_after
-                )  # Disregarded frames
-                print(f"[Dataset] Total frames after filtering: {total_frames_after}")
-                print(
-                    f"[Dataset] Disregarded frames (due to NaN ratio > {minimum_nan_ratio}): {disregarded_frames}"
-                )
-            else:
-                valid_frames = all_indices
-                total_frames_after = len(valid_frames)
-                disregarded_frames = 0
-                print(
-                    f"[Dataset] No filtering applied (minimum_nan_ratio is None). Total frames: {total_frames_after}"
-                )
+            valid_frames = filter_window_starts(self, all_indices, minimum_nan_ratio)
 
             train_indices, validation_indices = self.split_dataset(
                 valid_frames, self.val_indices
@@ -526,6 +535,7 @@ class Xhro(Dataset):
             # Use entire sequence if seq_len is None
             self.data_idx = [0]
             print("[Dataset] Using entire sequence (seq_len is None). Total frames: 1")
+            log_current_nan_window_rule(self, 0, minimum_nan_ratio)
 
         log_window_recut(self)
         return

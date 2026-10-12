@@ -654,7 +654,7 @@ def test_single_label_matches_one_element_list(tmp_path, _torch_required):
     assert one.data_idx == listed.data_idx == spaced.data_idx
 
 
-def test_update_sequence_length_round_trip_and_nan_filter(tmp_path, _torch_required):
+def test_update_sequence_length_round_trip_and_nan_filter(tmp_path, _torch_required, capsys):
     epochs, hrv = make_frames(40, "subj_a", seed=15)
     epochs.loc[0:9, "rel_alpha"] = np.nan
     write_session(tmp_path, "subj_a", epochs, hrv)
@@ -694,14 +694,37 @@ def test_update_sequence_length_round_trip_and_nan_filter(tmp_path, _torch_requi
         coarse_test_split="last20_rows",
         start_on_observed=False,
     )
+    capsys.readouterr()
     filtered.update_sequence_length(10)
-    # Default max_window_nan_ratio is 0.3, so the all-NaN prefix is dropped.
-    assert filtered.max_window_nan_ratio == pytest.approx(0.3)
+    # 10 all-NaN epochs out of 40, four EEG columns: rate 0.25, threshold 0.45.
+    # The all-NaN prefix is above that, so it is dropped. The rate is the
+    # full subject, not the post-cut train rows (those would be 10/32).
+    assert filtered.max_window_nan_ratio is None
+    assert filtered.max_window_nan_excess == pytest.approx(0.2)
+    assert filtered.dataset_missing_rate == pytest.approx(0.25)
     assert 0 not in filtered.data_idx
+    logged = capsys.readouterr().out
+    assert "dataset_missing_rate=0.25" in logged
+    assert "threshold=0.45 (relative)" in logged
+    assert "windows_dropped=" in logged
     filtered.update_sequence_length(10, minimum_nan_ratio=1.0)
     assert 0 in filtered.data_idx
     filtered.update_sequence_length(10)
     assert 0 not in filtered.data_idx
+    indicated = _load(
+        tmp_path,
+        "subj_a",
+        "coarse_eeg_indicate",
+        seq_len=10,
+        overlap=False,
+        shuffle=False,
+        val_indices=0.0,
+        coarse_test_split="last20_rows",
+        start_on_observed=False,
+    )
+    # Indicate doubles the width with a finite 0/1 channel. The rate stays
+    # on the pre-indicate feature matrix.
+    assert indicated.dataset_missing_rate == pytest.approx(filtered.dataset_missing_rate)
 
 
 def test_artifact_mask_off_by_default_keeps_high_power(tmp_path, _torch_required):

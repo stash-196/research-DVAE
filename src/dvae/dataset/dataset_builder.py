@@ -60,12 +60,17 @@ class DatasetConfig:
     max_fill_gap_sec: float | None = None
     filled_nan_log_sec: float | None = None
     # Window rules. Blank config keys take these. legacy_windowing true
-    # restores the previous bundle for whichever of the four are blank.
+    # restores the previous bundle when the placement keys are blank, and
+    # turns the NaN filter off when max_window_nan_ratio is blank.
+    # A blank ratio (None, and not max_window_nan_ratio_off) uses
+    # dataset_missing_rate + max_window_nan_excess.
     legacy_windowing: bool = False
     max_gap_window_frac: float | None = 0.25
     start_on_observed: bool = True
     strict_non_overlap: bool = True
-    max_window_nan_ratio: float | None = 0.3
+    max_window_nan_ratio: float | None = None
+    max_window_nan_ratio_off: bool = False
+    max_window_nan_excess: float | None = 0.2
     # Waveform block mask. None file means no masking. Mode None is not_good.
     block_mask_file: str | None = None
     block_mask_mode: str | None = None

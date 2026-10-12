@@ -38,14 +38,19 @@ length, and is recomputed on every re-cut. ``[DataFrame] start_on_observed``
 the next observed sample in the same segment. ``[DataFrame]
 strict_non_overlap`` (default true) tiles each segment with abutting
 windows. False keeps the historical ``find_indices`` placement, including
-its local ``RandomState(1234567890)``. ``[DataFrame] max_window_nan_ratio``
-(default 0.3) is the NaN-fraction filter on every re-cut.
+its local ``RandomState(1234567890)``. A blank
+``[DataFrame] max_window_nan_ratio`` drops a window whose NaN fraction
+exceeds the dataset missing rate plus ``[DataFrame] max_window_nan_excess``
+(default 0.2). The rate is computed once after the block mask and the
+time crop, before the train/test cut and before windowing, from NaN and
+``present=False`` only. A threshold of at least 1 drops nothing. An
+explicit ratio is an absolute cap, and ``off`` disables both rules.
 ``[DataFrame] legacy_windowing`` (default false) restores the previous
-bundle when those four keys are blank: starts may land on a missing
-sample, the historical picker is used, and neither the fraction split nor
-the NaN filter is applied. The same switch restores recon-only model
+bundle when the placement keys are blank: starts may land on a missing
+sample, the historical picker is used, the fraction split is off, and
+both NaN rules are off. The same switch restores recon-only model
 selection when ``val_criteria`` is blank. An explicit value for one key
-still wins.
+still wins, including an explicit ratio under legacy windowing.
 ``[DataFrame] block_mask_file`` (unset) is an npz of block flags applied
 before the time crop. ``block_mask_mode`` defaults to ``not_good``.
 ``filled_nan_log_sec`` is the re-cut log cutoff when ``max_fill_gap_sec``
@@ -181,8 +186,11 @@ from .gap_grid import (
     _blank_absent_rows,
     attach_gap_grid,
     combine_gap_grid,
+    dataset_missing_rate,
+    filter_window_starts,
     gap_load_stats,
     groups_from_boundaries,
+    log_current_nan_window_rule,
     log_window_recut,
     resolve_recut_length,
     split_boundaries_from_ids,
@@ -798,7 +806,8 @@ def _optional_nonnegative_float(value, name: str) -> float | None:
 
 
 # Blank keys take these. ``legacy_windowing`` true makes a blank key mean off.
-DEFAULT_MAX_WINDOW_NAN_RATIO = 0.3
+# A blank NaN ratio is not a fixed cap: it uses the missing rate + excess.
+DEFAULT_MAX_WINDOW_NAN_EXCESS = 0.2
 DEFAULT_MAX_GAP_WINDOW_FRAC = 0.25
 _WINDOW_DEFAULT = object()
 _FLOAT_OFF = {"off", "unset", "false", "no"}
@@ -812,11 +821,17 @@ def _window_bool(value, name: str, default: bool) -> bool:
 
 def _window_float(value, name: str, default: float | None) -> float | None:
     """Blank uses ``default``. ``off`` is an explicit disable."""
+    number, _disabled = _window_float_spec(value, name, default)
+    return number
+
+
+def _window_float_spec(value, name: str, default: float | None):
+    """``(number or None, explicitly_off)``. Blank uses ``default``."""
     if value is _WINDOW_DEFAULT or _is_unset(value):
-        return default
+        return default, False
     if isinstance(value, str) and value.strip().lower() in _FLOAT_OFF:
-        return None
-    return _optional_nonnegative_float(value, name)
+        return None, True
+    return _optional_nonnegative_float(value, name), False
 
 
 def resolve_windowing(
@@ -824,27 +839,38 @@ def resolve_windowing(
     start_on_observed=_WINDOW_DEFAULT,
     strict_non_overlap=_WINDOW_DEFAULT,
     max_window_nan_ratio=_WINDOW_DEFAULT,
+    max_window_nan_excess=_WINDOW_DEFAULT,
     max_gap_window_frac=_WINDOW_DEFAULT,
 ) -> dict:
-    """Defaults for the four window rules, and the legacy override.
+    """Defaults for the window rules, and the legacy override.
 
     A blank key takes the new default. ``legacy_windowing`` true changes
     that blank-key default back to the historical one (starts may be
     missing, historical ``find_indices``, no fraction split, no NaN
-    filter). A value that is actually set still wins, including ``off``
-    on the two float keys.
+    filter). A blank ``max_window_nan_ratio`` is the relative rule
+    (missing rate + excess), not a fixed 0.3. ``off`` on that key
+    disables both the absolute cap and the relative rule. A value that
+    is actually set still wins.
     """
     legacy = _window_bool(legacy_windowing, "legacy_windowing", False)
     if legacy:
         start_default = False
         strict_default = False
-        nan_default = None
         frac_default = None
+        excess_default = None
     else:
         start_default = True
         strict_default = True
-        nan_default = DEFAULT_MAX_WINDOW_NAN_RATIO
         frac_default = DEFAULT_MAX_GAP_WINDOW_FRAC
+        excess_default = DEFAULT_MAX_WINDOW_NAN_EXCESS
+    ratio, ratio_off = _window_float_spec(
+        max_window_nan_ratio, "max_window_nan_ratio", None
+    )
+    excess, excess_off = _window_float_spec(
+        max_window_nan_excess, "max_window_nan_excess", excess_default
+    )
+    if excess_off:
+        excess = None
     return {
         "legacy_windowing": legacy,
         "start_on_observed": _window_bool(
@@ -853,9 +879,9 @@ def resolve_windowing(
         "strict_non_overlap": _window_bool(
             strict_non_overlap, "strict_non_overlap", strict_default
         ),
-        "max_window_nan_ratio": _window_float(
-            max_window_nan_ratio, "max_window_nan_ratio", nan_default
-        ),
+        "max_window_nan_ratio": ratio,
+        "max_window_nan_ratio_off": ratio_off,
+        "max_window_nan_excess": excess,
         "max_gap_window_frac": _window_float(
             max_gap_window_frac, "max_gap_window_frac", frac_default
         ),
@@ -870,6 +896,9 @@ def windowing_from_config(cfg) -> dict:
         strict_non_overlap=optional_config_str(cfg, "DataFrame", "strict_non_overlap"),
         max_window_nan_ratio=optional_config_str(
             cfg, "DataFrame", "max_window_nan_ratio"
+        ),
+        max_window_nan_excess=optional_config_str(
+            cfg, "DataFrame", "max_window_nan_excess"
         ),
         max_gap_window_frac=optional_config_str(
             cfg, "DataFrame", "max_gap_window_frac"
@@ -1755,8 +1784,9 @@ class XhroProper(Xhro):
         greater than this becomes a window split, like a segment boundary.
         The split indices are stored and reused on every re-cut.
       - legacy_windowing: false by default. True restores the previous
-        window bundle when the four keys below are blank, and restores
-        recon-only selection when ``val_criteria`` is blank.
+        window bundle when the placement keys below are blank, disables
+        both NaN rules when ``max_window_nan_ratio`` is blank, and
+        restores recon-only selection when ``val_criteria`` is blank.
       - max_gap_window_frac: waveform only. Blank is 0.25 (off when
         ``legacy_windowing`` is true). A filled gap with more samples
         than this fraction of the current sequence length is a split
@@ -1773,9 +1803,19 @@ class XhroProper(Xhro):
       - block_mask_file / block_mask_mode: waveform only. Unset file means
         no block mask. The file's flagged blocks are set to NaN and
         ``present=False`` before the time crop, so they act as gaps.
-      - max_window_nan_ratio: waveform and coarse re-cuts. Blank is 0.3
-        (off when ``legacy_windowing`` is true). ``off`` disables it.
-        An explicit ``minimum_nan_ratio`` argument overrides it.
+      - max_window_nan_ratio: waveform, coarse, and PhysioNet re-cuts.
+        Blank uses the relative rule (off when ``legacy_windowing`` is
+        true, and ``off`` disables both rules). A number is an absolute
+        cap and wins over the excess and over legacy windowing. An
+        explicit ``minimum_nan_ratio`` argument is also an absolute cap.
+        The long-sequence training figure still passes its own 0.3.
+      - max_window_nan_excess: blank is 0.2 (off when
+        ``legacy_windowing`` is true). A window is dropped when its NaN
+        fraction is above ``dataset_missing_rate + excess``. The rate is
+        computed once on the whole loaded series after the block mask
+        and the time crop, before the train/test cut and before
+        windowing. Only NaN and ``present=False`` count. A threshold of
+        at least 1 drops nothing. ``off`` disables the relative rule.
       - filled_nan_log_sec: waveform log only. When ``max_fill_gap_sec``
         is unset, a re-cut reports how many windows contain a filled NaN
         run longer than this. Unset means that count is ``na``.
@@ -1815,6 +1855,7 @@ class XhroProper(Xhro):
         start_on_observed=_WINDOW_DEFAULT,
         strict_non_overlap=_WINDOW_DEFAULT,
         max_window_nan_ratio=_WINDOW_DEFAULT,
+        max_window_nan_excess=_WINDOW_DEFAULT,
         block_mask_file=None,
         block_mask_mode=None,
         **kwargs,
@@ -1855,6 +1896,7 @@ class XhroProper(Xhro):
             start_on_observed=start_on_observed,
             strict_non_overlap=strict_non_overlap,
             max_window_nan_ratio=max_window_nan_ratio,
+            max_window_nan_excess=max_window_nan_excess,
             max_gap_window_frac=max_gap_window_frac,
         )
         self.legacy_windowing = windowing["legacy_windowing"]
@@ -1862,6 +1904,9 @@ class XhroProper(Xhro):
         self.start_on_observed = windowing["start_on_observed"]
         self.strict_non_overlap = windowing["strict_non_overlap"]
         self.max_window_nan_ratio = windowing["max_window_nan_ratio"]
+        self.max_window_nan_ratio_off = windowing["max_window_nan_ratio_off"]
+        self.max_window_nan_excess = windowing["max_window_nan_excess"]
+        self.dataset_missing_rate = None
         self.block_mask_file = (
             None if _is_unset(block_mask_file) else str(block_mask_file).strip()
         )
@@ -1919,6 +1964,17 @@ class XhroProper(Xhro):
         )
         the_sequence = crop_proper_frame(
             the_sequence, self.crop_start_sec, self.crop_end_sec
+        )
+        # Once, on the whole post-crop series, before the train/test cut
+        # and before interpolate/indicate. Observation columns only.
+        obs_cols = _columns_for_base(base)
+        present = (
+            the_sequence[PRESENT_COL].to_numpy(dtype=bool)
+            if PRESENT_COL in the_sequence.columns
+            else None
+        )
+        self.dataset_missing_rate = dataset_missing_rate(
+            the_sequence[obs_cols].to_numpy(dtype=np.float64), present
         )
         if "datetime" in the_sequence.columns:
             # native rate from median Δt
@@ -2249,6 +2305,17 @@ class XhroProper(Xhro):
             prepared.append(item)
         self.session_dir = self.session_dirs[0]
         self.coarse_reports = [item["report"] for item in prepared]
+        # Full subject matrices, before the test cut and before indicate.
+        full_features = [
+            np.asarray(item["features"], dtype=np.float64) for item in prepared
+        ]
+        if full_features:
+            stacked = np.concatenate(full_features, axis=0)
+            if stacked.ndim == 1:
+                stacked = stacked.reshape(-1, 1)
+            self.dataset_missing_rate = dataset_missing_rate(stacked)
+        else:
+            self.dataset_missing_rate = 0.0
 
         seq_blocks = []
         mask_blocks = []
@@ -2341,6 +2408,7 @@ class XhroProper(Xhro):
             print(
                 "[XhroProper][coarse] seq_len is None; one placeholder window at 0."
             )
+            log_current_nan_window_rule(self, 0, minimum_nan_ratio)
             log_window_recut(self)
             return
         new_seq_len = int(new_seq_len)
@@ -2354,6 +2422,7 @@ class XhroProper(Xhro):
             self.data_idx = []
             self.window_subject = []
             print("[XhroProper][coarse] no subject rows; window set is empty.")
+            log_current_nan_window_rule(self, 0, minimum_nan_ratio)
             log_window_recut(self)
             return
         if new_seq_len > span:
@@ -2369,26 +2438,7 @@ class XhroProper(Xhro):
             overlap=bool(self.overlap),
         )
         starts = self._window_starts(starts, self.split_boundaries)
-        minimum_nan_ratio = self._minimum_nan_ratio(minimum_nan_ratio)
-        if minimum_nan_ratio is not None:
-            seq_np = (
-                self.seq.detach().cpu().numpy()
-                if torch.is_tensor(self.seq)
-                else np.asarray(self.seq)
-            )
-            kept = []
-            for idx in starts:
-                window = seq_np[int(idx) : int(idx) + self.seq_len]
-                if window.size == 0:
-                    continue
-                nan_ratio = float(np.float16(np.isnan(window)).mean())
-                if nan_ratio <= float(minimum_nan_ratio):
-                    kept.append(int(idx))
-            starts = np.asarray(kept, dtype=np.int64)
-            print(
-                f"[XhroProper][coarse] nan_ratio<={minimum_nan_ratio}: "
-                f"windows={len(starts)}"
-            )
+        starts = filter_window_starts(self, starts, minimum_nan_ratio)
         if self.split == "test":
             chosen = starts
         else:
@@ -2413,6 +2463,7 @@ class XhroProper(Xhro):
         if new_seq_len is None:
             self.data_idx = [0]
             print("[XhroProper] seq_len is None; one placeholder window at 0.")
+            log_current_nan_window_rule(self, 0, minimum_nan_ratio)
             log_window_recut(self)
             return
         new_seq_len = int(new_seq_len)
@@ -2429,6 +2480,7 @@ class XhroProper(Xhro):
             self.seq_len = new_seq_len
             self.data_idx = []
             print("[XhroProper] no rows; window set is empty.")
+            log_current_nan_window_rule(self, 0, minimum_nan_ratio)
             log_window_recut(self)
             return
         if new_seq_len > span:
@@ -2442,19 +2494,7 @@ class XhroProper(Xhro):
             group, self.seq_len, overlap=bool(self.overlap)
         )
         starts = self._window_starts(starts, boundaries)
-        minimum_nan_ratio = self._minimum_nan_ratio(minimum_nan_ratio)
-        if minimum_nan_ratio is not None:
-            kept = []
-            for idx in starts:
-                window = self.seq[int(idx) : int(idx) + self.seq_len]
-                nan_ratio = float(np.float16(np.isnan(window)).mean())
-                if nan_ratio <= float(minimum_nan_ratio):
-                    kept.append(int(idx))
-            starts = np.asarray(kept, dtype=np.int64)
-            print(
-                f"[XhroProper] nan_ratio<={minimum_nan_ratio}: "
-                f"windows={len(starts)}"
-            )
+        starts = filter_window_starts(self, starts, minimum_nan_ratio)
         if self.split == "test":
             chosen = starts
         else:

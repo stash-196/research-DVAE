@@ -137,6 +137,8 @@ def test_mask_nans_present_and_skips_uncovered_rows(tmp_path, capsys):
     assert np.isfinite(seq[11:100]).all()
     assert np.isfinite(seq[200:400]).all()
     assert np.isnan(seq[10])
+    # One present=false row plus the 100-row masked block, on all 500 rows.
+    assert ds.dataset_missing_rate == pytest.approx(101 / 500)
     assert not ds.observed_per_row[100:200].any()
     assert ds.observed_per_row[11]
     assert not ds.observed_per_row[10]
@@ -193,6 +195,8 @@ def test_mask_is_applied_before_crop_and_shared_by_variants(tmp_path, capsys):
     )
     seq = np.asarray(cropped.seq).reshape(-1)
     assert np.isfinite(seq).all()
+    # The masked block sits before the crop, so it is not in the rate.
+    assert cropped.dataset_missing_rate == pytest.approx(0.0)
     assert "masked=100/500 (0.200)" in capsys.readouterr().out
     other = _load(
         tmp_path,
@@ -203,6 +207,7 @@ def test_mask_is_applied_before_crop_and_shared_by_variants(tmp_path, capsys):
     other_seq = np.asarray(other.seq).reshape(-1)
     assert np.isnan(other_seq[:100]).all()
     assert np.isfinite(other_seq[100:]).all()
+    assert other.dataset_missing_rate == pytest.approx(100 / 500)
 
 
 def test_masked_rows_are_gaps_for_starts_fraction_and_nan_ratio(tmp_path):

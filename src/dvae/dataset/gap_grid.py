@@ -229,6 +229,134 @@ def count_long_filled_windows(filled_run_sec, starts, seq_len, threshold_sec):
     return n_long
 
 
+def dataset_missing_rate(values, present=None) -> float:
+    """Fraction of observation cells that are real missing data.
+
+    A cell counts as missing when it is NaN, or when ``present`` is False
+    on that row (even if the stored value is finite). ``+inf`` and ``-inf``
+    are not missing. Callers pass the loaded observation values only:
+    training-time masks and indicate 0/1 channels are not an input.
+    """
+    arr = np.asarray(values, dtype=np.float64)
+    if arr.ndim == 0:
+        arr = arr.reshape(1)
+    if arr.size == 0:
+        return 0.0
+    missing = np.isnan(arr)
+    if present is not None:
+        flags = np.asarray(present, dtype=bool).reshape(-1)
+        if flags.shape[0] != missing.shape[0]:
+            raise ValueError(
+                f"present length {flags.shape[0]} != series length {missing.shape[0]}"
+            )
+        absent = ~flags
+        if missing.ndim == 1:
+            missing = np.logical_or(missing, absent)
+        else:
+            shape = (-1,) + (1,) * (missing.ndim - 1)
+            missing = np.logical_or(missing, absent.reshape(shape))
+    return float(np.mean(missing))
+
+
+def apply_nan_window_kwargs(dataset, kwargs, default_excess=0.2) -> None:
+    """Store NaN-window options. A missing excess key uses ``default_excess``."""
+    dataset.legacy_windowing = bool(
+        kwargs.get("legacy_windowing", getattr(dataset, "legacy_windowing", False))
+    )
+    dataset.max_window_nan_ratio_off = bool(
+        kwargs.get("max_window_nan_ratio_off", False)
+    )
+    if "max_window_nan_ratio" in kwargs:
+        dataset.max_window_nan_ratio = kwargs["max_window_nan_ratio"]
+    else:
+        dataset.max_window_nan_ratio = None
+    if "max_window_nan_excess" in kwargs:
+        dataset.max_window_nan_excess = kwargs["max_window_nan_excess"]
+    else:
+        dataset.max_window_nan_excess = default_excess
+
+
+def nan_window_threshold(dataset, minimum_nan_ratio=None):
+    """Resolve the keep-threshold for one re-cut.
+
+    Returns ``(threshold or None, label, dataset_missing_rate)``. ``None``
+    means drop nothing: the ratio was turned off, legacy windowing left
+    both rules off, the excess is unset, or the threshold is at least 1.
+    An explicit ``minimum_nan_ratio`` argument, then an explicit
+    ``max_window_nan_ratio``, are absolute caps. Otherwise the cap is
+    ``dataset_missing_rate + max_window_nan_excess``.
+    """
+    rate = getattr(dataset, "dataset_missing_rate", None)
+    if minimum_nan_ratio is not None:
+        thr = float(minimum_nan_ratio)
+        kind = "absolute"
+    elif getattr(dataset, "max_window_nan_ratio_off", False):
+        return None, "off", rate
+    elif getattr(dataset, "max_window_nan_ratio", None) is not None:
+        thr = float(dataset.max_window_nan_ratio)
+        kind = "absolute"
+    elif getattr(dataset, "legacy_windowing", False):
+        return None, "off", rate
+    else:
+        excess = getattr(dataset, "max_window_nan_excess", None)
+        if excess is None:
+            return None, "off", rate
+        base = 0.0 if rate is None else float(rate)
+        thr = base + float(excess)
+        kind = "relative"
+    if thr >= 1.0:
+        return None, f"{thr:.6g} ({kind}, >=1)", rate
+    return thr, f"{thr:.6g} ({kind})", rate
+
+
+def log_nan_window_filter(dataset, threshold_label, dropped, rate) -> None:
+    """One re-cut line: missing rate, threshold, and how many windows dropped."""
+    name = type(dataset).__name__
+    rate_s = "na" if rate is None else f"{float(rate):.6g}"
+    print(
+        f"[{name}] dataset_missing_rate={rate_s} "
+        f"threshold={threshold_label} windows_dropped={int(dropped)}"
+    )
+
+
+def log_current_nan_window_rule(dataset, dropped, minimum_nan_ratio=None) -> None:
+    _threshold, label, rate = nan_window_threshold(dataset, minimum_nan_ratio)
+    log_nan_window_filter(dataset, label, dropped, rate)
+
+
+def _seq_as_array(seq):
+    if hasattr(seq, "detach"):
+        return seq.detach().cpu().numpy()
+    return np.asarray(seq)
+
+
+def filter_window_starts(dataset, starts, minimum_nan_ratio=None):
+    """Drop starts whose window NaN fraction is above the resolved threshold.
+
+    The comparison matches the historical keep test: a float16 mean of
+    ``isnan`` that is ``<=`` the threshold stays. A threshold of None, or
+    one that resolved to at least 1, keeps every start. Logs the dataset
+    missing rate, the threshold, and the number dropped.
+    """
+    starts_arr = np.asarray([] if starts is None else list(starts), dtype=np.int64)
+    threshold, label, rate = nan_window_threshold(dataset, minimum_nan_ratio)
+    if threshold is None or starts_arr.size == 0:
+        log_nan_window_filter(dataset, label, 0, rate)
+        return starts_arr
+    seq = _seq_as_array(dataset.seq)
+    length = int(dataset.seq_len)
+    kept = []
+    for idx in starts_arr:
+        window = seq[int(idx) : int(idx) + length]
+        if window.size == 0:
+            continue
+        nan_ratio = np.float16(np.isnan(window)).mean()
+        if nan_ratio <= threshold:
+            kept.append(int(idx))
+    log_nan_window_filter(dataset, label, int(starts_arr.size - len(kept)), rate)
+    return np.asarray(kept, dtype=np.int64)
+
+
 def log_window_recut(dataset) -> None:
     """Print window count and how many hold a too-long filled NaN run."""
     threshold = recut_threshold_sec(
