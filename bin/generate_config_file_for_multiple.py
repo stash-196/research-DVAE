@@ -184,8 +184,8 @@ if __name__ == "__main__":
     gradient_clip = [10.0]
     optimize_alphas = [False]  # unused for shPLRNN; A already sigmoid-constrained
     sampling_method = [
-        # "ss",
-        "ptf",
+        "ss",
+        # "ptf",
         # 'mtf',
         # "sm"
     ]
@@ -193,12 +193,12 @@ if __name__ == "__main__":
     if dataset_name[0] in ("Xhro", "XhroPacketLoss", "XhroProper", "PhysioNet2012"):
         sampling_ratio = [
             0.0,
-            0.1,
-            0.2,
+            # 0.1,
+            # 0.2,
             0.3,
-            0.4,
+            # 0.4,
             0.5,
-            0.6,
+            # 0.6,
             0.7,
             # 0.8,
             # 0.9,
@@ -209,7 +209,7 @@ if __name__ == "__main__":
             0.3,
             0.5,
             0.7,
-            0.8,
+            # 0.8,
         ]
     auto_warm_start = [
         0.0,
