@@ -19,6 +19,12 @@ import numpy as np
 import pytest
 import torch
 
+# bf59f0b removed the per-block parameters these tests pin. The replacement
+# contract is tests/spec_review/test_29_shared_sigma_seed.py.
+pytestmark = pytest.mark.skip(
+    reason="Superseded by bf59f0b: block lists seed the shared sigmas parameter."
+)
+
 from dvae.learning_algo import LearningAlgorithm
 from dvae.model.mt_rnn import MT_RNN
 from dvae.training_history import (
