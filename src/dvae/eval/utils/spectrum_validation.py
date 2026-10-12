@@ -124,7 +124,7 @@ def capture_fixed_spectrum_windows(
     starts = _validation_starts(dataset, _candidate_starts(dataset, window_len))
     if starts.size == 0:
         raise ValueError(
-            "val_criterion=spectrum needs at least one validation window of "
+            "spectrum validation needs at least one validation window of "
             f"length {window_len}; none fit inside a subject or stay."
         )
     chosen = select_fixed_starts(starts, n_windows)

@@ -52,9 +52,11 @@ from dvae.eval.utils.spectrum_validation import (
 )
 from dvae.eval.window_length import cap_eval_seq_len
 from dvae.run_options import (
+    criteria_log_fields,
+    normalised_criterion_sum,
     parse_checkpoint_every_n_epochs,
     parse_optional_int,
-    parse_val_criterion,
+    parse_val_criteria,
 )
 from dvae.model import (
     build_VRNN,
@@ -296,6 +298,46 @@ class LearningAlgorithm:
             if was_training:
                 self.model.train()
 
+    def _epoch_selection_value(self, epoch, val_loss, val_spectrum, val_criteria_score):
+        """Score used for best-model selection and early stopping.
+
+        ``recon`` alone returns ``val_loss[epoch]``. ``spectrum`` alone
+        returns the free-run spectral error. Several criteria return the
+        sum of each value divided by its value at the first validation
+        epoch. Every selected component is logged on that multi-criterion
+        path.
+        """
+        if "spectrum" in self._val_criteria:
+            val_spectrum[epoch] = self._score_spectrum_validation()
+            if len(self._val_criteria) == 1:
+                logger.info(
+                    "Val spectrum error (free-run half): {:.6f}".format(
+                        val_spectrum[epoch]
+                    )
+                )
+        if len(self._val_criteria) == 1:
+            if self._val_criteria[0] == "recon":
+                return float(val_loss[epoch])
+            return float(val_spectrum[epoch])
+        components = {}
+        for name in self._val_criteria:
+            raw = val_loss[epoch] if name == "recon" else val_spectrum[epoch]
+            components[name] = float(raw)
+            logger.info(
+                "Val criterion {}: {:.6f}".format(name, components[name])
+            )
+        if self._val_reference is None:
+            self._val_reference = dict(components)
+            logger.info(
+                "Val criteria reference (first validation epoch {}): {}".format(
+                    epoch, self._val_reference
+                )
+            )
+        score = normalised_criterion_sum(components, self._val_reference)
+        val_criteria_score[epoch] = score
+        logger.info("Val criteria normalised sum: {:.6f}".format(score))
+        return score
+
     def train(self, profiler=None):
         # Build model
         self.build_model()
@@ -425,16 +467,20 @@ class LearningAlgorithm:
 
         # Default recon: best-model and early stopping stay on val_loss.
         # spectrum scores fixed free-run windows and does not resize them.
-        self._val_criterion = parse_val_criterion(
-            self.cfg.get("Training", "val_criterion", fallback="recon")
-        )
+        # A list normalises each term by its first validation epoch and sums.
+        if self.cfg.has_option("Training", "val_criteria"):
+            criteria_raw = self.cfg.get("Training", "val_criteria")
+        else:
+            criteria_raw = self.cfg.get("Training", "val_criterion", fallback="recon")
+        self._val_criteria = parse_val_criteria(criteria_raw)
+        self._val_reference = None
         self._checkpoint_every = parse_checkpoint_every_n_epochs(
             self.cfg.get("Training", "checkpoint_every_n_epochs", fallback="0")
         )
         self._spectrum_windows = None
         self._spectrum_tf_steps = None
         self._spectrum_observation = dataset_config.observation_process
-        if self._val_criterion == "spectrum":
+        if "spectrum" in self._val_criteria:
             n_windows = parse_optional_int(
                 self.cfg.get("Training", "val_spectrum_n_windows", fallback=None),
                 10,
@@ -605,6 +651,16 @@ class LearningAlgorithm:
         delta_threshold = 1e-4
         warm_up_happened = False
         val_spectrum = np.zeros((epochs,))
+        val_criteria_score = np.zeros((epochs,))
+        if self.params["reload"] and isinstance(loss_log, dict):
+            saved_ref = loss_log.get("val_criteria_reference")
+            if isinstance(saved_ref, dict):
+                restored = {}
+                for name in self._val_criteria:
+                    if name in saved_ref:
+                        restored[name] = float(saved_ref[name])
+                if len(restored) == len(self._val_criteria):
+                    self._val_reference = restored
 
         self.model.to(self.device)
 
@@ -1164,35 +1220,28 @@ class LearningAlgorithm:
                 )
             )
 
-            if self._val_criterion == "spectrum":
-                val_spectrum[epoch] = self._score_spectrum_validation()
-                logger.info(
-                    "Val spectrum error (free-run half): {:.6f}".format(
-                        val_spectrum[epoch]
-                    )
-                )
-                selection_value = val_spectrum[epoch]
-            else:
-                selection_value = val_loss[epoch]
+            selection_value = self._epoch_selection_value(
+                epoch, val_loss, val_spectrum, val_criteria_score
+            )
 
             # Save the best model
             if warm_up_happened:
                 logger.info("Warm-up happened, saving the best model")
                 warm_up_happened = False
-                if self._val_criterion == "spectrum":
-                    best_val_loss = selection_value
-                else:
+                if self._val_criteria == ("recon",):
                     best_val_loss = val_loss[epoch]
+                else:
+                    best_val_loss = selection_value
                 best_state_dict = self.model.state_dict()
                 best_optim_dict = optimizer.state_dict()
                 cur_best_epoch = epoch
 
             # identify the delta between current val_loss and best_val_loss
             # recon keeps the historical comparison exactly.
-            if self._val_criterion == "spectrum":
-                delta = selection_value - best_val_loss
-            else:
+            if self._val_criteria == ("recon",):
                 delta = val_loss[epoch] - best_val_loss
+            else:
+                delta = selection_value - best_val_loss
             delta_per_epoch[epoch] = delta
             # calculate the rolling average of delta if the window size is reached
             if epoch >= delta_rolling_window_size:
@@ -1205,10 +1254,10 @@ class LearningAlgorithm:
             # Save the best model, update patience and best_val_loss
             if delta < -delta_threshold:
                 cpt_patience = 0
-                if self._val_criterion == "spectrum":
-                    best_val_loss = selection_value
-                else:
+                if self._val_criteria == ("recon",):
                     best_val_loss = val_loss[epoch]
+                else:
+                    best_val_loss = selection_value
                 best_state_dict = self.model.state_dict()
                 best_optim_dict = optimizer.state_dict()
                 cur_best_epoch = epoch
@@ -1347,9 +1396,15 @@ class LearningAlgorithm:
                     "val_recon": val_recon[: cur_best_epoch + 1],
                     "val_kl": val_kl[: cur_best_epoch + 1],
                 }
-                if self._val_criterion == "spectrum":
-                    loss_log["val_spectrum"] = val_spectrum[: cur_best_epoch + 1]
-                    loss_log["val_criterion"] = "spectrum"
+                loss_log.update(
+                    criteria_log_fields(
+                        self._val_criteria,
+                        val_spectrum,
+                        val_criteria_score,
+                        self._val_reference,
+                        cur_best_epoch + 1,
+                    )
+                )
                 save_file = os.path.join(save_dir, self.model_name + "_checkpoint.pt")
                 torch.save(
                     {
@@ -1855,7 +1910,7 @@ class LearningAlgorithm:
                     {
                         "epoch": epoch,
                         "best_val_loss": best_val_loss,
-                        "val_criterion": self._val_criterion,
+                        "val_criteria": ",".join(self._val_criteria),
                         "model_state_dict": self.model.state_dict(),
                         "optim_state_dict": optimizer.state_dict(),
                     },
@@ -1896,9 +1951,15 @@ class LearningAlgorithm:
             "val_kl": val_kl,
             "kl_warm_epochs": kl_warm_epochs,
         }
-        if self._val_criterion == "spectrum":
-            pickle_dict["val_spectrum"] = val_spectrum[: epoch + 1]
-            pickle_dict["val_criterion"] = "spectrum"
+        pickle_dict.update(
+            criteria_log_fields(
+                self._val_criteria,
+                val_spectrum,
+                val_criteria_score,
+                self._val_reference,
+                epoch + 1,
+            )
+        )
         attach_timescale_history(
             pickle_dict,
             sigmas_history=(

@@ -13,9 +13,11 @@ from dvae.eval.utils.spectrum_validation import (
     score_spectrum_windows,
 )
 from dvae.run_options import (
+    criteria_log_fields,
     eval_output_dir,
+    normalised_criterion_sum,
     parse_checkpoint_every_n_epochs,
-    parse_val_criterion,
+    parse_val_criteria,
     resolve_mask_label_override,
 )
 
@@ -44,14 +46,36 @@ class _Subjects(_Series):
         self.subject_index_per_row = np.asarray(index, dtype=np.int64)
 
 
-def test_val_criterion_and_checkpoint_defaults_are_off():
-    assert parse_val_criterion(None) == "recon"
-    assert parse_val_criterion("") == "recon"
-    assert parse_val_criterion("None") == "recon"
-    assert parse_val_criterion("recon") == "recon"
-    assert parse_val_criterion("spectrum") == "spectrum"
+def test_val_criteria_default_is_raw_recon():
+    assert parse_val_criteria(None) == ("recon",)
+    assert parse_val_criteria("") == ("recon",)
+    assert parse_val_criteria("None") == ("recon",)
+    assert parse_val_criteria("recon") == ("recon",)
+    assert parse_val_criteria("spectrum") == ("spectrum",)
+    assert parse_val_criteria("recon,spectrum") == ("recon", "spectrum")
+    assert parse_val_criteria("spectrum, recon") == ("spectrum", "recon")
     with pytest.raises(ValueError):
-        parse_val_criterion("both")
+        parse_val_criteria("both")
+    with pytest.raises(ValueError):
+        parse_val_criteria("recon,recon")
+    reference = {"recon": 2.0, "spectrum": 4.0}
+    score = normalised_criterion_sum(
+        {"recon": 1.0, "spectrum": 2.0}, reference
+    )
+    assert score == pytest.approx(1.0)
+    with pytest.raises(ValueError, match="non-zero"):
+        normalised_criterion_sum({"recon": 1.0, "spectrum": 1.0}, {"recon": 0.0, "spectrum": 1.0})
+    assert criteria_log_fields(("recon",), None, None, None, 1) == {}
+    fields = criteria_log_fields(
+        ("recon", "spectrum"),
+        np.array([4.0, 2.0]),
+        np.array([2.0, 1.0]),
+        reference,
+        2,
+    )
+    assert fields["val_criteria"] == "recon,spectrum"
+    assert list(fields["val_criteria_score"]) == [2.0, 1.0]
+    assert fields["val_criteria_reference"]["recon"] == pytest.approx(2.0)
     assert parse_checkpoint_every_n_epochs(None) == 0
     assert parse_checkpoint_every_n_epochs("") == 0
     assert parse_checkpoint_every_n_epochs("off") == 0
