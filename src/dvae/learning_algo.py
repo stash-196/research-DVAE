@@ -236,10 +236,16 @@ class LearningAlgorithm:
         if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
             # defaults to the same as lr if not present
             self.alpha_lr = self.cfg.getfloat("Training", "alpha_lr", fallback=self.lr)
+            # Shared sigmas, plus heart/brain block logits when those
+            # blocks are trainable. base_parameters drops every name
+            # that contains "sigmas", so this group is the only one.
+            if hasattr(self.model, "alpha_parameters"):
+                alpha_params = list(self.model.alpha_parameters())
+            else:
+                alpha_params = [self.model.sigmas]
             params = [
                 {"params": self.model.base_parameters(), "lr": self.lr},
-                # include sigma values
-                {"params": [self.model.sigmas], "lr": self.alpha_lr},
+                {"params": alpha_params, "lr": self.alpha_lr},
             ]
         else:
             params = self.model.parameters()
@@ -859,6 +865,24 @@ class LearningAlgorithm:
         # Create python list for loss
         loss_log = None
         sigmas_history = None
+
+        def new_sigmas_history():
+            """One row per logged timescale logit, including block alphas."""
+            logged = getattr(self.model, "logged_sigmas", None)
+            if callable(logged):
+                current = logged().detach().cpu().numpy().reshape(-1)
+            else:
+                current = sigmoid_reverse_10(
+                    [
+                        float(i)
+                        for i in self.cfg.get("Network", "alphas").split(",")
+                        if i != ""
+                    ]
+                )
+            history = np.zeros((int(np.asarray(current).reshape(-1).shape[0]), epochs))
+            history[:, 0] = np.asarray(current, dtype=np.float64).reshape(-1)
+            return history
+
         if not self.params["reload"]:
             train_loss = np.zeros((epochs,))
             val_loss = np.zeros((epochs,))
@@ -873,14 +897,7 @@ class LearningAlgorithm:
             best_optim_dict = optimizer.state_dict()
             start_epoch = -1
             if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
-                alphas_init = [
-                    float(i)
-                    for i in self.cfg.get("Network", "alphas").split(",")
-                    if i != ""
-                ]
-                sigmas_history = np.zeros((len(alphas_init), epochs))
-                # set initial values of sigmas_history with alphas_init
-                sigmas_history[:, 0] = sigmoid_reverse_10(alphas_init)
+                sigmas_history = new_sigmas_history()
         else:
             cp_file = os.path.join(save_dir, "{}_checkpoint.pt".format(self.model_name))
             try:
@@ -906,14 +923,7 @@ class LearningAlgorithm:
             best_state_dict = self.model.state_dict()
             best_optim_dict = optimizer.state_dict()
             if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
-                alphas_init = [
-                    float(i)
-                    for i in self.cfg.get("Network", "alphas").split(",")
-                    if i != ""
-                ]
-                sigmas_history = np.zeros((len(alphas_init), epochs))
-                # set initial values of sigmas_history with alphas_init
-                sigmas_history[:, 0] = sigmoid_reverse_10(alphas_init)
+                sigmas_history = new_sigmas_history()
 
         # PLRNN / shPLRNN diagonal A. Independent of MT mixing sigmas.
         a_sigmas_history = init_A_sigmas_history(self.model, epochs)
@@ -1655,7 +1665,15 @@ class LearningAlgorithm:
                 train_subband[epoch] += float(sub_loss.detach()) * bs
                 train_decorr[epoch] += float(dec_loss.detach()) * bs
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
-                    sigmas_history[:, epoch] = self.model.sigmas.detach().cpu().numpy()
+                    logged = getattr(self.model, "logged_sigmas", None)
+                    if callable(logged):
+                        sigmas_history[:, epoch] = (
+                            logged().detach().cpu().numpy().reshape(-1)
+                        )
+                    else:
+                        sigmas_history[:, epoch] = (
+                            self.model.sigmas.detach().cpu().numpy()
+                        )
                 update_A_sigmas_history(a_sigmas_history, self.model, epoch)
 
             sync_cuda(self.device)

@@ -25,7 +25,11 @@ import torch
 from collections import OrderedDict
 import math
 from dvae.model.base_rnn import BaseRNN
-from dvae.model.hidden_block import apply_block_alphas
+from dvae.model.hidden_block import (
+    apply_block_alphas,
+    apply_trainable_block_alphas,
+    block_alpha_init,
+)
 
 
 def build_MT_RNN(cfg, device="cpu"):
@@ -116,6 +120,59 @@ class MT_RNN(BaseRNN):
         )
 
         self.beta = beta
+        self._install_block_alpha_parameters()
+
+    def _optimize_block_alphas(self) -> bool:
+        cfg = getattr(self, "cfg", None)
+        if cfg is None or not cfg.has_option("Training", "optimize_alphas"):
+            return False
+        try:
+            return bool(cfg.getboolean("Training", "optimize_alphas"))
+        except ValueError:
+            return False
+
+    def _install_block_alpha_parameters(self) -> None:
+        """Per-block logits, same base-10 map as ``sigmas``.
+
+        Created only when ``optimize_alphas`` is true and that block has a
+        list or a range. Otherwise the forward keeps the constant replacement.
+        """
+        self.heart_sigmas = None
+        self.brain_sigmas = None
+        block = getattr(self, "hidden_block", None)
+        if block is None or not self._optimize_block_alphas():
+            return
+        heart = block_alpha_init(
+            block.heart_alphas, block.heart_alpha_range, block.heart
+        )
+        brain = block_alpha_init(
+            block.brain_alphas, block.brain_alpha_range, block.brain
+        )
+        if heart is not None:
+            self.heart_sigmas = nn.Parameter(
+                self.inverse_sigmoid_10(heart.float()).detach().float()
+            )
+        if brain is not None:
+            self.brain_sigmas = nn.Parameter(
+                self.inverse_sigmoid_10(brain.float()).detach().float()
+            )
+
+    def alpha_parameters(self):
+        """Timescale logits. These take ``alpha_lr``, not the base learning rate."""
+        yield self.sigmas
+        for name in ("heart_sigmas", "brain_sigmas"):
+            value = getattr(self, name, None)
+            if isinstance(value, nn.Parameter):
+                yield value
+
+    def logged_sigmas(self) -> torch.Tensor:
+        """Shared logits, then heart, then brain. One row per plotted alpha."""
+        parts = [self.sigmas.reshape(-1)]
+        for name in ("heart_sigmas", "brain_sigmas"):
+            value = getattr(self, name, None)
+            if isinstance(value, nn.Parameter):
+                parts.append(value.reshape(-1))
+        return torch.cat(parts)
 
     @staticmethod
     def inverse_sigmoid_10(y):
@@ -143,6 +200,17 @@ class MT_RNN(BaseRNN):
         block = getattr(self, "hidden_block", None)
         if block is None:
             return per_unit
+        heart = getattr(self, "heart_sigmas", None)
+        brain = getattr(self, "brain_sigmas", None)
+        heart_on = isinstance(heart, nn.Parameter)
+        brain_on = isinstance(brain, nn.Parameter)
+        if heart_on or brain_on:
+            return apply_trainable_block_alphas(
+                per_unit,
+                block,
+                self.sigmoid_10(heart) if heart_on else None,
+                self.sigmoid_10(brain) if brain_on else None,
+            )
         return apply_block_alphas(per_unit, block)
 
     def recurrence(self, feature_xt, h_t, c_t=None):
