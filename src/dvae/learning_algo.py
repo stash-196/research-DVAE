@@ -683,9 +683,10 @@ class LearningAlgorithm:
                     self._val_reference = restored
 
         # Blank warmup_order is window_first. Blank warmup_patience_start
-        # is 2, growing to early_stop_patience. legacy_defaults or
-        # legacy_windowing restores auto_first and a single patience when
-        # those keys are blank. Explicit values still win.
+        # is 2: sequence-length bumps hold that value, then it rises over
+        # the autonomous and KL bumps. auto_first uses early_stop_patience
+        # for every bump. legacy_defaults or legacy_windowing restores
+        # auto_first and that single patience when those keys are blank.
         warmup_order, warmup_patience_start = warmup_settings_from_config(self.cfg)
         warmup = WarmupCurriculum(
             order=warmup_order,
@@ -719,7 +720,7 @@ class LearningAlgorithm:
                 early_stop_patience,
             )
         )
-        bumps_completed = 0
+        auto_kl_done = 0
 
         self.model.to(self.device)
 
@@ -1342,8 +1343,10 @@ class LearningAlgorithm:
             # auto_first: autonomous+noise, then KL, then sequence length.
             # window_first: sequence length first (autonomous fraction stays at
             # auto_warm_start), then autonomous+noise, then KL. Same 0.1 bumps.
-            # A blank warmup_patience_start compares against early_stop_patience
-            # on every bump. The final stop always uses early_stop_patience.
+            # window_first holds warmup_patience_start on sequence-length
+            # bumps, then raises it only across autonomous and KL bumps.
+            # auto_first, and a blank start, use early_stop_patience for
+            # every bump. The final stop always uses early_stop_patience.
             warmups_finished = warmup.finished(
                 current_auto_warm,
                 current_noise_warm,
@@ -1351,7 +1354,11 @@ class LearningAlgorithm:
                 current_sequence_len,
             )
             active_patience = warmup.active_patience(
-                bumps_completed, warmups_finished
+                auto_kl_done,
+                current_auto_warm,
+                current_noise_warm,
+                current_kl_warm,
+                current_sequence_len,
             )
             logger.info(
                 "Epoch: {} active patience: {}".format(
@@ -1425,8 +1432,8 @@ class LearningAlgorithm:
                         logger.info("Resetting KL & auto & noise warm-ups")
                 else:
                     logger.info("Unknown early stop condition")
-                if bumped.kind != "none":
-                    bumps_completed += 1
+                if bumped.kind in ("auto", "kl"):
+                    auto_kl_done += 1
             patience_threshold_epochs[epoch] = active_patience
             if self.tie_noise_to_auto:
                 current_noise_warm = current_auto_warm

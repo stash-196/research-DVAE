@@ -19,8 +19,8 @@ from dvae.warmup_curriculum import (
     WarmupCurriculum,
     autonomous_step_count,
     format_patience,
+    auto_kl_patience,
     kl_step_count,
-    patience_at_bump,
     planned_bump_count,
     simulate_recon_warmup,
     warmup_action,
@@ -204,13 +204,10 @@ def test_step_counts_follow_the_live_bump_arithmetic():
 
 
 def test_patience_schedule_endpoints():
-    # Five planned bumps: index 0 is the start, index 4 is the full patience.
-    values = [patience_at_bump(i, 5, 2, 10) for i in range(5)]
-    assert values == pytest.approx([2, 4, 6, 8, 10])
-    assert patience_at_bump(9, 5, 2, 10) == 10
-    # A single planned bump uses the start. The slot after it is the stop.
-    assert patience_at_bump(0, 1, 1, 5) == 1
-    assert patience_at_bump(1, 1, 1, 5) == 5
+    # k / K, so the last autonomous bump stays short of the full patience.
+    values = [auto_kl_patience(k, 4, 2, 10) for k in range(4)]
+    assert values == pytest.approx([2, 4, 6, 8])
+    assert auto_kl_patience(0, 1, 1, 5) == 1
     assert format_patience(2.0) == "2"
     assert format_patience(2.5) == "2.5"
     assert warmup_action(2, 2, False) == "continue"
@@ -490,7 +487,7 @@ def test_unset_patience_uses_early_stop_for_every_bump_and_the_stop():
     assert sim.active_patience == [1] * 9
 
 
-def test_patience_grows_across_planned_bumps_and_the_stop_stays_full():
+def test_window_bumps_hold_the_start_when_nothing_else_is_planned():
     curriculum = _curriculum(
         order="window_first",
         patience_start=1,
@@ -501,7 +498,7 @@ def test_patience_grows_across_planned_bumps_and_the_stop_stays_full():
         initial_sequence_len=70,
         sequence_len=100,
     )
-    assert curriculum.n_planned == 3
+    assert curriculum.autonomous_steps + curriculum.kl_steps == 0
     sim = simulate_recon_warmup(
         _flat(30),
         curriculum,
@@ -511,13 +508,77 @@ def test_patience_grows_across_planned_bumps_and_the_stop_stays_full():
         sequence_len=70,
     )
     bumps = [event for event in sim.events if event["kind"] == "window"]
-    assert [event["epoch"] for event in bumps] == [2, 5, 9]
-    assert [event["active"] for event in bumps] == pytest.approx([1, 2, 3])
+    assert [event["epoch"] for event in bumps] == [2, 4, 6]
+    assert [event["active"] for event in bumps] == pytest.approx([1, 1, 1])
     assert [event["sequence_len"] for event in bumps] == [80, 90, 100]
     stop = sim.events[-1]
     assert stop["kind"] == "stop"
-    assert stop["epoch"] == 13
+    assert stop["epoch"] == 10
     assert stop["active"] == 3
+
+
+def test_patience_rises_only_across_autonomous_bumps():
+    curriculum = _curriculum(
+        order="window_first",
+        patience_start=2,
+        early_stop_patience=10,
+        enable_autonomous=True,
+        auto_start=0.8,
+        auto_limit=1.0,
+        enable_noise=False,
+        enable_kl=False,
+        initial_sequence_len=80,
+        sequence_len=100,
+    )
+    assert curriculum.window_steps == 2
+    assert curriculum.autonomous_steps == 2
+    sim = simulate_recon_warmup(
+        _flat(40),
+        curriculum,
+        auto=0.8,
+        noise=1.0,
+        kl=1.0,
+        sequence_len=80,
+    )
+    windows = [event for event in sim.events if event["kind"] == "window"]
+    autos = [event for event in sim.events if event["kind"] == "auto"]
+    assert [event["epoch"] for event in windows] == [3, 6]
+    assert [event["active"] for event in windows] == pytest.approx([2, 2])
+    assert [event["epoch"] for event in autos] == [9, 16]
+    assert [event["active"] for event in autos] == pytest.approx([2, 6])
+    stop = sim.events[-1]
+    assert stop["kind"] == "stop"
+    assert stop["epoch"] == 27
+    assert stop["active"] == 10
+
+
+def test_auto_first_keeps_a_single_patience():
+    curriculum = _curriculum(
+        order="auto_first",
+        patience_start=2,
+        early_stop_patience=5,
+        enable_autonomous=False,
+        enable_noise=False,
+        enable_kl=False,
+        initial_sequence_len=90,
+        sequence_len=100,
+    )
+    sim = simulate_recon_warmup(
+        _flat(20),
+        curriculum,
+        auto=1.0,
+        noise=1.0,
+        kl=1.0,
+        sequence_len=90,
+    )
+    windows = [event for event in sim.events if event["kind"] == "window"]
+    assert len(windows) == 1
+    assert windows[0]["epoch"] == 6
+    assert windows[0]["active"] == 5
+    stop = sim.events[-1]
+    assert stop["epoch"] == 12
+    assert stop["active"] == 5
+    assert set(sim.active_patience) == {5}
 
 
 def test_single_bump_uses_the_start_and_the_final_stop_uses_full_patience():
