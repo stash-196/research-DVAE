@@ -42,6 +42,7 @@ from dvae.training_history import (
 from dvae.visualizers.visualize_training_metrics import (
     build_drift_timestep_figure,
     drift_timestep_figure_path,
+    save_drift_timestep_figure,
     save_drift_timestep_figures,
 )
 
@@ -52,15 +53,19 @@ _STEP_KEYS = (
     "e2_per_step",
     "ed_per_step",
     "d2_per_step",
+    "cos_per_step",
     "e2_per_step_varnorm",
     "ed_per_step_varnorm",
     "d2_per_step_varnorm",
+    "cos_per_step_varnorm",
     "val_e2_per_step",
     "val_ed_per_step",
     "val_d2_per_step",
+    "val_cos_per_step",
     "val_e2_per_step_varnorm",
     "val_ed_per_step_varnorm",
     "val_d2_per_step_varnorm",
+    "val_cos_per_step_varnorm",
 )
 _SCALAR_KEYS = (
     "base_error",
@@ -269,10 +274,11 @@ def test_traces_cover_the_production_window_not_the_drift_horizon():
         "e2": metrics["e2_per_step"],
         "ed": metrics["ed_per_step"],
         "d2": metrics["d2_per_step"],
+        "cos": metrics["cos_per_step"],
     }
     fig = build_drift_timestep_figure(terms, flip=flip)
     try:
-        assert len(fig.axes) == 3
+        assert len(fig.axes) == 4
         positions = [ax.get_position().y0 for ax in fig.axes]
         assert positions[0] > positions[1] > positions[2]
         assert _axes_share_x(fig.axes[0], fig.axes[1])
@@ -299,6 +305,7 @@ def test_each_window_is_faint_and_the_mean_is_solid():
         "e2": metrics["e2_per_step"],
         "ed": metrics["ed_per_step"],
         "d2": metrics["d2_per_step"],
+        "cos": metrics["cos_per_step"],
     }
     fig = build_drift_timestep_figure(terms, flip=flip)
     try:
@@ -324,8 +331,10 @@ def test_each_window_is_faint_and_the_mean_is_solid():
 def test_checkpoint_path_contains_the_epoch(tmp_path):
     truth, teacher, autonomous, flip, horizon, variance = _production_windows()
     metrics = _score(truth, teacher, autonomous, flip, horizon, variance)
-    terms = {key: metrics[key + "_per_step"] for key in ("e2", "ed", "d2")}
-    varnorm = {key: metrics[key + "_per_step_varnorm"] for key in ("e2", "ed", "d2")}
+    terms = {key: metrics[key + "_per_step"] for key in ("e2", "ed", "d2", "cos")}
+    varnorm = {
+        key: metrics[key + "_per_step_varnorm"] for key in ("e2", "ed", "d2", "cos")
+    }
     epoch = 12
     save_dir = tmp_path / "run"
     # The training loop passes ``{save_dir}/vis_during_training``.
@@ -386,7 +395,7 @@ def test_draw_is_on_every_save_frequency_checkpoint_for_any_criterion():
     for key in assigns[0].value.keys:
         assert isinstance(key, ast.Constant)
         keys.append(key.value)
-    assert keys == ["e2", "ed", "d2"]
+    assert keys == ["e2", "ed", "d2", "cos"]
     guard = [ast.unparse(node.test) for node in _enclosing_ifs(assigns[0], parents)]
     assert guard == ["self._spectrum_windows is not None"]
     assert _enclosing_function(assigns[0], parents) == "_epoch_selection_value"
@@ -473,7 +482,7 @@ def test_per_step_arrays_stay_out_of_history_and_the_checkpoint(tmp_path):
     for keys in saved_keys:
         for key in keys:
             assert "per_step" not in key
-            assert key.strip("'\"") not in {"e2", "ed", "d2"}
+            assert key.strip("'\"") not in {"e2", "ed", "d2", "cos"}
 
     fig_dir = tmp_path / "redraw"
     written = regenerate_training_figures(history, fig_dir, tag="synthetic")
@@ -563,6 +572,7 @@ def test_gap_checked_windows_leave_nans_and_nanmean_skips_them():
         "e2": metrics["e2_per_step"],
         "ed": metrics["ed_per_step"],
         "d2": metrics["d2_per_step"],
+        "cos": metrics["cos_per_step"],
     }
     fig = build_drift_timestep_figure(terms, flip=tf_steps)
     try:
@@ -654,6 +664,7 @@ def test_ed_sign_matches_error_drift_cross():
             "e2": metrics["e2_per_step"],
             "ed": metrics["ed_per_step"],
             "d2": metrics["d2_per_step"],
+            "cos": metrics["cos_per_step"],
         },
         flip=flip,
     )
@@ -678,7 +689,12 @@ def test_panels_follow_aggregate_plot_style(tmp_path):
     ed = rng.normal(scale=80.0, size=(n_windows, length))
     ed[:, 4] = np.nan
     d2 = np.full((n_windows, length), 0.2)
-    terms = {"e2": e2, "ed": ed, "d2": d2}
+    terms = {
+        "e2": e2,
+        "ed": ed,
+        "d2": d2,
+        "cos": np.clip(ed, -1.0, 1.0),
+    }
     fig = build_drift_timestep_figure(terms, flip=10)
     try:
         fig.canvas.draw()
@@ -710,24 +726,7 @@ def test_panels_follow_aggregate_plot_style(tmp_path):
     finally:
         plt.close(fig)
 
-    captured = {}
-
-    def _capture(fig, path, left_margin=None):
-        captured["path"] = path
-        captured["left"] = left_margin
-        from dvae.eval.aggregate_plot_style import save_figure as real_save
-
-        real_save(fig, path, left_margin=left_margin)
-
-    import dvae.visualizers.visualize_training_metrics as viz
-
-    original = viz.save_figure
-    viz.save_figure = _capture
-    try:
-        out = tmp_path / "drift-style.png"
-        viz.save_drift_timestep_figure(terms, out)
-    finally:
-        viz.save_figure = original
-    assert captured["path"] == out
+    out = tmp_path / "drift-style.png"
+    save_drift_timestep_figure(terms, out)
     assert out.is_file()
     assert out.stat().st_size > 0
