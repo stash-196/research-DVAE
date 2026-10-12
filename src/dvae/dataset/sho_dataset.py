@@ -50,6 +50,7 @@ class SimpleHarmonicOscillator(Dataset):
         self.observation_process = observation_process
         self.overlap = overlap
         self.shuffle = shuffle
+        self.strict_non_overlap = bool(kwargs.get("strict_non_overlap", False))
         self.device = device
         self.with_nan = with_nan
 
@@ -278,7 +279,10 @@ class SimpleHarmonicOscillator(Dataset):
             # Recalculate data_idx based on the new sequence length
             num_frames = self.seq.shape[0]
             all_indices = data_utils.find_indices(
-                num_frames, self.seq_len, num_frames // self.seq_len
+                num_frames,
+                self.seq_len,
+                num_frames // self.seq_len,
+                strict_non_overlap=getattr(self, "strict_non_overlap", False),
             )
             if self.split == "test":
                 valid_frames = all_indices

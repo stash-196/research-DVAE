@@ -301,6 +301,101 @@ def test_template_has_gap_keys():
     assert "max_gap_window_frac = {max_gap_window_frac}" in text
     assert "start_on_observed = {start_on_observed}" in text
     assert "max_window_nan_ratio = {max_window_nan_ratio}" in text
+    assert "strict_non_overlap = {strict_non_overlap}" in text
+
+
+def _overlaps(starts, seq_len) -> bool:
+    ordered = sorted(int(s) for s in starts)
+    return any(b < a + int(seq_len) for a, b in zip(ordered, ordered[1:]))
+
+
+def _piece_is_tiled(starts, seq_len, left, right) -> bool:
+    """Abutting windows, and only a final remainder shorter than ``seq_len``."""
+    length = int(seq_len)
+    got = sorted(int(s) for s in starts if left <= int(s) < right)
+    expect = list(range(left, right - length + 1, length))
+    return got == expect
+
+
+def test_default_find_indices_is_unchanged_and_can_overlap():
+    historical = find_indices(40, 10, 4)
+    assert list(np.asarray(historical).tolist()) == [0, 8, 16, 24]
+    assert list(np.asarray(find_indices(40, 10, 4, strict_non_overlap=False)).tolist()) == [
+        0, 8, 16, 24
+    ]
+    assert _overlaps(historical, 10)
+    bounded = find_indices(20, 5, 4, boundaries=[7])
+    assert list(np.asarray(bounded).tolist()) == list(
+        np.asarray(find_indices(20, 5, 4, boundaries=[7], strict_non_overlap=False)).tolist()
+    )
+
+
+def test_default_picker_still_builds_the_local_rng(monkeypatch):
+    import dvae.dataset.utils.data_utils as data_utils
+
+    calls = []
+    real = data_utils.np.random.RandomState
+
+    def wrapped(seed=None):
+        calls.append(seed)
+        return real(seed)
+
+    monkeypatch.setattr(data_utils.np.random, "RandomState", wrapped)
+    find_indices(40, 10, 4)
+    assert calls == [1234567890]
+    calls.clear()
+    find_indices(20, 5, 4, boundaries=[7])
+    assert calls == [1234567890, 1234567890]
+    calls.clear()
+    find_indices(40, 10, 4, strict_non_overlap=True)
+    find_indices(20, 5, 4, boundaries=[7], strict_non_overlap=True)
+    assert calls == []
+
+
+def test_strict_non_overlap_tiles_each_piece_without_overlap():
+    tiled = find_indices(40, 10, 99, strict_non_overlap=True)
+    assert list(tiled.tolist()) == [0, 10, 20, 30]
+    assert not _overlaps(tiled, 10)
+    assert _piece_is_tiled(tiled, 10, 0, 40)
+    # Remainder is the only uncovered tail: 41 % 10 == 1.
+    odd = find_indices(41, 10, 4, strict_non_overlap=True)
+    assert list(odd.tolist()) == [0, 10, 20, 30]
+    assert not _overlaps(odd, 10)
+    pieces = find_indices(20, 5, 4, boundaries=[7], strict_non_overlap=True)
+    assert not _overlaps(pieces, 5)
+    assert not _crosses(pieces, 5, [7])
+    assert _piece_is_tiled(pieces, 5, 0, 7)
+    assert _piece_is_tiled(pieces, 5, 7, 20)
+
+
+def test_strict_non_overlap_steps_over_a_missing_start(tmp_path):
+    n = 100
+    segment = np.zeros(n, dtype=np.int64)
+    segment[40:] = 1
+    present = np.ones(n, dtype=bool)
+    present[20:30] = False
+    _session(tmp_path, n, present=present, segment_id=segment)
+    old = _load(tmp_path, seq_len=10, strict_non_overlap=False)
+    length = len(np.asarray(old.seq))
+    assert list(old.data_idx) == list(
+        np.asarray(find_indices(length, 10, length // 10, boundaries=[40])).tolist()
+    )
+    ds = _load(
+        tmp_path,
+        seq_len=10,
+        strict_non_overlap=True,
+        start_on_observed=True,
+    )
+    assert not _overlaps(ds.data_idx, ds.seq_len)
+    _assert_inside(ds)
+    assert 20 not in ds.data_idx
+    assert 30 in ds.data_idx
+    seq = np.asarray(ds.seq).reshape(-1)
+    for start in ds.data_idx:
+        assert np.isfinite(seq[int(start)])
+    # The gap is stepped over; the windows on either side still abut the gap.
+    assert 10 in ds.data_idx
+    assert any(int(s) == 30 for s in ds.data_idx)
 
 
 def test_shift_start_off_a_gap_or_drop_it():

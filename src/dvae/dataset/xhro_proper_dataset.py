@@ -35,7 +35,10 @@ indices stay on the dataset and are applied again whenever
 sample count is longer than that fraction of the current sequence length,
 and is recomputed on every re-cut. ``[DataFrame] start_on_observed``
 (false) moves a start that lands on ``present=False`` forward to the next
-observed sample in the same segment. ``[DataFrame] max_window_nan_ratio``
+observed sample in the same segment. ``[DataFrame] strict_non_overlap``
+(false) keeps the historical ``find_indices`` placement, including its
+local ``RandomState(1234567890)``. True tiles each segment with abutting
+windows. ``[DataFrame] max_window_nan_ratio``
 (unset) is the existing NaN-fraction filter on every re-cut.
 ``filled_nan_log_sec`` is the re-cut log cutoff when ``max_fill_gap_sec``
 is unset. Crop stays time-based.
@@ -1519,6 +1522,10 @@ class XhroProper(Xhro):
       - start_on_observed: waveform only. False keeps today's starts.
         True moves a start on a missing sample forward to the next
         observed sample that still fits in the segment.
+      - strict_non_overlap: waveform only. False keeps the historical
+        ``find_indices`` starts. True tiles each segment without overlap
+        or interior holes; the only unused samples are the final remainder
+        of each piece, plus any gap a start had to step over.
       - max_window_nan_ratio: waveform and coarse re-cuts. Unset means
         no NaN-fraction filtering. An explicit ``minimum_nan_ratio``
         argument overrides it.
@@ -1558,6 +1565,7 @@ class XhroProper(Xhro):
         filled_nan_log_sec=None,
         max_gap_window_frac=None,
         start_on_observed=False,
+        strict_non_overlap=False,
         max_window_nan_ratio=None,
         **kwargs,
     ):
@@ -1597,6 +1605,9 @@ class XhroProper(Xhro):
         )
         self.start_on_observed = _optional_bool(
             start_on_observed, "start_on_observed"
+        )
+        self.strict_non_overlap = _optional_bool(
+            strict_non_overlap, "strict_non_overlap"
         )
         self.max_window_nan_ratio = _optional_nonnegative_float(
             max_window_nan_ratio, "max_window_nan_ratio"
@@ -2046,6 +2057,7 @@ class XhroProper(Xhro):
             )
             if (
                 self.overlap
+                and not getattr(self, "strict_non_overlap", False)
                 and _boundary_cuts(boundaries, num_frames) is not None
             ):
                 if seq_len < requested:

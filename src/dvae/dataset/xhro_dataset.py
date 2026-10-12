@@ -82,6 +82,7 @@ class Xhro(Dataset):
         # Optional window rules. XhroProper sets the parsed values; a plain
         # Xhro run stores whatever the config passed and leaves them off.
         self.start_on_observed = bool(kwargs.get("start_on_observed", False))
+        self.strict_non_overlap = bool(kwargs.get("strict_non_overlap", False))
         self.max_gap_window_frac = kwargs.get("max_gap_window_frac", None)
         self.max_window_nan_ratio = kwargs.get("max_window_nan_ratio", None)
         self.filled_gap_spans = kwargs.get("filled_gap_spans", None)
@@ -470,11 +471,19 @@ class Xhro(Dataset):
             self.seq_len = seq_len
             # Recalculate data_idx based on the new sequence length.
             # Each span uses the local RandomState inside find_indices.
+            strict = bool(getattr(self, "strict_non_overlap", False))
+            observed = None
+            if strict and getattr(self, "start_on_observed", False):
+                observed = observed_row_mask(
+                    self.seq, getattr(self, "observed_per_row", None)
+                )
             all_indices = data_utils.find_indices(
                 num_frames,
                 self.seq_len,
                 num_frames // self.seq_len,
                 boundaries=boundaries,
+                strict_non_overlap=strict,
+                observed=observed,
             )
             all_indices = self._window_starts(all_indices, boundaries)
             minimum_nan_ratio = self._minimum_nan_ratio(minimum_nan_ratio)

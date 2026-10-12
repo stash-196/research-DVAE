@@ -464,6 +464,9 @@ class LearningAlgorithm:
             start_on_observed=optional_config_bool(
                 self.cfg, "DataFrame", "start_on_observed"
             ),
+            strict_non_overlap=optional_config_bool(
+                self.cfg, "DataFrame", "strict_non_overlap"
+            ),
             max_window_nan_ratio=optional_config_float(
                 self.cfg, "DataFrame", "max_window_nan_ratio"
             ),

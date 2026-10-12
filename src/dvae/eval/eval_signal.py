@@ -661,6 +661,9 @@ if __name__ == "__main__":
         start_on_observed=optional_config_bool(
             cfg, "DataFrame", "start_on_observed"
         ),
+        strict_non_overlap=optional_config_bool(
+            cfg, "DataFrame", "strict_non_overlap"
+        ),
         max_window_nan_ratio=optional_config_float(
             cfg, "DataFrame", "max_window_nan_ratio"
         ),

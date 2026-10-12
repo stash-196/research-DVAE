@@ -62,6 +62,8 @@ class DatasetConfig:
     # Waveform re-cut options. Unset / false keeps today's windows.
     max_gap_window_frac: float | None = None
     start_on_observed: bool = False
+    # False keeps the historical find_indices placement.
+    strict_non_overlap: bool = False
     max_window_nan_ratio: float | None = None
 
 

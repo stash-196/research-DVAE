@@ -262,13 +262,66 @@ def _find_indices_span(num_frames, seq_len, num_indices):
     return listf
 
 
-def find_indices(num_frames, seq_len, num_indices, boundaries=None):
+def _find_indices_strict(num_frames, seq_len, boundaries=None, observed=None):
+    """Abutting windows inside each piece. The only uncovered tail is the remainder.
+
+    ``observed`` is set when starts must not land on a missing sample. A
+    tile that would start there moves forward to the next observed row, and
+    the next window begins where that one ends, so the windows still do not
+    overlap. A move that cannot fit inside the piece stops that piece.
+    """
+    n = int(num_frames)
+    length = int(seq_len)
+    if length < 1:
+        raise ValueError(f"seq_len must be >= 1, got {seq_len}.")
+    flags = None
+    if observed is not None:
+        flags = np.asarray(observed, dtype=bool).reshape(-1)
+        if flags.shape[0] != n:
+            raise ValueError(
+                f"observed mask length {flags.shape[0]} != series length {n}"
+            )
+    cuts = _boundary_cuts(boundaries, n)
+    edges = np.r_[0, cuts, n] if cuts is not None else np.asarray([0, n])
+    starts = []
+    for left, right in zip(edges[:-1], edges[1:]):
+        pos = int(left)
+        right = int(right)
+        while pos + length <= right:
+            start = pos
+            if flags is not None and not flags[start]:
+                start = pos + 1
+                while start < right and not flags[start]:
+                    start += 1
+                if start + length > right:
+                    break
+            starts.append(start)
+            pos = start + length
+    if not starts:
+        return np.asarray([], dtype=np.int64)
+    return np.asarray(starts, dtype=np.int64)
+
+
+def find_indices(
+    num_frames,
+    seq_len,
+    num_indices,
+    boundaries=None,
+    strict_non_overlap=False,
+    observed=None,
+):
     """Window starts. ``boundaries`` are sample indices a window must not cross.
 
     No boundaries (``None`` or empty) is the historical single-span call.
     With boundaries, the same picker runs inside each piece, each with its
     own ``RandomState(1234567890)``. Starts are offsets into ``num_frames``.
+
+    ``strict_non_overlap=False`` is that historical picker, including the
+    local RNG. ``True`` tiles each piece with abutting windows; ``num_indices``
+    is not used. ``observed`` is only read in that strict mode.
     """
+    if strict_non_overlap:
+        return _find_indices_strict(num_frames, seq_len, boundaries, observed)
     cuts = _boundary_cuts(boundaries, num_frames)
     if cuts is None:
         return _find_indices_span(num_frames, seq_len, num_indices)
