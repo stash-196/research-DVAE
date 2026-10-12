@@ -121,8 +121,12 @@ class DampedSimpleHarmonicOscillator(Dataset):
         # Process the sequence based on the observation process
         the_sequence = self.apply_observation_process(the_sequence)
 
-        # the_sequence should be squeezed before this takes place
+        # Drop a leftover singleton from loaders that save (time, instances, 1).
+        # A single trajectory is one column: squeeze would turn (time, 1)
+        # into a vector and the instance split below would fail.
         the_sequence = the_sequence.squeeze()
+        if the_sequence.ndim == 1:
+            the_sequence = the_sequence.unsqueeze(-1)
 
         # Special handling for damped_sho datasets
         # Each column is its own series. The window rules use that, not the label.

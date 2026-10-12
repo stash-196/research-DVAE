@@ -65,7 +65,11 @@ class DatasetConfig:
     # max_window_nan_ratio is blank.
     # A blank ratio (None, and not max_window_nan_ratio_off) uses
     # dataset_missing_rate + max_window_nan_excess.
+    # Both names are stored. Either one true turns the legacy bundle on,
+    # and __post_init__ writes that same flag into both fields so
+    # windowing_from_config can be unpacked here.
     legacy_windowing: bool = False
+    legacy_defaults: bool = False
     max_gap_window_frac: float | None = 0.25
     # None disables the quantile term. 0.99 is the blank-key default.
     gap_split_quantile: float | None = 0.99
@@ -77,6 +81,14 @@ class DatasetConfig:
     # Waveform block mask. None file means no masking. Mode None is not_good.
     block_mask_file: str | None = None
     block_mask_mode: str | None = None
+
+    def __post_init__(self):
+        # ``legacy_defaults`` and ``legacy_windowing`` are one switch.
+        # windowing_from_config returns both, already OR-ed. A caller that
+        # sets only one name still lands on the same flag.
+        legacy = bool(self.legacy_windowing) or bool(self.legacy_defaults)
+        self.legacy_windowing = legacy
+        self.legacy_defaults = legacy
 
 
 def build_dataloader(

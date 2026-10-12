@@ -25,7 +25,9 @@ def _master_find_indices():
         ["git", "show", "origin/master:src/dvae/dataset/utils/data_utils.py"],
         text=True,
     )
-    start = source.index("def find_indices(")
+    # find_indices calls helpers defined above it. Slice from the first
+    # of those so exec on origin/master does not miss _boundary_cuts.
+    start = source.index("def _boundary_cuts(")
     end = source.index("\nif __name__", start)
     namespace = {"np": np}
     exec(source[start:end], namespace)
