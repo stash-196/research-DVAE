@@ -368,54 +368,63 @@ def score_fixed_validation_windows(
     the live sequence length.
     """
     from dvae.eval.utils.spectrum_validation import free_run_spectrum_error
+    from dvae.wall_clock import WallClock
 
     if not windows:
         raise ValueError("Drift validation needs the fixed spectrum windows.")
     truths = []
     teacher = []
     autonomous = []
-    for window in windows:
-        arr = _as_window(window)
-        enforce_drift_span(arr.shape[0], tf_steps, horizon)
-        batch = torch.as_tensor(arr, dtype=torch.float32, device=device).unsqueeze(1)
-        _truth, recon_tf, recon_auto = fork_tf_and_auto(
-            model,
-            batch,
-            flip_point=int(tf_steps),
-            device=device,
-            observation_process=observation_process,
-        )
-        truths.append(arr)
-        teacher.append(recon_tf[:, 0, :].detach().cpu().numpy())
-        autonomous.append(recon_auto[:, 0, :].detach().cpu().numpy())
-    metrics = drift_metrics_from_series(
-        truths,
-        teacher,
-        autonomous,
-        flip=int(tf_steps),
-        horizon=int(horizon),
-        variance=variance,
-        observation_process=observation_process,
-        ftle_k_start=ftle_k_start,
-        ftle_k_end=ftle_k_end,
-    )
-    if rosenstein:
-        lle_mean, lle_std, lle_per_window = rosenstein_on_free_run(
+    with WallClock(device) as forward_clock:
+        for window in windows:
+            arr = _as_window(window)
+            enforce_drift_span(arr.shape[0], tf_steps, horizon)
+            batch = torch.as_tensor(arr, dtype=torch.float32, device=device).unsqueeze(1)
+            _truth, recon_tf, recon_auto = fork_tf_and_auto(
+                model,
+                batch,
+                flip_point=int(tf_steps),
+                device=device,
+                observation_process=observation_process,
+            )
+            truths.append(arr)
+            teacher.append(recon_tf[:, 0, :].detach().cpu().numpy())
+            autonomous.append(recon_auto[:, 0, :].detach().cpu().numpy())
+    with WallClock(device) as drift_clock:
+        metrics = drift_metrics_from_series(
+            truths,
+            teacher,
             autonomous,
-            int(tf_steps),
-            m=embed_dim,
-            tau=embed_tau,
+            flip=int(tf_steps),
+            horizon=int(horizon),
+            variance=variance,
             observation_process=observation_process,
+            ftle_k_start=ftle_k_start,
+            ftle_k_end=ftle_k_end,
         )
-    else:
-        lle_mean, lle_std = float("nan"), float("nan")
-        lle_per_window = np.full(len(autonomous), np.nan, dtype=np.float64)
+    with WallClock(device) as rosenstein_clock:
+        if rosenstein:
+            lle_mean, lle_std, lle_per_window = rosenstein_on_free_run(
+                autonomous,
+                int(tf_steps),
+                m=embed_dim,
+                tau=embed_tau,
+                observation_process=observation_process,
+            )
+        else:
+            lle_mean, lle_std = float("nan"), float("nan")
+            lle_per_window = np.full(len(autonomous), np.nan, dtype=np.float64)
     metrics["lle_mean"] = lle_mean
     metrics["lle_std"] = lle_std
     metrics["lle_per_window"] = lle_per_window
-    metrics["spectrum"] = float(
-        free_run_spectrum_error(autonomous, truths, int(tf_steps))
-    )
+    with WallClock(device) as spectrum_clock:
+        metrics["spectrum"] = float(
+            free_run_spectrum_error(autonomous, truths, int(tf_steps))
+        )
+    metrics["time_val_forward"] = float(forward_clock.elapsed)
+    metrics["time_drift"] = float(drift_clock.elapsed)
+    metrics["time_rosenstein"] = float(rosenstein_clock.elapsed)
+    metrics["time_spectrum"] = float(spectrum_clock.elapsed)
     return metrics
 
 

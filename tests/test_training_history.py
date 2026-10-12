@@ -33,6 +33,7 @@ from dvae.training_history import (
     restore_epoch_series,
     save_training_history,
     series_or_new,
+    warmup_change_epochs,
 )
 from dvae.visualizers.visualize_training_metrics import visualize_combined_metrics
 
@@ -61,6 +62,14 @@ def _series(n=4):
         "windows_dropped_shift": np.array([2, 2, 0, 0])[:n],
         "gap_splits": np.array([4, 4, 2, 2])[:n],
         "mean_start_shift": np.array([1.5, 1.5, 0.0, 0.0])[:n],
+        "time_train": np.array([0.4, 0.5, 0.45, 0.5])[:n],
+        "time_val": np.array([0.2, 0.2, 0.25, 0.2])[:n],
+        "time_val_forward": np.array([0.05, 0.05, 0.06, 0.05])[:n],
+        "time_spectrum": np.array([0.01, 0.01, 0.01, 0.01])[:n],
+        "time_drift": np.array([0.02, 0.02, 0.02, 0.02])[:n],
+        "time_rosenstein": np.array([0.1, 0.1, 0.11, 0.1])[:n],
+        "time_plot": np.array([0.3, 0.0, 0.3, 0.0])[:n],
+        "time_eval": np.array([0.0, 0.0, 0.0, 0.4])[:n],
     }
 
 
@@ -179,6 +188,12 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
             shift = fig.axes[6]
             captured["shift_label"] = shift.get_ylabel()
             captured["n_axes"] = len(fig.axes)
+            timing_ax = fig.axes[-1]
+            captured["timing_ylabel"] = timing_ax.get_ylabel()
+            captured["timing_legend_title"] = timing_ax.get_legend().get_title().get_text()
+            captured["timing_labels"] = [
+                text.get_text() for text in timing_ax.get_legend().get_texts()
+            ]
         return real_savefig(fig_path, *args, **kwargs)
 
     def _fig_save(self, fig_path, *args, **kwargs):
@@ -251,7 +266,19 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
     ):
         assert name in names
         assert (out / name).stat().st_size > 0
-    assert captured["n_axes"] == 7
+    assert captured["n_axes"] == 8
+    assert captured["timing_ylabel"] == "seconds"
+    assert captured["timing_legend_title"] == "wall time"
+    assert captured["timing_labels"] == [
+        "train",
+        "val",
+        "metrics forward",
+        "spectrum",
+        "drift",
+        "rosenstein",
+        "plot",
+        "eval",
+    ]
     assert "patience threshold" in captured["cpt_labels"]
     np.testing.assert_allclose(captured["dashed"][0].get_ydata(), [2, 2, 6, 10])
     assert captured["window_labels"] == [
@@ -642,3 +669,90 @@ def test_combined_figure_draws_window_steps_without_a_caller_series(tmp_path):
         np.full(n, 5.0),
     )
     assert (tmp_path / "vis_training_delta_kl_cpt_best_state_bare.png").stat().st_size > 0
+
+
+def test_bump_events_roundtrip_and_rebuild_vertical_lines(tmp_path):
+    from dvae.epoch_log import vertical_line_epochs
+
+    events = [
+        {
+            "epoch": 1,
+            "type": "window",
+            "old": 80.0,
+            "new": 100.0,
+            "patience": 2.0,
+            "patience_after": 2.0,
+            "cpt_patience": 2,
+        },
+        {
+            "epoch": 2,
+            "type": "auto",
+            "old": 0.1,
+            "new": 0.2,
+            "patience": 6.0,
+            "patience_after": 8.0,
+            "cpt_patience": 6,
+        },
+        {
+            "epoch": 4,
+            "type": "KL",
+            "old": 0.0,
+            "new": 0.1,
+            "patience": 10.0,
+        },
+    ]
+    history = build_training_history(
+        end=4,
+        model_name="MT_VRNN",
+        tag="bumps",
+        auto_sampling_method="ss",
+        noise_sampling_method="none",
+        delta_threshold=1e-4,
+        val_criteria=("recon", "spectrum"),
+        val_reference={"recon": 0.5, "spectrum": 0.3},
+        series=_series(),
+        dataset_stats=_stats(),
+        bump_events=events,
+    )
+    # The row at epoch 4 is past the saved prefix. A missing patience_after
+    # would have been copied from patience; that row is dropped instead.
+    assert [row["type"] for row in history["bump_events"]] == ["window", "auto"]
+    assert history["bump_events"][0]["cpt_patience"] == 2
+    assert history["bump_events"][1]["patience_after"] == 8.0
+    sequence = np.array([80.0, 80.0, 100.0, 100.0])
+    assert list(warmup_change_epochs(sequence)) == [0, 2]
+    assert vertical_line_epochs(history["bump_events"], "window") == [0, 2]
+    path = tmp_path / "loss_model.pckl"
+    save_training_history(path, history)
+    loaded = load_training_history(path)
+    assert loaded["bump_events"] == history["bump_events"]
+    assert _history()["bump_events"] == []
+
+
+def test_history_without_timing_keeps_seven_panels(tmp_path, monkeypatch):
+    captured = {}
+    real_savefig = plt.savefig
+
+    def _save(fig_path, *args, **kwargs):
+        if "delta_kl_cpt" in str(fig_path):
+            fig = plt.gcf()
+            captured["n_axes"] = len(fig.axes)
+            captured["height"] = fig.get_size_inches()[1]
+        return real_savefig(fig_path, *args, **kwargs)
+
+    monkeypatch.setattr(plt, "savefig", _save)
+    old = _history()
+    for key in (
+        "time_train",
+        "time_val",
+        "time_val_forward",
+        "time_spectrum",
+        "time_drift",
+        "time_rosenstein",
+        "time_plot",
+        "time_eval",
+    ):
+        del old[key]
+    regenerate_training_figures(old, tmp_path / "old", tag="old")
+    assert captured["n_axes"] == 7
+    assert captured["height"] == 21.0

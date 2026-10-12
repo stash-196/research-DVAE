@@ -50,6 +50,12 @@ once. ``drift_monitored`` is false when the windows were not built, and
 the figure then omits those panels. Older files that still use
 ``val_drift``, ``val_cross``, ``val_auto_total``, and ``val_drift_k*``
 are read as the new names.
+
+Every new history also stores per-epoch wall times (``time_train``,
+``time_val``, ``time_val_forward``, ``time_spectrum``, ``time_drift``,
+``time_rosenstein``, ``time_plot``, ``time_eval``) and ``bump_events``,
+the warm-up table ``(epoch, type, old, new, patience)`` the vertical
+lines are rebuilt from.
 """
 
 from __future__ import annotations
@@ -116,6 +122,14 @@ EPOCH_SERIES_KEYS = (
     "windows_dropped_shift",
     "gap_splits",
     "mean_start_shift",
+    "time_train",
+    "time_val",
+    "time_val_forward",
+    "time_spectrum",
+    "time_drift",
+    "time_rosenstein",
+    "time_plot",
+    "time_eval",
 )
 
 # Held across the unfilled tail so a resumed array does not invent a step.
@@ -259,6 +273,7 @@ def build_training_history(
     lle_per_window=None,
     ftle_per_window=None,
     lle_gt_per_window=None,
+    bump_events=None,
 ) -> dict:
     """One dict for the checkpoint ``loss_log`` and for ``loss_model.pckl``.
 
@@ -323,6 +338,7 @@ def build_training_history(
         history["val_lle_gt_per_window"] = np.asarray(
             lle_gt_per_window, dtype=float
         ).reshape(-1)
+    history["bump_events"] = _plain_bump_events(bump_events, end)
     if rosenstein is not None:
         history["val_rosenstein"] = bool(rosenstein)
     if ftle_fit is not None:
@@ -357,6 +373,36 @@ def build_training_history(
         a_sigmas_history=_slice_2d_epochs(a_sigmas_history, end),
     )
     return history
+
+
+def _plain_bump_events(events, end) -> list:
+    """Copy bump rows with epoch < ``end``.
+
+    Each row is ``epoch``, ``type`` (window, auto, noise, or KL),
+    ``old``, ``new``, and ``patience`` (the active patience that fired
+    the bump). ``patience_after`` and ``cpt_patience`` keep the rest of
+    the log line. A missing table is an empty list.
+    """
+    rows = []
+    if not events:
+        return rows
+    stop = None if end is None else int(end)
+    for item in events:
+        epoch = int(item["epoch"])
+        if stop is not None and epoch >= stop:
+            continue
+        rows.append(
+            {
+                "epoch": epoch,
+                "type": str(item["type"]),
+                "old": float(item["old"]),
+                "new": float(item["new"]),
+                "patience": float(item["patience"]),
+                "patience_after": float(item.get("patience_after", item["patience"])),
+                "cpt_patience": int(item.get("cpt_patience", 0)),
+            }
+        )
+    return rows
 
 
 def restore_epoch_series(saved, epochs, fill="zero") -> np.ndarray:
@@ -575,6 +621,24 @@ def _lyapunov_for_figure(history, n):
     }
 
 
+def _timing_for_figure(history, n):
+    """Per-epoch wall times, or None when this file has none of them.
+
+    An older pickle keeps the seven-panel training figure. A new file
+    draws the eighth panel from whatever of these keys it stored.
+    """
+    from dvae.epoch_log import TIMING_SERIES_KEYS
+
+    if not any(key in history for key in TIMING_SERIES_KEYS):
+        return None
+    out = {}
+    for key in TIMING_SERIES_KEYS:
+        if key not in history:
+            continue
+        out[key] = np.asarray(history[key], dtype=float).reshape(-1)[: int(n)]
+    return out or None
+
+
 def _spectrum_for_figure(history, criteria):
     """Whether the redraw includes spectrum, and the raw series or None.
 
@@ -786,6 +850,7 @@ def regenerate_training_figures(history, save_figures_dir, tag=None, drift_norm=
         gap_splits=_series("gap_splits"),
         mean_start_shift=_series("mean_start_shift"),
         dataset_stats=dataset_stats,
+        timing=_timing_for_figure(history, n),
     )
     sigmas = history.get("sigmas_history")
     a_sigmas = history.get("A_sigmas_history")

@@ -207,6 +207,15 @@ def test_fixed_windows_score_drift_with_the_same_flip():
     # A constant shift is removed before the periodogram, so the free-run
     # spectrum matches and Hellinger is the known NaN. Drift still sees it.
     assert np.isnan(scored["spectrum"])
+    for key in (
+        "time_val_forward",
+        "time_spectrum",
+        "time_drift",
+        "time_rosenstein",
+    ):
+        assert key in scored
+        assert np.isfinite(scored[key])
+        assert scored[key] >= 0.0
     with pytest.raises(ValueError, match="exceeds window length"):
         enforce_drift_span(length, flip, 20)
 

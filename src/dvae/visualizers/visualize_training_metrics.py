@@ -936,9 +936,17 @@ def visualize_combined_metrics(
     gap_splits=None,
     mean_start_shift=None,
     dataset_stats=None,
+    timing=None,
 ):
+    """Warm-up, patience, windowing, and, when stored, epoch wall time.
+
+    ``timing`` is the per-epoch seconds dict. Absent on an older history,
+    which keeps the seven panels. A present dict adds a stacked wall-time
+    panel. The same warm-up vertical lines are drawn on it.
+    """
     plt.clf()
-    fig, axs = plt.subplots(7, 1, figsize=(12, 21))
+    n_panels = 8 if timing else 7
+    fig, axs = plt.subplots(n_panels, 1, figsize=(12, 3 * n_panels))
     plt.rcParams["font.size"] = 12
     n_epochs = len(np.asarray(delta_per_epoch).reshape(-1))
 
@@ -1063,6 +1071,28 @@ def visualize_combined_metrics(
     axs[6].set_xlabel("epochs", fontdict={"size": 16})
     axs[6].set_ylabel("samples", fontdict={"size": 16})
     axs[6].grid(True)
+
+    if timing:
+        from dvae.epoch_log import TIMING_PLOT_LABELS
+
+        stacks = []
+        labels = []
+        for key, label in TIMING_PLOT_LABELS:
+            if key not in timing or timing[key] is None:
+                continue
+            values = np.asarray(timing[key], dtype=float).reshape(-1)
+            if values.size < n_epochs:
+                padded = np.zeros(n_epochs, dtype=float)
+                padded[: values.size] = values
+                values = padded
+            stacks.append(values[:n_epochs])
+            labels.append(label)
+        if stacks:
+            axs[7].stackplot(np.arange(n_epochs), *stacks, labels=labels)
+        axs[7].legend(fontsize=12, title="wall time", title_fontsize=16, loc="upper left")
+        axs[7].set_xlabel("epochs", fontdict={"size": 16})
+        axs[7].set_ylabel("seconds", fontdict={"size": 16})
+        axs[7].grid(True)
 
     if model_name in ["VRNN", "MT_VRNN"]:
         for kl_warm_epoch in kl_warm_epochs:

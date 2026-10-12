@@ -12,6 +12,7 @@ import os
 import shutil
 import socket
 import datetime
+import time
 import numpy as np
 from typing import Optional
 import torch
@@ -60,6 +61,16 @@ from dvae.eval.utils.local_drift_analysis import (
 from dvae.eval.utils.delay_params import _get_delay_params
 from dvae.eval.utils.spectrum_validation import capture_fixed_spectrum_windows
 from dvae.eval.window_length import cap_eval_seq_len
+from dvae.epoch_log import (
+    format_bump_line,
+    format_early_stop_line,
+    format_epoch_budget_line,
+    format_new_best_line,
+    format_selection_line,
+    format_timing_line,
+    make_bump_row,
+)
+from dvae.wall_clock import sync_cuda
 from dvae.warmup_curriculum import (
     WarmupCurriculum,
     format_patience,
@@ -370,8 +381,15 @@ class LearningAlgorithm:
         of each of those values divided by its value at the first
         validation epoch. Spectrum and the Appendix B terms are filled
         whenever the fixed windows exist, including when they are not
-        selected.
+        selected. Returns ``(score, raw components, normalised components)``.
+        A single criterion has an empty normalised dict.
         """
+        self._epoch_metric_times = {
+            "time_val_forward": 0.0,
+            "time_spectrum": 0.0,
+            "time_drift": 0.0,
+            "time_rosenstein": 0.0,
+        }
         if self._spectrum_windows is not None:
             scored = self._score_fixed_validation()
             val_spectrum[epoch] = float(scored["spectrum"])
@@ -431,6 +449,13 @@ class LearningAlgorithm:
                         scored["lle_mean"], scored["lle_std"], gt_text
                     )
                 )
+            for key in (
+                "time_val_forward",
+                "time_spectrum",
+                "time_drift",
+                "time_rosenstein",
+            ):
+                self._epoch_metric_times[key] = float(scored.get(key, 0.0))
         if self._metric_reference is None:
             reference = {"recon": float(val_loss[epoch])}
             if self._spectrum_windows is not None:
@@ -443,29 +468,27 @@ class LearningAlgorithm:
                     epoch, self._metric_reference
                 )
             )
-        if len(self._val_criteria) == 1:
-            return self._raw_criterion(
-                self._val_criteria[0], epoch, val_loss, val_spectrum, drift_arrays
-            )
-        components = {}
+        raw = {}
         for name in self._val_criteria:
-            components[name] = self._raw_criterion(
+            raw[name] = self._raw_criterion(
                 name, epoch, val_loss, val_spectrum, drift_arrays
             )
-            self.logger.info(
-                "Val criterion {}: {:.6f}".format(name, components[name])
-            )
+        if len(self._val_criteria) == 1:
+            return raw[self._val_criteria[0]], raw, {}
         if self._val_reference is None:
-            self._val_reference = dict(components)
+            self._val_reference = dict(raw)
             self.logger.info(
                 "Val criteria reference (first validation epoch {}): {}".format(
                     epoch, self._val_reference
                 )
             )
-        score = normalised_criterion_sum(components, self._val_reference)
+        score = normalised_criterion_sum(raw, self._val_reference)
         val_criteria_score[epoch] = score
-        self.logger.info("Val criteria normalised sum: {:.6f}".format(score))
-        return score
+        norm = {
+            name: raw[name] / float(self._val_reference[name])
+            for name in self._val_criteria
+        }
+        return score, raw, norm
 
     def train(self, profiler=None):
         # Build model
@@ -948,6 +971,17 @@ class LearningAlgorithm:
         warm_up_happened = False
         val_spectrum = series_or_new(loss_log, "val_spectrum", epochs)
         val_criteria_score = series_or_new(loss_log, "val_criteria_score", epochs)
+        time_train = series_or_new(loss_log, "time_train", epochs)
+        time_val = series_or_new(loss_log, "time_val", epochs)
+        time_val_forward = series_or_new(loss_log, "time_val_forward", epochs)
+        time_spectrum = series_or_new(loss_log, "time_spectrum", epochs)
+        time_drift = series_or_new(loss_log, "time_drift", epochs)
+        time_rosenstein = series_or_new(loss_log, "time_rosenstein", epochs)
+        time_plot = series_or_new(loss_log, "time_plot", epochs)
+        time_eval = series_or_new(loss_log, "time_eval", epochs)
+        bump_events = []
+        if isinstance(loss_log, dict) and isinstance(loss_log.get("bump_events"), list):
+            bump_events = [dict(row) for row in loss_log["bump_events"]]
         drift_source = drift_series_source(loss_log)
         drift_arrays = {
             "val_" + name: series_or_new(drift_source, "val_" + name, epochs)
@@ -1139,6 +1173,7 @@ class LearningAlgorithm:
                 lle_per_window=self._lle_per_window,
                 ftle_per_window=self._ftle_per_window,
                 lle_gt_per_window=self._lle_gt_per_window,
+                bump_events=bump_events,
                 series={
                     **logged,
                     "kl_warm_values": kl_warm_values,
@@ -1154,6 +1189,14 @@ class LearningAlgorithm:
                     "windows_dropped_shift": windows_dropped_shift,
                     "gap_splits": gap_split_counts,
                     "mean_start_shift": mean_start_shift,
+                    "time_train": time_train,
+                    "time_val": time_val,
+                    "time_val_forward": time_val_forward,
+                    "time_spectrum": time_spectrum,
+                    "time_drift": time_drift,
+                    "time_rosenstein": time_rosenstein,
+                    "time_plot": time_plot,
+                    "time_eval": time_eval,
                 },
                 dataset_stats=dataset_stats,
                 sigmas_history=(
@@ -1164,10 +1207,38 @@ class LearningAlgorithm:
                 a_sigmas_history=a_sigmas_history,
             )
 
+        def store_metric_times(epoch_index):
+            metric_times = getattr(self, "_epoch_metric_times", {})
+            time_val_forward[epoch_index] = float(metric_times.get("time_val_forward", 0.0))
+            time_spectrum[epoch_index] = float(metric_times.get("time_spectrum", 0.0))
+            time_drift[epoch_index] = float(metric_times.get("time_drift", 0.0))
+            time_rosenstein[epoch_index] = float(metric_times.get("time_rosenstein", 0.0))
+
+        def log_epoch_wall(epoch_index):
+            store_metric_times(epoch_index)
+            logger.info(
+                format_timing_line(
+                    epoch_index,
+                    {
+                        "time_train": time_train[epoch_index],
+                        "time_val": time_val[epoch_index],
+                        "time_val_forward": time_val_forward[epoch_index],
+                        "time_spectrum": time_spectrum[epoch_index],
+                        "time_drift": time_drift[epoch_index],
+                        "time_rosenstein": time_rosenstein[epoch_index],
+                        "time_plot": time_plot[epoch_index],
+                        "time_eval": time_eval[epoch_index],
+                    },
+                )
+            )
+
         self.model.to(self.device)
 
         # Train with mini-batch SGD
+        ran_epoch = False
+        stopped_early = False
         for epoch in range(start_epoch + 1, epochs):
+            ran_epoch = True
 
             start_time = datetime.datetime.now()
 
@@ -1233,6 +1304,8 @@ class LearningAlgorithm:
 
             torch.autograd.set_detect_anomaly(True)
             # Batch training
+            sync_cuda(self.device)
+            train_t0 = time.perf_counter()
             for _, batch_data in enumerate(train_dataloader):
                 batch_data = batch_data.to(self.device)
                 batch_size = batch_data.size(0)
@@ -1494,7 +1567,12 @@ class LearningAlgorithm:
                     sigmas_history[:, epoch] = self.model.sigmas.detach().cpu().numpy()
                 update_A_sigmas_history(a_sigmas_history, self.model, epoch)
 
+            sync_cuda(self.device)
+            time_train[epoch] = time.perf_counter() - train_t0
+
             # Validation
+            sync_cuda(self.device)
+            val_t0 = time.perf_counter()
             for _, batch_data in enumerate(val_dataloader):
 
                 batch_data = batch_data.to(self.device)
@@ -1697,6 +1775,9 @@ class LearningAlgorithm:
                 val_recon[epoch] += loss_recon_avg.item() * bs
                 val_kl[epoch] += loss_kl_avg.item() * bs
 
+            sync_cuda(self.device)
+            time_val[epoch] = time.perf_counter() - val_t0
+
             # Loss normalization
             train_loss[epoch] = train_loss[epoch] / train_num
             train_recon[epoch] = train_recon[epoch] / train_num
@@ -1722,11 +1803,13 @@ class LearningAlgorithm:
                 )
             )
 
-            selection_value = self._epoch_selection_value(
+            selection_value, selection_raw, selection_norm = self._epoch_selection_value(
                 epoch, val_loss, val_spectrum, val_criteria_score, drift_arrays
             )
+            store_metric_times(epoch)
 
             # Save the best model
+            new_best = False
             if warm_up_happened:
                 logger.info("Warm-up happened, saving the best model")
                 warm_up_happened = False
@@ -1737,6 +1820,7 @@ class LearningAlgorithm:
                 best_state_dict = self.model.state_dict()
                 best_optim_dict = optimizer.state_dict()
                 cur_best_epoch = epoch
+                new_best = True
 
             # identify the delta between current val_loss and best_val_loss
             # recon keeps the historical comparison exactly.
@@ -1754,7 +1838,8 @@ class LearningAlgorithm:
                 delta_rolling_average = np.mean(delta_per_epoch)
 
             # Save the best model, update patience and best_val_loss
-            if delta < -delta_threshold:
+            improved = delta < -delta_threshold
+            if improved:
                 cpt_patience = 0
                 if self._val_criteria == ("recon",):
                     best_val_loss = val_loss[epoch]
@@ -1763,6 +1848,7 @@ class LearningAlgorithm:
                 best_state_dict = self.model.state_dict()
                 best_optim_dict = optimizer.state_dict()
                 cur_best_epoch = epoch
+                new_best = True
             else:
                 cpt_patience += 1
                 print(
@@ -1770,6 +1856,21 @@ class LearningAlgorithm:
                 )
                 logger.info(
                     "Updated cpt_patience: {}, delta: {}".format(cpt_patience, delta)
+                )
+            logger.info(
+                format_selection_line(
+                    epoch,
+                    selection_value,
+                    selection_raw,
+                    selection_norm,
+                    improved,
+                )
+            )
+            if new_best:
+                logger.info(
+                    format_new_best_line(
+                        epoch, selection_value, selection_raw, selection_norm
+                    )
                 )
 
             # Store the warm-up values
@@ -1822,8 +1923,19 @@ class LearningAlgorithm:
                 cpt_patience_epochs[epoch] = cpt_patience
                 best_state_epochs[epoch] = cur_best_epoch
                 logger.info("Early stop patience achieved")
+                logger.info(
+                    format_early_stop_line(epoch, cpt_patience, active_patience)
+                )
+                log_epoch_wall(epoch)
+                stopped_early = True
                 break
             if action == "bump":
+                cpt_at_trigger = cpt_patience
+                patience_before = float(active_patience)
+                old_auto = float(current_auto_warm)
+                old_noise = float(current_noise_warm)
+                old_kl = float(current_kl_warm)
+                old_sequence = float(current_sequence_len)
                 cpt_patience = 0
                 warm_up_happened = True
                 bumped = warmup.apply_bump(
@@ -1886,6 +1998,44 @@ class LearningAlgorithm:
                     logger.info("Unknown early stop condition")
                 if bumped.kind in ("auto", "kl"):
                     auto_kl_done += 1
+                patience_after = warmup.active_patience(
+                    auto_kl_done,
+                    current_auto_warm,
+                    current_noise_warm,
+                    current_kl_warm,
+                    current_sequence_len,
+                )
+                changes = []
+                if bumped.kind == "window":
+                    changes.append(("window", old_sequence, float(current_sequence_len)))
+                    # auto_first also resets KL and the autonomous fraction.
+                    # Those resets are their own rows so each vertical line
+                    # is in the table.
+                    if float(current_kl_warm) != old_kl:
+                        changes.append(("KL", old_kl, float(current_kl_warm)))
+                    if float(current_auto_warm) != old_auto:
+                        changes.append(("auto", old_auto, float(current_auto_warm)))
+                    if float(current_noise_warm) != old_noise:
+                        changes.append(("noise", old_noise, float(current_noise_warm)))
+                elif bumped.kind == "kl":
+                    changes.append(("KL", old_kl, float(current_kl_warm)))
+                elif bumped.kind == "auto":
+                    if bumped.auto_bumped:
+                        changes.append(("auto", old_auto, float(current_auto_warm)))
+                    if bumped.noise_bumped:
+                        changes.append(("noise", old_noise, float(current_noise_warm)))
+                for kind, old_value, new_value in changes:
+                    row = make_bump_row(
+                        epoch,
+                        kind,
+                        old_value,
+                        new_value,
+                        patience_before,
+                        patience_after,
+                        cpt_at_trigger,
+                    )
+                    bump_events.append(row)
+                    logger.info(format_bump_line(row))
             if self.tie_noise_to_auto:
                 current_noise_warm = current_auto_warm
             cpt_patience_epochs[epoch] = cpt_patience
@@ -1918,6 +2068,8 @@ class LearningAlgorithm:
                 )
 
                 # Save the loss figure
+                sync_cuda(self.device)
+                plot_t0 = time.perf_counter()
                 save_figures_dir = os.path.join(save_dir, "vis_during_training")
                 if not os.path.exists(save_figures_dir):
                     os.makedirs(save_figures_dir)
@@ -2082,6 +2234,16 @@ class LearningAlgorithm:
                     gap_splits=gap_split_counts[: epoch + 1],
                     mean_start_shift=mean_start_shift[: epoch + 1],
                     dataset_stats=dataset_stats,
+                    timing={
+                        "time_train": time_train[: epoch + 1],
+                        "time_val": time_val[: epoch + 1],
+                        "time_val_forward": time_val_forward[: epoch + 1],
+                        "time_spectrum": time_spectrum[: epoch + 1],
+                        "time_drift": time_drift[: epoch + 1],
+                        "time_rosenstein": time_rosenstein[: epoch + 1],
+                        "time_plot": time_plot[: epoch + 1],
+                        "time_eval": time_eval[: epoch + 1],
+                    },
                 )
 
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
@@ -2441,6 +2603,8 @@ class LearningAlgorithm:
                     epoch,
                     alongside_mt=self.model_name in ("MT_RNN", "MT_VRNN"),
                 )
+                sync_cuda(self.device)
+                time_plot[epoch] = time.perf_counter() - plot_t0
 
             # Current weights, in addition to the best checkpoint and the
             # final best-epoch file. 0 / off leaves this path unused.
@@ -2463,6 +2627,11 @@ class LearningAlgorithm:
                         epoch, epoch_file
                     )
                 )
+
+            log_epoch_wall(epoch)
+
+        if ran_epoch and not stopped_early:
+            logger.info(format_epoch_budget_line(epoch))
 
         # Save the final weights of network with the best validation loss
         save_file = os.path.join(
@@ -2501,7 +2670,16 @@ class LearningAlgorithm:
 
         # run evaluation script
         eval_file = os.path.join(project_root, "src", "dvae", "eval", "eval_signal.py")
+        sync_cuda(self.device)
+        eval_t0 = time.perf_counter()
         subprocess.run(["python", eval_file, "--saved_dict", save_file])
+        sync_cuda(self.device)
+        if ran_epoch:
+            time_eval[epoch] = time.perf_counter() - eval_t0
+            logger.info(
+                "Eval inside training wall_s={:.4f}".format(time_eval[epoch])
+            )
+            save_training_history(loss_file, history_at(epoch + 1))
 
 
 # sigmoid function for arrays
