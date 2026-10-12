@@ -170,11 +170,14 @@ ECG-removed EEG (stage 09b)
 ``ecg_removed_eeg`` (plus ``_interpolate`` / ``_indicate``) reads
 ``{session_dir}/intermediates/stage09b_ecg_remove.npz`` key
 ``eeg_clean_template``, on the same 250 Hz time axis as
-``stage06_eeg_filtered.npz`` key ``eeg``. ``load_proper_frame`` builds that
+``stage06_eeg_filtered.npz`` key ``eeg``. ``ecg_removed_eeg_scale`` reads
+key ``eeg_clean_scale`` from that same file (method A: the global
+least-squares ECG scale subtracted). ``load_proper_frame`` builds each
 frame the same way ``bipolar_eeg`` builds stage 06, and the suffixes follow
-that grok-extra path (indicate appends one shared is_observed column). The
-file exists for only some sessions; a missing file raises
-``FileNotFoundError`` naming the path.
+that grok-extra path (indicate appends one shared is_observed column).
+NaNs in the array stay NaN. The file exists for only some sessions; a
+missing file raises ``FileNotFoundError`` naming the path. A missing key
+raises ``KeyError``.
 """
 
 from __future__ import annotations
@@ -228,6 +231,7 @@ GROK_EXTRA_COLUMNS = {
     "bipolar_ecg": ["ecg"],
     "bipolar_eeg": ["eeg"],
     "ecg_removed_eeg": ["eeg_clean_template"],
+    "ecg_removed_eeg_scale": ["eeg_clean_scale"],
     "bipolar_both": ["ecg", "eeg"],
     "ppg_ch1": ["ppg_ch1"],
     "ppg_ch2": ["ppg_ch2"],
@@ -614,27 +618,24 @@ def load_proper_frame(
         df = frames[0] if len(frames) == 1 else _align_on_datetime(frames[0], frames[1])
         return _maybe_resample(df, resample_hz)
 
-    if base_process == "ecg_removed_eeg":
+    if base_process in ("ecg_removed_eeg", "ecg_removed_eeg_scale"):
+        column = GROK_EXTRA_COLUMNS[base_process][0]
         path = inter / "stage09b_ecg_remove.npz"
         if not path.exists():
             raise FileNotFoundError(
                 "Missing ECG-removed EEG intermediate: "
-                f"{path}. ecg_removed_eeg reads key 'eeg_clean_template' "
+                f"{path}. {base_process} reads key {column!r} "
                 "(present for only some sessions)."
             )
         z = np.load(path, allow_pickle=False)
-        if "eeg_clean_template" not in z.files:
+        if column not in z.files:
             raise KeyError(
-                f"{path} has no 'eeg_clean_template' array "
+                f"{path} has no {column!r} array "
                 f"(found {sorted(z.files)})."
             )
         df = frame_from(
             z,
-            {
-                "eeg_clean_template": np.asarray(
-                    z["eeg_clean_template"], dtype=np.float64
-                )
-            },
+            {column: np.asarray(z[column], dtype=np.float64)},
         )
         return _maybe_resample(df, resample_hz)
 
