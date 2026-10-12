@@ -28,11 +28,15 @@ from dvae.dataset.xhro_proper_dataset import (  # noqa: E402
     COARSE_OBS_COLUMNS,
     COARSE_SAMPLING_FREQ,
     XhroProper,
+    _apply_coarse_suffix,
+    _provisional_nontest_mask,
     apply_rel_alpha_eeg_mask,
     coarse_dataframe_kwargs,
+    coarse_test_cut,
     join_hr_mean_onto_epochs,
     _parse_coarse_labels,
 )
+from dvae.eval.window_length import apply_eval_seq_len, cap_eval_seq_len  # noqa: E402
 
 
 def _wave(n, loc, scale=0.02, period=10.0):
@@ -619,6 +623,7 @@ def test_missing_mask_indexes_flat_multi_subject_series(tmp_path, _torch_require
         coarse_test_split="last20_rows",
         shuffle=False,
         val_indices=0.0,
+        start_on_observed=False,
     )
     boundary = int(np.sum(ds.subject_per_row == "subj_a"))
     assert not ds.missing_mask[0].any()
@@ -649,7 +654,7 @@ def test_single_label_matches_one_element_list(tmp_path, _torch_required):
     assert one.data_idx == listed.data_idx == spaced.data_idx
 
 
-def test_update_sequence_length_round_trip_and_nan_filter(tmp_path, _torch_required):
+def test_update_sequence_length_round_trip_and_nan_filter(tmp_path, _torch_required, capsys):
     epochs, hrv = make_frames(40, "subj_a", seed=15)
     epochs.loc[0:9, "rel_alpha"] = np.nan
     write_session(tmp_path, "subj_a", epochs, hrv)
@@ -687,13 +692,39 @@ def test_update_sequence_length_round_trip_and_nan_filter(tmp_path, _torch_requi
         shuffle=False,
         val_indices=0.0,
         coarse_test_split="last20_rows",
+        start_on_observed=False,
     )
+    capsys.readouterr()
     filtered.update_sequence_length(10)
-    assert 0 in filtered.data_idx
-    filtered.update_sequence_length(10, minimum_nan_ratio=0.0)
+    # 10 all-NaN epochs out of 40, four EEG columns: rate 0.25, threshold 0.45.
+    # The all-NaN prefix is above that, so it is dropped. The rate is the
+    # full subject, not the post-cut train rows (those would be 10/32).
+    assert filtered.max_window_nan_ratio is None
+    assert filtered.max_window_nan_excess == pytest.approx(0.2)
+    assert filtered.dataset_missing_rate == pytest.approx(0.25)
     assert 0 not in filtered.data_idx
-    filtered.update_sequence_length(10)
+    logged = capsys.readouterr().out
+    assert "dataset_missing_rate=0.25" in logged
+    assert "threshold=0.45 (relative)" in logged
+    assert "windows_dropped=" in logged
+    filtered.update_sequence_length(10, minimum_nan_ratio=1.0)
     assert 0 in filtered.data_idx
+    filtered.update_sequence_length(10)
+    assert 0 not in filtered.data_idx
+    indicated = _load(
+        tmp_path,
+        "subj_a",
+        "coarse_eeg_indicate",
+        seq_len=10,
+        overlap=False,
+        shuffle=False,
+        val_indices=0.0,
+        coarse_test_split="last20_rows",
+        start_on_observed=False,
+    )
+    # Indicate doubles the width with a finite 0/1 channel. The rate stays
+    # on the pre-indicate feature matrix.
+    assert indicated.dataset_missing_rate == pytest.approx(filtered.dataset_missing_rate)
 
 
 def test_artifact_mask_off_by_default_keeps_high_power(tmp_path, _torch_required):
@@ -955,3 +986,71 @@ def test_config_generator_coarse_example_is_separate():
     assert example["x_dim"] == [8]
     assert example["coarse_eeg_artifact_mask"] == ["none"]
     assert example["coarse_test_split"] == ["usable_tail"]
+
+
+def test_last20_rows_uses_ceil_tail_when_n_not_divisible_by_five():
+    usable = np.ones(41, dtype=bool)
+    # Xhro's ``-n // 5`` tail: 41 -> 9 rows, start 32. Floor ``n - n // 5`` is 33.
+    assert coarse_test_cut(usable, "last20_rows") == 32
+    assert 41 - coarse_test_cut(usable, "last20_rows") == 9
+    provisional = _provisional_nontest_mask(41)
+    assert int((~provisional).sum()) == 41 // 5
+    assert int(provisional.sum()) == 41 - 41 // 5
+
+
+def test_last20_rows_dataset_tail_when_n_not_divisible_by_five(tmp_path, _torch_required):
+    epochs, hrv = make_frames(41, "subj_a", seed=41)
+    write_session(tmp_path, "subj_a", epochs, hrv)
+    ds = _load(
+        tmp_path,
+        "subj_a",
+        "coarse_eeg",
+        split="test",
+        seq_len=4,
+        coarse_test_split="last20_rows",
+    )
+    assert ds.coarse_reports[0]["test_cut"] == 32
+    assert _seq(ds).shape[0] == 9
+
+
+def test_indicate_zeros_nonfinite_values():
+    features = np.array([[1.0, 2.0], [np.inf, 3.0], [np.nan, -np.inf]], dtype=np.float64)
+    out = _apply_coarse_suffix(features, "indicate")
+    assert out.shape == (3, 4)
+    assert out[0, 0] == pytest.approx(1.0)
+    assert out[0, 1] == pytest.approx(1.0)
+    assert out[1, 0] == pytest.approx(0.0)
+    assert out[1, 1] == pytest.approx(0.0)
+    assert out[1, 2] == pytest.approx(3.0)
+    assert out[2, 0] == pytest.approx(0.0)
+    assert out[2, 2] == pytest.approx(0.0)
+    assert np.isfinite(out).all()
+
+
+def test_multi_subject_request_longer_than_tail_still_windows(tmp_path, _torch_required):
+    """Two 40-epoch subjects have 8-row test tails. A 16-row request must cap."""
+    for label in ("subj_a", "subj_b"):
+        epochs, hrv = make_frames(40, label, seed=16)
+        write_session(tmp_path, label, epochs, hrv)
+    ds = _load(
+        tmp_path,
+        "subj_a,subj_b",
+        "coarse_eeg",
+        split="test",
+        seq_len=16,
+        overlap=False,
+        shuffle=False,
+        coarse_test_split="last20_rows",
+    )
+    assert _seq(ds).shape[0] == 16  # pooled tails
+    assert ds.seq_len == 8
+    assert cap_eval_seq_len(ds, 16) == 8
+    assert cap_eval_seq_len(ds, 1000) == 8
+    assert apply_eval_seq_len(ds, 16) == 8
+    assert len(ds.data_idx) > 0
+    _assert_windows_stay_inside(ds)
+    if HAS_TORCH:
+        from torch.utils.data import DataLoader
+
+        batch = next(iter(DataLoader(ds, batch_size=1)))
+        assert tuple(batch.shape)[1] == 8

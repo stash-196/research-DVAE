@@ -12,7 +12,7 @@ import os
 import shutil
 import socket
 import datetime
-import pickle
+import time
 import numpy as np
 from typing import Optional
 import torch
@@ -33,6 +33,7 @@ from dvae.visualizers import (
     visualize_combined_parameters,
     visualize_teacherforcing_2_autonomous,
     visualize_total_loss,
+    visualize_val_criteria,
     visualize_recon_loss,
     visualize_kld_loss,
     visualize_combined_metrics,
@@ -43,7 +44,55 @@ from dvae.visualizers import (
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
 from dvae.dataset.xhro_proper_dataset import (
     coarse_dataframe_kwargs,
+    optional_config_float,
     optional_config_str,
+    windowing_from_config,
+)
+from dvae.eval.utils.local_drift_analysis import (
+    DRIFT_METRIC_NAMES,
+    DRIFT_PLOT_NAMES,
+    RAW_DRIFT_METRICS,
+    VARNORM_DRIFT_METRICS,
+    enforce_drift_span,
+    rosenstein_on_free_run,
+    score_fixed_validation_windows,
+    x_true_variance,
+)
+from dvae.eval.utils.delay_params import _get_delay_params
+from dvae.eval.utils.spectrum_validation import capture_fixed_spectrum_windows
+from dvae.eval.window_length import cap_eval_seq_len
+from dvae.epoch_log import (
+    format_bump_line,
+    format_early_stop_line,
+    format_epoch_budget_line,
+    format_new_best_line,
+    format_selection_line,
+    format_timing_line,
+    make_bump_row,
+)
+from dvae.wall_clock import sync_cuda
+from dvae.warmup_curriculum import (
+    WarmupCurriculum,
+    format_patience,
+    warmup_action,
+    warmup_settings_from_config,
+)
+from dvae.run_options import (
+    DEFAULT_TF_MAX_GAP_FRAC,
+    DEFAULT_TF_MIN_OBSERVED,
+    canonical_criterion_name,
+    criterion_series_key,
+    normalised_criterion_sum,
+    selection_criterion_value,
+    parse_checkpoint_every_n_epochs,
+    parse_optional_int,
+    parse_unit_interval,
+    parse_val_drift_horizon,
+    parse_val_rosenstein,
+    legacy_defaults_from_config,
+    resolve_ftle_fit,
+    resolve_val_criteria,
+    spectrum_monitoring_enabled,
 )
 from dvae.model import (
     build_VRNN,
@@ -51,8 +100,17 @@ from dvae.model import (
     build_MT_RNN,
     build_MT_VRNN,
 )
+from dvae.dataset.gap_grid import snapshot_window_stats
+from dvae.training_history import (
+    build_training_history,
+    drift_series_source,
+    restore_per_window,
+    restore_matrix,
+    save_training_history,
+    series_or_new,
+    warmup_change_epochs,
+)
 from dvae.timescale_history import (
-    attach_timescale_history,
     init_A_sigmas_history,
     log_plrnn_timescales,
     save_plrnn_timescale_figures,
@@ -266,6 +324,172 @@ class LearningAlgorithm:
             return True
         return False
 
+    def _score_fixed_validation(self) -> dict:
+        """Spectrum error and Appendix B drift on the fixed windows.
+
+        Does not resize the live loader. The flip and the horizon are the
+        values stored at training start.
+        """
+        was_training = self.model.training
+        self.model.eval()
+        try:
+            with torch.no_grad():
+                return score_fixed_validation_windows(
+                    self.model,
+                    self._spectrum_windows,
+                    tf_steps=self._spectrum_tf_steps,
+                    horizon=self._drift_horizon,
+                    variance=self._x_true_var,
+                    observation_process=self._spectrum_observation,
+                    device=self.device,
+                    ftle_k_start=self._ftle_fit[0],
+                    ftle_k_end=self._ftle_fit[1],
+                    rosenstein=self._score_rosenstein,
+                    embed_dim=self._embed_dim,
+                    embed_tau=self._embed_tau,
+                )
+        finally:
+            if was_training:
+                self.model.train()
+
+    def _raw_criterion(self, name, epoch, val_loss, val_spectrum, drift_arrays):
+        """Selection value for one criterion. Lower is better.
+
+        ``recon`` is ``val_loss``. ``spectrum`` is the free-run spectral
+        error. A cross term is ``|cross|``. ``ftle`` and ``rosenstein_lle``
+        are ``|estimate - GT LLE|``. The stored series stay signed.
+        """
+        if name == "recon":
+            raw = float(val_loss[epoch])
+        elif name == "spectrum":
+            raw = float(val_spectrum[epoch])
+        else:
+            raw = float(
+                drift_arrays["val_" + criterion_series_key(name)][epoch]
+            )
+        return selection_criterion_value(name, raw, gt_lle=self._lle_gt)
+
+    def _epoch_selection_value(
+        self, epoch, val_loss, val_spectrum, val_criteria_score, drift_arrays
+    ):
+        """Score used for best-model selection and early stopping.
+
+        ``recon`` alone returns ``val_loss[epoch]``. Any other single
+        criterion returns its selection value: the stored series, except
+        ``|cross|`` for a cross term and ``|estimate - GT LLE|`` for
+        ``ftle`` and ``rosenstein_lle``. Several criteria return the sum
+        of each of those values divided by its value at the first
+        validation epoch. Spectrum and the Appendix B terms are filled
+        whenever the fixed windows exist, including when they are not
+        selected. Returns ``(score, raw components, normalised components)``.
+        A single criterion has an empty normalised dict.
+        """
+        self._epoch_metric_times = {
+            "time_val_forward": 0.0,
+            "time_spectrum": 0.0,
+            "time_drift": 0.0,
+            "time_rosenstein": 0.0,
+        }
+        if self._spectrum_windows is not None:
+            scored = self._score_fixed_validation()
+            val_spectrum[epoch] = float(scored["spectrum"])
+            for name in DRIFT_METRIC_NAMES:
+                drift_arrays["val_" + name][epoch] = float(scored[name])
+            if self._lle_per_window is not None:
+                self._lle_per_window[epoch] = np.asarray(
+                    scored["lle_per_window"], dtype=float
+                )
+                self._ftle_per_window[epoch] = np.asarray(
+                    scored["ftle_per_window"], dtype=float
+                )
+            self.logger.info(
+                "Val spectrum error (free-run half): {:.6f}".format(
+                    val_spectrum[epoch]
+                )
+            )
+            self.logger.info(
+                "Val drift horizon {}: base_error {:.6f} auto_drift {:.6f} "
+                "error_drift_cross {:.6f} error_drift_total {:.6f} "
+                "recon_k {:.6f}".format(
+                    self._drift_horizon,
+                    scored["base_error"],
+                    scored["auto_drift"],
+                    scored["error_drift_cross"],
+                    scored["error_drift_total"],
+                    scored["recon_k"],
+                )
+            )
+            self.logger.info(
+                "Val drift / var: base_error {:.6f} auto_drift {:.6f} "
+                "error_drift_cross {:.6f} error_drift_total {:.6f}".format(
+                    scored["base_error_varnorm"],
+                    scored["auto_drift_varnorm"],
+                    scored["error_drift_cross_varnorm"],
+                    scored["error_drift_total_varnorm"],
+                )
+            )
+            self.logger.info(
+                "Val auto_drift at k=1 {:.6f}, k=5 {:.6f}, k={} {:.6f}".format(
+                    scored["auto_drift_k1"],
+                    scored["auto_drift_k5"],
+                    self._drift_horizon,
+                    scored["auto_drift_k"],
+                )
+            )
+            self.logger.info(
+                "Val finite-time exponent (k={}..{}): {:.6f}".format(
+                    self._ftle_fit[0], self._ftle_fit[1], scored["ftle"]
+                )
+            )
+            if self._score_rosenstein:
+                gt = self._lle_gt
+                gt_text = "nan" if gt is None or not np.isfinite(gt) else "{:.6f}".format(gt)
+                self.logger.info(
+                    "Val Rosenstein LLE mean {:.6f} std {:.6f} (GT {})".format(
+                        scored["lle_mean"], scored["lle_std"], gt_text
+                    )
+                )
+            for key in (
+                "time_val_forward",
+                "time_spectrum",
+                "time_drift",
+                "time_rosenstein",
+            ):
+                self._epoch_metric_times[key] = float(scored.get(key, 0.0))
+        if self._metric_reference is None:
+            reference = {"recon": float(val_loss[epoch])}
+            if self._spectrum_windows is not None:
+                reference["spectrum"] = float(val_spectrum[epoch])
+                for name in RAW_DRIFT_METRICS:
+                    reference[name] = float(drift_arrays["val_" + name][epoch])
+            self._metric_reference = reference
+            self.logger.info(
+                "Val metric reference (first validation epoch {}): {}".format(
+                    epoch, self._metric_reference
+                )
+            )
+        raw = {}
+        for name in self._val_criteria:
+            raw[name] = self._raw_criterion(
+                name, epoch, val_loss, val_spectrum, drift_arrays
+            )
+        if len(self._val_criteria) == 1:
+            return raw[self._val_criteria[0]], raw, {}
+        if self._val_reference is None:
+            self._val_reference = dict(raw)
+            self.logger.info(
+                "Val criteria reference (first validation epoch {}): {}".format(
+                    epoch, self._val_reference
+                )
+            )
+        score = normalised_criterion_sum(raw, self._val_reference)
+        val_criteria_score[epoch] = score
+        norm = {
+            name: raw[name] / float(self._val_reference[name])
+            for name in self._val_criteria
+        }
+        return score, raw, norm
+
     def train(self, profiler=None):
         # Build model
         self.build_model()
@@ -334,6 +558,7 @@ class LearningAlgorithm:
         log_file = os.path.join(save_dir, "log.txt")
         logger_type = self.cfg.getint("User", "logger_type")
         logger = get_logger(log_file, logger_type)
+        self.logger = logger
 
         # Print basic information
         for log in self.get_basic_info():
@@ -376,6 +601,21 @@ class LearningAlgorithm:
             mask_label=self.mask_label,
             data_root=optional_config_str(self.cfg, "DataFrame", "data_root"),
             corpus=optional_config_str(self.cfg, "DataFrame", "corpus"),
+            crop_start_sec=optional_config_float(self.cfg, "DataFrame", "crop_start_sec"),
+            crop_end_sec=optional_config_float(self.cfg, "DataFrame", "crop_end_sec"),
+            max_fill_gap_sec=optional_config_float(
+                self.cfg, "DataFrame", "max_fill_gap_sec"
+            ),
+            filled_nan_log_sec=optional_config_float(
+                self.cfg, "DataFrame", "filled_nan_log_sec"
+            ),
+            **windowing_from_config(self.cfg),
+            block_mask_file=optional_config_str(
+                self.cfg, "DataFrame", "block_mask_file"
+            ),
+            block_mask_mode=optional_config_str(
+                self.cfg, "DataFrame", "block_mask_mode"
+            ),
             **coarse_dataframe_kwargs(self.cfg),
         )
 
@@ -391,6 +631,199 @@ class LearningAlgorithm:
         logger.info("Training samples: {}".format(train_num))
         logger.info("Validation samples: {}".format(val_num))
 
+        # Blank val_criteria is recon,spectrum: each term divided by its
+        # first validation epoch, then summed. Explicit recon, or
+        # legacy_defaults / legacy_windowing, stays on the raw val_loss
+        # comparison. The figure still records raw recon, spectrum, and
+        # the Appendix B drift terms unless that legacy switch is on and
+        # neither spectrum nor a drift term is selected. The windows, the
+        # flip, and val_drift_horizon are fixed here and are not resized.
+        self._val_criteria = resolve_val_criteria(self.cfg)
+        self._val_reference = None
+        self._metric_reference = None
+        self._monitor_spectrum = spectrum_monitoring_enabled(
+            self._val_criteria,
+            legacy=legacy_defaults_from_config(self.cfg),
+        )
+        self._checkpoint_every = parse_checkpoint_every_n_epochs(
+            self.cfg.get("Training", "checkpoint_every_n_epochs", fallback="0")
+        )
+        self._spectrum_windows = None
+        self._spectrum_tf_steps = None
+        self._spectrum_observation = dataset_config.observation_process
+        self._drift_horizon = None
+        self._x_true_var = None
+        self._window_info = None
+        self._ftle_fit = (1, 1)
+        self._val_rosenstein = False
+        self._score_rosenstein = False
+        self._needs_gt_lle = False
+        self._lle_gt = None
+        self._lle_gt_per_window = None
+        self._lle_per_window = None
+        self._ftle_per_window = None
+        self._embed_tau, self._embed_dim = _get_delay_params(self.dataset_name)
+        if self._monitor_spectrum:
+            n_windows = parse_optional_int(
+                self.cfg.get("Training", "val_spectrum_n_windows", fallback=None),
+                10,
+                "val_spectrum_n_windows",
+            )
+            window_len = parse_optional_int(
+                self.cfg.get("Training", "val_spectrum_window_len", fallback=None),
+                2000,
+                "val_spectrum_window_len",
+            )
+            tf_steps = parse_optional_int(
+                self.cfg.get("Training", "val_spectrum_tf_steps", fallback=None),
+                1000,
+                "val_spectrum_tf_steps",
+            )
+            if tf_steps < 0 or tf_steps >= window_len:
+                raise ValueError(
+                    "val_spectrum_tf_steps must be in [0, val_spectrum_window_len), "
+                    f"got tf_steps={tf_steps}, window_len={window_len}."
+                )
+            self._spectrum_tf_steps = tf_steps
+            self._drift_horizon = parse_val_drift_horizon(
+                self.cfg.get("Training", "val_drift_horizon", fallback=None)
+            )
+            enforce_drift_span(window_len, tf_steps, self._drift_horizon)
+            min_observed = parse_unit_interval(
+                self.cfg.get("Training", "val_window_tf_min_observed", fallback=None),
+                DEFAULT_TF_MIN_OBSERVED,
+                "val_window_tf_min_observed",
+            )
+            max_gap_frac = parse_unit_interval(
+                self.cfg.get("Training", "val_window_tf_max_gap_frac", fallback=None),
+                DEFAULT_TF_MAX_GAP_FRAC,
+                "val_window_tf_max_gap_frac",
+            )
+            self._ftle_fit = resolve_ftle_fit(
+                self.cfg.get("Training", "val_ftle_fit_start", fallback=None),
+                self.cfg.get("Training", "val_ftle_fit_end", fallback=None),
+                self._drift_horizon,
+            )
+            self._val_rosenstein = parse_val_rosenstein(
+                self.cfg.get("Training", "val_rosenstein", fallback=None)
+            )
+            # ftle and rosenstein_lle are |estimate - GT LLE|, so the
+            # ground-truth exponent is required even when the Rosenstein
+            # switch is off. Selecting rosenstein_lle also scores it
+            # every epoch.
+            self._score_rosenstein = self._val_rosenstein or (
+                "rosenstein_lle" in self._val_criteria
+            )
+            self._needs_gt_lle = self._score_rosenstein or (
+                "ftle" in self._val_criteria
+            )
+            self._spectrum_windows, self._window_info = capture_fixed_spectrum_windows(
+                val_dataloader.dataset,
+                n_windows=n_windows,
+                window_len=window_len,
+                tf_steps=tf_steps,
+                min_observed=min_observed,
+                max_gap_frac=max_gap_frac,
+                return_info=True,
+            )
+            for window in self._spectrum_windows:
+                enforce_drift_span(
+                    np.asarray(window).shape[0], tf_steps, self._drift_horizon
+                )
+            self._x_true_var = x_true_variance(
+                self._spectrum_windows, self._spectrum_observation
+            )
+            logger.info(
+                "Spectrum validation: {} fixed window(s) of length {}, "
+                "teacher-forced {}, free-run the rest. "
+                "These copies are not passed to update_sequence_length.".format(
+                    len(self._spectrum_windows), window_len, tf_steps
+                )
+            )
+            logger.info(
+                "Drift validation fixed at start: flip {}, horizon {}, "
+                "variance over {} channel(s). Finite-time fit k={}..{}.".format(
+                    tf_steps,
+                    self._drift_horizon,
+                    int(self._x_true_var.shape[0]),
+                    self._ftle_fit[0],
+                    self._ftle_fit[1],
+                )
+            )
+            info = self._window_info
+            logger.info(
+                "Validation windows fixed at start (seed {}): starts {}, "
+                "TF observed {}, max missing run {}, qualified {}.".format(
+                    info["seed"],
+                    info["starts"].tolist(),
+                    [round(float(v), 4) for v in info["tf_observed"]],
+                    info["tf_max_gap"].tolist(),
+                    info["qualified"].tolist(),
+                )
+            )
+            if info["relaxed"]:
+                logger.warning(
+                    "Fewer than {} validation windows met TF observed "
+                    "fraction >= {} and max gap fraction {}. Using the "
+                    "best-ranked windows listed above.".format(
+                        n_windows, min_observed, max_gap_frac
+                    )
+                )
+            if self._score_rosenstein and not self._val_rosenstein:
+                logger.info(
+                    "rosenstein_lle is selected, so Rosenstein is scored "
+                    "every epoch even though val_rosenstein is false."
+                )
+            elif self._needs_gt_lle and not self._val_rosenstein:
+                logger.info(
+                    "ftle is selected, so the ground-truth Rosenstein "
+                    "exponent is computed once even though val_rosenstein "
+                    "is false."
+                )
+            if any(
+                name in ("error_drift_cross", "error_drift_cross_varnorm")
+                for name in self._val_criteria
+            ):
+                logger.info(
+                    "Cross-term criteria use |cross|. The plotted series "
+                    "stays signed."
+                )
+            if any(name in ("ftle", "rosenstein_lle") for name in self._val_criteria):
+                logger.info("Lyapunov criteria use |estimate - GT LLE|.")
+            if self._needs_gt_lle:
+                import time
+
+                started = time.perf_counter()
+                self._lle_gt, _gt_std, self._lle_gt_per_window = rosenstein_on_free_run(
+                    self._spectrum_windows,
+                    tf_steps,
+                    m=self._embed_dim,
+                    tau=self._embed_tau,
+                    observation_process=self._spectrum_observation,
+                )
+                elapsed = time.perf_counter() - started
+                if self._score_rosenstein:
+                    logger.info(
+                        "Rosenstein GT LLE {:.6f} on the free-run half "
+                        "(embed m={}, tau={}) in {:.3f}s. The same cost is "
+                        "paid again each epoch on the autonomous pass.".format(
+                            self._lle_gt, self._embed_dim, self._embed_tau, elapsed
+                        )
+                    )
+                else:
+                    logger.info(
+                        "Rosenstein GT LLE {:.6f} on the free-run half "
+                        "(embed m={}, tau={}) in {:.3f}s. Per-epoch "
+                        "Rosenstein stays off.".format(
+                            self._lle_gt, self._embed_dim, self._embed_tau, elapsed
+                        )
+                    )
+            else:
+                logger.info(
+                    "val_rosenstein is false: skipping Rosenstein LLE. "
+                    "The finite-time exponent is still computed."
+                )
+
         ######################
         ### Batch Training ###
         ######################
@@ -402,6 +835,8 @@ class LearningAlgorithm:
         beta = self.cfg.getfloat("Training", "beta")
 
         # Create python list for loss
+        loss_log = None
+        sigmas_history = None
         if not self.params["reload"]:
             train_loss = np.zeros((epochs,))
             val_loss = np.zeros((epochs,))
@@ -434,43 +869,15 @@ class LearningAlgorithm:
             optimizer.load_state_dict(checkpoint["optim_state_dict"])
             start_epoch = checkpoint["epoch"]
             loss_log = checkpoint["loss_log"]
+            if not isinstance(loss_log, dict):
+                loss_log = {}
             logger.info("Resuming trainning: epoch: {}".format(start_epoch))
-            train_loss = np.pad(
-                loss_log["train_loss"],
-                (0, epochs - start_epoch),
-                mode="constant",
-                constant_values=0,
-            )
-            val_loss = np.pad(
-                loss_log["val_loss"],
-                (0, epochs - start_epoch),
-                mode="constant",
-                constant_values=0,
-            )
-            train_recon = np.pad(
-                loss_log["train_recon"],
-                (0, epochs - start_epoch),
-                mode="constant",
-                constant_values=0,
-            )
-            train_kl = np.pad(
-                loss_log["train_kl"],
-                (0, epochs - start_epoch),
-                mode="constant",
-                constant_values=0,
-            )
-            val_recon = np.pad(
-                loss_log["val_recon"],
-                (0, epochs - start_epoch),
-                mode="constant",
-                constant_values=0,
-            )
-            val_kl = np.pad(
-                loss_log["val_kl"],
-                (0, epochs - start_epoch),
-                mode="constant",
-                constant_values=0,
-            )
+            train_loss = series_or_new(loss_log, "train_loss", epochs)
+            val_loss = series_or_new(loss_log, "val_loss", epochs)
+            train_recon = series_or_new(loss_log, "train_recon", epochs)
+            train_kl = series_or_new(loss_log, "train_kl", epochs)
+            val_recon = series_or_new(loss_log, "val_recon", epochs)
+            val_kl = series_or_new(loss_log, "val_kl", epochs)
             best_val_loss = checkpoint["best_val_loss"]
             cpt_patience = 0
             cur_best_epoch = start_epoch
@@ -488,13 +895,24 @@ class LearningAlgorithm:
 
         # PLRNN / shPLRNN diagonal A. Independent of MT mixing sigmas.
         a_sigmas_history = init_A_sigmas_history(self.model, epochs)
+        if isinstance(loss_log, dict):
+            if sigmas_history is not None and "sigmas_history" in loss_log:
+                sigmas_history = restore_matrix(
+                    loss_log["sigmas_history"], sigmas_history.shape
+                )
+            if a_sigmas_history is not None and "A_sigmas_history" in loss_log:
+                a_sigmas_history = restore_matrix(
+                    loss_log["A_sigmas_history"], a_sigmas_history.shape
+                )
 
         current_auto_warm = (
             self.auto_warm_start
             if self.enable_autonomous_warmup
             else self.auto_warm_limit
         )
-        auto_warm_values = np.zeros((epochs,))
+        auto_warm_values = series_or_new(
+            loss_log, "auto_warm_values", epochs, fill="hold"
+        )
 
         # if model is vrnn or mt_vrnn, then kl_warm is used
         if self.enable_kl_warmup:
@@ -513,24 +931,314 @@ class LearningAlgorithm:
         current_noise_warm = (
             self.noise_warm_start if self.enable_noise_warmup else self.noise_warm_limit
         )
-        noise_warm_values = np.zeros((epochs,))
+        noise_warm_values = series_or_new(
+            loss_log, "noise_warm_values", epochs, fill="hold"
+        )
 
         # stores the value of kl_warm at the epoch
-        kl_warm_values = np.zeros((epochs,))
-        best_state_epochs = np.zeros((epochs,))
-        cpt_patience_epochs = np.zeros((epochs,))
-        delta_per_epoch = np.zeros((epochs,))
-        sequence_len_values = np.full((epochs,), initial_sequence_len)
+        kl_warm_values = series_or_new(
+            loss_log, "kl_warm_values", epochs, fill="hold"
+        )
+        best_state_epochs = series_or_new(
+            loss_log, "best_state_epochs", epochs, fill="hold"
+        )
+        cpt_patience_epochs = series_or_new(loss_log, "cpt_patience_epochs", epochs)
+        patience_threshold_epochs = series_or_new(
+            loss_log, "patience_threshold_epochs", epochs, fill="hold"
+        )
+        delta_per_epoch = series_or_new(loss_log, "delta_per_epoch", epochs)
+        if isinstance(loss_log, dict) and "sequence_len_values" in loss_log:
+            sequence_len_values = series_or_new(
+                loss_log, "sequence_len_values", epochs, fill="hold"
+            )
+        else:
+            sequence_len_values = np.full((epochs,), initial_sequence_len)
+        windows_kept = series_or_new(loss_log, "windows_kept", epochs, fill="hold")
+        windows_dropped_nan = series_or_new(
+            loss_log, "windows_dropped_nan", epochs, fill="hold"
+        )
+        windows_dropped_shift = series_or_new(
+            loss_log, "windows_dropped_shift", epochs, fill="hold"
+        )
+        gap_split_counts = series_or_new(loss_log, "gap_splits", epochs, fill="hold")
+        mean_start_shift = series_or_new(
+            loss_log, "mean_start_shift", epochs, fill="hold"
+        )
         delta_rolling_window_size = 6
         kl_delta_threshold = -1e-4
         auto_delta_threshold = 1e-4
         delta_threshold = 1e-4
         warm_up_happened = False
+        val_spectrum = series_or_new(loss_log, "val_spectrum", epochs)
+        val_criteria_score = series_or_new(loss_log, "val_criteria_score", epochs)
+        time_train = series_or_new(loss_log, "time_train", epochs)
+        time_val = series_or_new(loss_log, "time_val", epochs)
+        time_val_forward = series_or_new(loss_log, "time_val_forward", epochs)
+        time_spectrum = series_or_new(loss_log, "time_spectrum", epochs)
+        time_drift = series_or_new(loss_log, "time_drift", epochs)
+        time_rosenstein = series_or_new(loss_log, "time_rosenstein", epochs)
+        time_plot = series_or_new(loss_log, "time_plot", epochs)
+        time_eval = series_or_new(loss_log, "time_eval", epochs)
+        bump_events = []
+        if isinstance(loss_log, dict) and isinstance(loss_log.get("bump_events"), list):
+            bump_events = [dict(row) for row in loss_log["bump_events"]]
+        drift_source = drift_series_source(loss_log)
+        drift_arrays = {
+            "val_" + name: series_or_new(drift_source, "val_" + name, epochs)
+            for name in DRIFT_METRIC_NAMES
+        }
+        n_val_windows = (
+            0 if self._spectrum_windows is None else len(self._spectrum_windows)
+        )
+        if self._monitor_spectrum:
+            self._lle_per_window = np.full((epochs, n_val_windows), np.nan)
+            self._ftle_per_window = np.full((epochs, n_val_windows), np.nan)
+        if self.params["reload"] and isinstance(loss_log, dict):
+            saved_ref = loss_log.get("val_criteria_reference")
+            if isinstance(saved_ref, dict):
+                aliased = {}
+                for name, value in saved_ref.items():
+                    key = canonical_criterion_name(name)
+                    if key not in aliased or str(name) == key:
+                        aliased[key] = float(value)
+                restored = {}
+                for name in self._val_criteria:
+                    if name in aliased:
+                        restored[name] = aliased[name]
+                if len(restored) == len(self._val_criteria):
+                    self._val_reference = restored
+            saved_metrics = loss_log.get("val_metric_reference")
+            if isinstance(saved_metrics, dict) and saved_metrics:
+                restored_metrics = {}
+                for name, value in saved_metrics.items():
+                    key = canonical_criterion_name(name)
+                    if key not in restored_metrics or str(name) == key:
+                        restored_metrics[key] = float(value)
+                self._metric_reference = restored_metrics
+            if self._monitor_spectrum:
+                saved_horizon = loss_log.get("val_drift_horizon")
+                if saved_horizon is not None and int(saved_horizon) != int(
+                    self._drift_horizon
+                ):
+                    raise ValueError(
+                        "val_drift_horizon is fixed at training start "
+                        f"({int(saved_horizon)}); this resume parsed "
+                        f"{int(self._drift_horizon)}."
+                    )
+                saved_flip = loss_log.get("val_drift_flip")
+                if saved_flip is not None and int(saved_flip) != int(
+                    self._spectrum_tf_steps
+                ):
+                    raise ValueError(
+                        "drift flip is fixed at training start "
+                        f"({int(saved_flip)}); this resume parsed "
+                        f"{int(self._spectrum_tf_steps)}."
+                    )
+                saved_var = loss_log.get("val_x_true_var")
+                if saved_var is not None:
+                    saved_var = np.asarray(saved_var, dtype=float).reshape(-1)
+                    if saved_var.shape != self._x_true_var.shape or not np.allclose(
+                        saved_var, self._x_true_var, equal_nan=True
+                    ):
+                        raise ValueError(
+                            "val_x_true_var is fixed from the validation "
+                            "windows at training start and does not match "
+                            "this resume."
+                        )
+                saved_starts = loss_log.get("val_window_starts")
+                if saved_starts is not None and self._window_info is not None:
+                    saved_starts = np.asarray(saved_starts, dtype=np.int64).reshape(-1)
+                    current = np.asarray(self._window_info["starts"], dtype=np.int64)
+                    if saved_starts.shape != current.shape or not np.array_equal(
+                        saved_starts, current
+                    ):
+                        raise ValueError(
+                            "validation window starts are fixed at training "
+                            f"start ({saved_starts.tolist()}); this resume "
+                            f"chose {current.tolist()}."
+                        )
+                saved_fit_start = loss_log.get("val_ftle_fit_start")
+                saved_fit_end = loss_log.get("val_ftle_fit_end")
+                if saved_fit_start is not None and int(saved_fit_start) != int(
+                    self._ftle_fit[0]
+                ):
+                    raise ValueError(
+                        "val_ftle_fit_start is fixed at training start "
+                        f"({int(saved_fit_start)}); this resume parsed "
+                        f"{int(self._ftle_fit[0])}."
+                    )
+                if saved_fit_end is not None and int(saved_fit_end) != int(
+                    self._ftle_fit[1]
+                ):
+                    raise ValueError(
+                        "val_ftle_fit_end is fixed at training start "
+                        f"({int(saved_fit_end)}); this resume parsed "
+                        f"{int(self._ftle_fit[1])}."
+                    )
+                if "val_lle_per_window" in loss_log:
+                    self._lle_per_window = restore_per_window(
+                        loss_log["val_lle_per_window"], epochs, n_val_windows
+                    )
+                if "val_ftle_per_window" in loss_log:
+                    self._ftle_per_window = restore_per_window(
+                        loss_log["val_ftle_per_window"], epochs, n_val_windows
+                    )
+                saved_gt_windows = loss_log.get("val_lle_gt_per_window")
+                if saved_gt_windows is not None and self._lle_gt_per_window is not None:
+                    saved_gt_windows = np.asarray(saved_gt_windows, dtype=float).reshape(-1)
+                    if saved_gt_windows.shape != self._lle_gt_per_window.shape or not np.allclose(
+                        saved_gt_windows, self._lle_gt_per_window, equal_nan=True
+                    ):
+                        raise ValueError(
+                            "val_lle_gt_per_window is fixed from the "
+                            "validation windows at training start and does "
+                            "not match this resume."
+                        )
+
+        # Blank warmup_order is window_first. A blank warmup_patience_start
+        # is max(1, round(frac * early_stop_patience)), frac 0.2.
+        # Sequence-length bumps hold that value, then it rises over the
+        # autonomous and KL bumps. An explicit warmup_patience_start
+        # overrides the fraction. auto_first uses early_stop_patience
+        # for every bump. legacy_defaults or legacy_windowing restores
+        # auto_first and that single patience when those keys are blank.
+        warmup_order, warmup_patience_start = warmup_settings_from_config(self.cfg)
+        warmup = WarmupCurriculum(
+            order=warmup_order,
+            patience_start=warmup_patience_start,
+            early_stop_patience=early_stop_patience,
+            initial_sequence_len=initial_sequence_len,
+            sequence_len=self.sequence_len,
+            enable_autonomous=self.enable_autonomous_warmup,
+            auto_start=self.auto_warm_start,
+            auto_limit=self.auto_warm_limit,
+            enable_noise=self.enable_noise_warmup,
+            noise_start=self.noise_warm_start,
+            noise_limit=self.noise_warm_limit,
+            noise_reset_on_window=self.noise_warm_reset_on_window,
+            enable_kl=self.enable_kl_warmup,
+        )
+        logger.info(
+            "Warm-up order: {} (window steps {}, autonomous steps {}, "
+            "KL steps {}, planned bumps {}). Patience start: {}. "
+            "Early stop patience: {}.".format(
+                warmup.order,
+                warmup.window_steps,
+                warmup.autonomous_steps,
+                warmup.kl_steps,
+                warmup.n_planned,
+                (
+                    "off"
+                    if warmup.patience_start is None
+                    else format_patience(warmup.patience_start)
+                ),
+                early_stop_patience,
+            )
+        )
+        auto_kl_done = 0
+        dataset_stats = snapshot_window_stats(train_dataloader.dataset)
+
+        def history_at(end):
+            logged = {
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "train_recon": train_recon,
+                "train_kl": train_kl,
+                "val_recon": val_recon,
+                "val_kl": val_kl,
+                "val_spectrum": val_spectrum,
+                "val_criteria_score": val_criteria_score,
+            }
+            if self._monitor_spectrum:
+                logged.update(drift_arrays)
+            return build_training_history(
+                end=end,
+                model_name=self.model_name,
+                tag=tag,
+                auto_sampling_method=self.autonomous_sampling_method,
+                noise_sampling_method=self.noise_sampling_method,
+                delta_threshold=delta_threshold,
+                val_criteria=self._val_criteria,
+                val_reference=self._val_reference,
+                metric_reference=self._metric_reference,
+                spectrum_monitored=self._monitor_spectrum,
+                drift_monitored=self._monitor_spectrum,
+                drift_horizon=self._drift_horizon,
+                drift_flip=self._spectrum_tf_steps,
+                x_true_var=self._x_true_var,
+                window_info=self._window_info,
+                lle_gt=self._lle_gt,
+                rosenstein=self._val_rosenstein if self._monitor_spectrum else None,
+                ftle_fit=self._ftle_fit if self._monitor_spectrum else None,
+                lle_per_window=self._lle_per_window,
+                ftle_per_window=self._ftle_per_window,
+                lle_gt_per_window=self._lle_gt_per_window,
+                bump_events=bump_events,
+                series={
+                    **logged,
+                    "kl_warm_values": kl_warm_values,
+                    "auto_warm_values": auto_warm_values,
+                    "noise_warm_values": noise_warm_values,
+                    "sequence_len_values": sequence_len_values,
+                    "cpt_patience_epochs": cpt_patience_epochs,
+                    "patience_threshold_epochs": patience_threshold_epochs,
+                    "delta_per_epoch": delta_per_epoch,
+                    "best_state_epochs": best_state_epochs,
+                    "windows_kept": windows_kept,
+                    "windows_dropped_nan": windows_dropped_nan,
+                    "windows_dropped_shift": windows_dropped_shift,
+                    "gap_splits": gap_split_counts,
+                    "mean_start_shift": mean_start_shift,
+                    "time_train": time_train,
+                    "time_val": time_val,
+                    "time_val_forward": time_val_forward,
+                    "time_spectrum": time_spectrum,
+                    "time_drift": time_drift,
+                    "time_rosenstein": time_rosenstein,
+                    "time_plot": time_plot,
+                    "time_eval": time_eval,
+                },
+                dataset_stats=dataset_stats,
+                sigmas_history=(
+                    sigmas_history
+                    if self.model_name in ("MT_RNN", "MT_VRNN")
+                    else None
+                ),
+                a_sigmas_history=a_sigmas_history,
+            )
+
+        def store_metric_times(epoch_index):
+            metric_times = getattr(self, "_epoch_metric_times", {})
+            time_val_forward[epoch_index] = float(metric_times.get("time_val_forward", 0.0))
+            time_spectrum[epoch_index] = float(metric_times.get("time_spectrum", 0.0))
+            time_drift[epoch_index] = float(metric_times.get("time_drift", 0.0))
+            time_rosenstein[epoch_index] = float(metric_times.get("time_rosenstein", 0.0))
+
+        def log_epoch_wall(epoch_index):
+            store_metric_times(epoch_index)
+            logger.info(
+                format_timing_line(
+                    epoch_index,
+                    {
+                        "time_train": time_train[epoch_index],
+                        "time_val": time_val[epoch_index],
+                        "time_val_forward": time_val_forward[epoch_index],
+                        "time_spectrum": time_spectrum[epoch_index],
+                        "time_drift": time_drift[epoch_index],
+                        "time_rosenstein": time_rosenstein[epoch_index],
+                        "time_plot": time_plot[epoch_index],
+                        "time_eval": time_eval[epoch_index],
+                    },
+                )
+            )
 
         self.model.to(self.device)
 
         # Train with mini-batch SGD
+        ran_epoch = False
+        stopped_early = False
         for epoch in range(start_epoch + 1, epochs):
+            ran_epoch = True
 
             start_time = datetime.datetime.now()
 
@@ -596,6 +1304,8 @@ class LearningAlgorithm:
 
             torch.autograd.set_detect_anomaly(True)
             # Batch training
+            sync_cuda(self.device)
+            train_t0 = time.perf_counter()
             for _, batch_data in enumerate(train_dataloader):
                 batch_data = batch_data.to(self.device)
                 batch_size = batch_data.size(0)
@@ -857,7 +1567,12 @@ class LearningAlgorithm:
                     sigmas_history[:, epoch] = self.model.sigmas.detach().cpu().numpy()
                 update_A_sigmas_history(a_sigmas_history, self.model, epoch)
 
+            sync_cuda(self.device)
+            time_train[epoch] = time.perf_counter() - train_t0
+
             # Validation
+            sync_cuda(self.device)
+            val_t0 = time.perf_counter()
             for _, batch_data in enumerate(val_dataloader):
 
                 batch_data = batch_data.to(self.device)
@@ -1060,6 +1775,9 @@ class LearningAlgorithm:
                 val_recon[epoch] += loss_recon_avg.item() * bs
                 val_kl[epoch] += loss_kl_avg.item() * bs
 
+            sync_cuda(self.device)
+            time_val[epoch] = time.perf_counter() - val_t0
+
             # Loss normalization
             train_loss[epoch] = train_loss[epoch] / train_num
             train_recon[epoch] = train_recon[epoch] / train_num
@@ -1085,17 +1803,31 @@ class LearningAlgorithm:
                 )
             )
 
+            selection_value, selection_raw, selection_norm = self._epoch_selection_value(
+                epoch, val_loss, val_spectrum, val_criteria_score, drift_arrays
+            )
+            store_metric_times(epoch)
+
             # Save the best model
+            new_best = False
             if warm_up_happened:
                 logger.info("Warm-up happened, saving the best model")
                 warm_up_happened = False
-                best_val_loss = val_loss[epoch]
+                if self._val_criteria == ("recon",):
+                    best_val_loss = val_loss[epoch]
+                else:
+                    best_val_loss = selection_value
                 best_state_dict = self.model.state_dict()
                 best_optim_dict = optimizer.state_dict()
                 cur_best_epoch = epoch
+                new_best = True
 
             # identify the delta between current val_loss and best_val_loss
-            delta = val_loss[epoch] - best_val_loss
+            # recon keeps the historical comparison exactly.
+            if self._val_criteria == ("recon",):
+                delta = val_loss[epoch] - best_val_loss
+            else:
+                delta = selection_value - best_val_loss
             delta_per_epoch[epoch] = delta
             # calculate the rolling average of delta if the window size is reached
             if epoch >= delta_rolling_window_size:
@@ -1106,12 +1838,17 @@ class LearningAlgorithm:
                 delta_rolling_average = np.mean(delta_per_epoch)
 
             # Save the best model, update patience and best_val_loss
-            if delta < -delta_threshold:
+            improved = delta < -delta_threshold
+            if improved:
                 cpt_patience = 0
-                best_val_loss = val_loss[epoch]
+                if self._val_criteria == ("recon",):
+                    best_val_loss = val_loss[epoch]
+                else:
+                    best_val_loss = selection_value
                 best_state_dict = self.model.state_dict()
                 best_optim_dict = optimizer.state_dict()
                 cur_best_epoch = epoch
+                new_best = True
             else:
                 cpt_patience += 1
                 print(
@@ -1120,118 +1857,185 @@ class LearningAlgorithm:
                 logger.info(
                     "Updated cpt_patience: {}, delta: {}".format(cpt_patience, delta)
                 )
+            logger.info(
+                format_selection_line(
+                    epoch,
+                    selection_value,
+                    selection_raw,
+                    selection_norm,
+                    improved,
+                )
+            )
+            if new_best:
+                logger.info(
+                    format_new_best_line(
+                        epoch, selection_value, selection_raw, selection_norm
+                    )
+                )
 
             # Store the warm-up values
             kl_warm_values[epoch] = current_kl_warm
             auto_warm_values[epoch] = current_auto_warm
             noise_warm_values[epoch] = current_noise_warm
             sequence_len_values[epoch] = current_sequence_len
+            window_snap = snapshot_window_stats(train_dataloader.dataset)
+            windows_kept[epoch] = window_snap["windows_kept"]
+            windows_dropped_nan[epoch] = window_snap["windows_dropped_nan"]
+            windows_dropped_shift[epoch] = window_snap["windows_dropped_shift"]
+            gap_split_counts[epoch] = window_snap["gap_splits"]
+            mean_start_shift[epoch] = window_snap["mean_start_shift"]
+            dataset_stats = window_snap
             # Stop traning if early-stop triggers
             # Only stop when all enabled warm-ups are finished AND the sequence
             # length has already been increased to the requested maximum. This
             # allows the sequence-length warm-up to still occur when other
             # warm-ups are disabled.
-            if cpt_patience > early_stop_patience:
-                if (
-                    (not self.enable_kl_warmup or current_kl_warm >= 1.0)
-                    and (
-                        not self.enable_autonomous_warmup
-                        or current_auto_warm >= self.auto_warm_limit
-                    )
-                    and (
-                        not self.enable_noise_warmup
-                        or current_noise_warm >= self.noise_warm_limit
-                    )
-                    and current_sequence_len >= self.sequence_len
-                ):
-                    logger.info("Early stop patience achieved")
-                    break
-                else:
-                    cpt_patience = 0
-                    warm_up_happened = True
-                    warm_up_value = 0.1  # Your bump size
-
-                    # Priority: autonomous+noise bump -> KL bump -> sequence-length bump
-                    if self.enable_autonomous_warmup and (
-                        current_auto_warm < self.auto_warm_limit
-                        or (
-                            self.enable_noise_warmup
-                            and current_noise_warm < self.noise_warm_limit
-                        )
-                    ):
-                        if current_auto_warm < self.auto_warm_limit:
-                            logger.info("Bumping auto warm-up")
-                            current_auto_warm = min(
-                                self.auto_warm_limit,
-                                current_auto_warm
-                                + warm_up_value * self.auto_warm_limit,
-                            )
-                            logger.info(
-                                "Autonomous warm-up, anneal coeff: {}".format(
-                                    current_auto_warm
-                                )
-                            )
-                        if (
-                            self.enable_noise_warmup
-                            and current_noise_warm < self.noise_warm_limit
-                        ):
-                            logger.info("Bumping noise warm-up")
-                            current_noise_warm = min(
-                                self.noise_warm_limit,
-                                current_noise_warm
-                                + warm_up_value * self.noise_warm_limit,
-                            )
-                            logger.info(
-                                "Noise warm-up, noise coeff: {}".format(
-                                    current_noise_warm
-                                )
-                            )
-                    elif self.enable_kl_warmup and current_kl_warm < 1.0:
-                        logger.info("Bumping KL warm-up")
-                        current_kl_warm += warm_up_value
-
-                    elif current_sequence_len < self.sequence_len:
-                        logger.info("Bumping sequence length")
-                        current_sequence_len = min(
-                            self.sequence_len,
-                            current_sequence_len
-                            + int(warm_up_value * self.sequence_len),
-                        )
-                        train_dataloader.dataset.update_sequence_length(
-                            current_sequence_len,
-                        )
-                        val_dataloader.dataset.update_sequence_length(
-                            current_sequence_len
-                        )
-                        train_dataloader = torch.utils.data.DataLoader(
-                            train_dataloader.dataset,
-                            batch_size=train_dataloader.batch_size,
-                            shuffle=self.shuffle,
-                            num_workers=train_dataloader.num_workers,
-                            pin_memory=True,
-                        )
-                        val_dataloader = torch.utils.data.DataLoader(
-                            val_dataloader.dataset,
-                            batch_size=val_dataloader.batch_size,
-                            shuffle=self.shuffle,
-                            num_workers=val_dataloader.num_workers,
-                            pin_memory=True,
-                        )
+            # auto_first: autonomous+noise, then KL, then sequence length.
+            # window_first: sequence length first (autonomous fraction stays at
+            # auto_warm_start), then autonomous+noise, then KL. Same 0.1 bumps.
+            # window_first holds warmup_patience_start on sequence-length
+            # bumps, then raises it only across autonomous and KL bumps.
+            # auto_first, and a blank start, use early_stop_patience for
+            # every bump. The final stop always uses early_stop_patience.
+            warmups_finished = warmup.finished(
+                current_auto_warm,
+                current_noise_warm,
+                current_kl_warm,
+                current_sequence_len,
+            )
+            active_patience = warmup.active_patience(
+                auto_kl_done,
+                current_auto_warm,
+                current_noise_warm,
+                current_kl_warm,
+                current_sequence_len,
+            )
+            logger.info(
+                "Epoch: {} active patience: {}".format(
+                    epoch, format_patience(active_patience)
+                )
+            )
+            action = warmup_action(
+                cpt_patience, active_patience, warmups_finished
+            )
+            patience_threshold_epochs[epoch] = active_patience
+            if action == "stop":
+                cpt_patience_epochs[epoch] = cpt_patience
+                best_state_epochs[epoch] = cur_best_epoch
+                logger.info("Early stop patience achieved")
+                logger.info(
+                    format_early_stop_line(epoch, cpt_patience, active_patience)
+                )
+                log_epoch_wall(epoch)
+                stopped_early = True
+                break
+            if action == "bump":
+                cpt_at_trigger = cpt_patience
+                patience_before = float(active_patience)
+                old_auto = float(current_auto_warm)
+                old_noise = float(current_noise_warm)
+                old_kl = float(current_kl_warm)
+                old_sequence = float(current_sequence_len)
+                cpt_patience = 0
+                warm_up_happened = True
+                bumped = warmup.apply_bump(
+                    current_auto_warm,
+                    current_noise_warm,
+                    current_kl_warm,
+                    current_sequence_len,
+                )
+                current_auto_warm = bumped.auto
+                current_noise_warm = bumped.noise
+                current_kl_warm = bumped.kl
+                current_sequence_len = bumped.sequence_len
+                if bumped.kind == "auto":
+                    if bumped.auto_bumped:
+                        logger.info("Bumping auto warm-up")
                         logger.info(
-                            "Sequence length increased to: {}".format(
-                                current_sequence_len
+                            "Autonomous warm-up, anneal coeff: {}".format(
+                                current_auto_warm
                             )
                         )
-
-                        if self.enable_kl_warmup:
-                            current_kl_warm = 0
-                        current_auto_warm = self.auto_warm_start
-                        if self.noise_warm_reset_on_window and self.enable_noise_warmup:
-                            current_noise_warm = self.noise_warm_start
+                    if bumped.noise_bumped:
+                        logger.info("Bumping noise warm-up")
+                        logger.info(
+                            "Noise warm-up, noise coeff: {}".format(
+                                current_noise_warm
+                            )
+                        )
+                elif bumped.kind == "kl":
+                    logger.info("Bumping KL warm-up")
+                elif bumped.kind == "window":
+                    logger.info("Bumping sequence length")
+                    train_dataloader.dataset.update_sequence_length(
+                        current_sequence_len,
+                    )
+                    val_dataloader.dataset.update_sequence_length(
+                        current_sequence_len
+                    )
+                    train_dataloader = torch.utils.data.DataLoader(
+                        train_dataloader.dataset,
+                        batch_size=train_dataloader.batch_size,
+                        shuffle=self.shuffle,
+                        num_workers=train_dataloader.num_workers,
+                        pin_memory=True,
+                    )
+                    val_dataloader = torch.utils.data.DataLoader(
+                        val_dataloader.dataset,
+                        batch_size=val_dataloader.batch_size,
+                        shuffle=self.shuffle,
+                        num_workers=val_dataloader.num_workers,
+                        pin_memory=True,
+                    )
+                    logger.info(
+                        "Sequence length increased to: {}".format(
+                            current_sequence_len
+                        )
+                    )
+                    if bumped.reset_warmups:
                         logger.info("Resetting KL & auto & noise warm-ups")
-
-                    else:
-                        logger.info("Unknown early stop condition")
+                else:
+                    logger.info("Unknown early stop condition")
+                if bumped.kind in ("auto", "kl"):
+                    auto_kl_done += 1
+                patience_after = warmup.active_patience(
+                    auto_kl_done,
+                    current_auto_warm,
+                    current_noise_warm,
+                    current_kl_warm,
+                    current_sequence_len,
+                )
+                changes = []
+                if bumped.kind == "window":
+                    changes.append(("window", old_sequence, float(current_sequence_len)))
+                    # auto_first also resets KL and the autonomous fraction.
+                    # Those resets are their own rows so each vertical line
+                    # is in the table.
+                    if float(current_kl_warm) != old_kl:
+                        changes.append(("KL", old_kl, float(current_kl_warm)))
+                    if float(current_auto_warm) != old_auto:
+                        changes.append(("auto", old_auto, float(current_auto_warm)))
+                    if float(current_noise_warm) != old_noise:
+                        changes.append(("noise", old_noise, float(current_noise_warm)))
+                elif bumped.kind == "kl":
+                    changes.append(("KL", old_kl, float(current_kl_warm)))
+                elif bumped.kind == "auto":
+                    if bumped.auto_bumped:
+                        changes.append(("auto", old_auto, float(current_auto_warm)))
+                    if bumped.noise_bumped:
+                        changes.append(("noise", old_noise, float(current_noise_warm)))
+                for kind, old_value, new_value in changes:
+                    row = make_bump_row(
+                        epoch,
+                        kind,
+                        old_value,
+                        new_value,
+                        patience_before,
+                        patience_after,
+                        cpt_at_trigger,
+                    )
+                    bump_events.append(row)
+                    logger.info(format_bump_line(row))
             if self.tie_noise_to_auto:
                 current_noise_warm = current_auto_warm
             cpt_patience_epochs[epoch] = cpt_patience
@@ -1239,26 +2043,31 @@ class LearningAlgorithm:
 
             # Save model parameters regularly
             if epoch % save_frequency == 0:
-                loss_log = {
-                    "train_loss": train_loss[: cur_best_epoch + 1],
-                    "val_loss": val_loss[: cur_best_epoch + 1],
-                    "train_recon": train_recon[: cur_best_epoch + 1],
-                    "train_kl": train_kl[: cur_best_epoch + 1],
-                    "val_recon": val_recon[: cur_best_epoch + 1],
-                    "val_kl": val_kl[: cur_best_epoch + 1],
-                }
+                # Full prefix through this epoch, not only up to the best
+                # epoch, so the file matches the figure just drawn and a
+                # reload can restore every series. The first write is
+                # before the figures, so a crash while plotting still
+                # leaves the weights. The second write, after the plot
+                # timer, puts this epoch's time_plot into the checkpoint.
+                history_path = os.path.join(save_dir, "loss_model.pckl")
                 save_file = os.path.join(save_dir, self.model_name + "_checkpoint.pt")
-                torch.save(
-                    {
-                        "epoch": cur_best_epoch,
-                        "best_val_loss": best_val_loss,
-                        "cpt_patience": cpt_patience,
-                        "model_state_dict": best_state_dict,
-                        "optim_state_dict": best_optim_dict,
-                        "loss_log": loss_log,
-                    },
-                    save_file,
-                )
+
+                def write_epoch_checkpoint():
+                    loss_log = history_at(epoch + 1)
+                    save_training_history(history_path, loss_log)
+                    torch.save(
+                        {
+                            "epoch": cur_best_epoch,
+                            "best_val_loss": best_val_loss,
+                            "cpt_patience": cpt_patience,
+                            "model_state_dict": best_state_dict,
+                            "optim_state_dict": best_optim_dict,
+                            "loss_log": loss_log,
+                        },
+                        save_file,
+                    )
+
+                write_epoch_checkpoint()
                 logger.info(
                     "Epoch: {} ===> checkpoint stored with current best epoch: {}".format(
                         epoch, cur_best_epoch
@@ -1266,21 +2075,18 @@ class LearningAlgorithm:
                 )
 
                 # Save the loss figure
+                sync_cuda(self.device)
+                plot_t0 = time.perf_counter()
                 save_figures_dir = os.path.join(save_dir, "vis_during_training")
                 if not os.path.exists(save_figures_dir):
                     os.makedirs(save_figures_dir)
 
-                # Calculate the epochs at which kl_warm_values and auto_warm_values change
-                kl_warm_epochs = np.where(np.diff(kl_warm_values) != 0)[0] + 1
-                kl_warm_epochs = np.insert(kl_warm_epochs, 0, 0)  # Prepend 0
-                auto_warm_epochs = np.where(np.diff(auto_warm_values) != 0)[0] + 1
-                auto_warm_epochs = np.insert(auto_warm_epochs, 0, 0)  # Prepend 0
-
-                noise_warm_epochs = np.where(np.diff(noise_warm_values) != 0)[0] + 1
-                noise_warm_epochs = np.insert(noise_warm_epochs, 0, 0)  # Prepend 0
-
-                sequence_len_epochs = np.where(np.diff(sequence_len_values) != 0)[0] + 1
-                sequence_len_epochs = np.insert(sequence_len_epochs, 0, 0)
+                # Markers from the saved prefix. The unfilled tail is not a change.
+                shown = epoch + 1
+                kl_warm_epochs = warmup_change_epochs(kl_warm_values[:shown])
+                auto_warm_epochs = warmup_change_epochs(auto_warm_values[:shown])
+                noise_warm_epochs = warmup_change_epochs(noise_warm_values[:shown])
+                sequence_len_epochs = warmup_change_epochs(sequence_len_values[:shown])
 
                 visualize_total_loss(
                     train_loss[: epoch + 1],
@@ -1294,6 +2100,50 @@ class LearningAlgorithm:
                     self.noise_sampling_method,
                     save_figures_dir,
                     tag,
+                )
+                visualize_val_criteria(
+                    self._val_criteria,
+                    val_loss[: epoch + 1],
+                    val_spectrum[: epoch + 1],
+                    val_criteria_score[: epoch + 1],
+                    kl_warm_epochs,
+                    auto_warm_epochs,
+                    noise_warm_epochs,
+                    sequence_len_epochs,
+                    self.model_name,
+                    self.autonomous_sampling_method,
+                    self.noise_sampling_method,
+                    save_figures_dir,
+                    tag,
+                    best_epoch=(
+                        cur_best_epoch
+                        if 0 <= cur_best_epoch <= epoch
+                        else None
+                    ),
+                    include_spectrum=self._monitor_spectrum,
+                    drift=(
+                        {
+                            name: drift_arrays["val_" + name][: epoch + 1]
+                            for name in DRIFT_PLOT_NAMES + VARNORM_DRIFT_METRICS
+                        }
+                        if self._monitor_spectrum
+                        else None
+                    ),
+                    recon_k=(
+                        drift_arrays["val_recon_k"][: epoch + 1]
+                        if self._monitor_spectrum
+                        else None
+                    ),
+                    lyapunov=(
+                        {
+                            "ftle": drift_arrays["val_ftle"][: epoch + 1],
+                            "lle_mean": drift_arrays["val_lle_mean"][: epoch + 1],
+                            "lle_std": drift_arrays["val_lle_std"][: epoch + 1],
+                            "lle_gt": self._lle_gt,
+                        }
+                        if self._monitor_spectrum
+                        else None
+                    ),
                 )
                 visualize_total_loss(
                     train_loss[: epoch + 1],
@@ -1320,6 +2170,7 @@ class LearningAlgorithm:
                         sequence_len_epochs,
                         self.model_name,
                         self.autonomous_sampling_method,
+                        self.noise_sampling_method,
                         save_figures_dir,
                         tag,
                     )
@@ -1332,6 +2183,7 @@ class LearningAlgorithm:
                         sequence_len_epochs,
                         self.model_name,
                         self.autonomous_sampling_method,
+                        self.noise_sampling_method,
                         save_figures_dir,
                         tag,
                         log_scale=True,
@@ -1382,6 +2234,23 @@ class LearningAlgorithm:
                     self.noise_sampling_method,
                     save_figures_dir,
                     tag,
+                    patience_threshold_epochs[: epoch + 1],
+                    windows_kept=windows_kept[: epoch + 1],
+                    windows_dropped_nan=windows_dropped_nan[: epoch + 1],
+                    windows_dropped_shift=windows_dropped_shift[: epoch + 1],
+                    gap_splits=gap_split_counts[: epoch + 1],
+                    mean_start_shift=mean_start_shift[: epoch + 1],
+                    dataset_stats=dataset_stats,
+                    timing={
+                        "time_train": time_train[: epoch + 1],
+                        "time_val": time_val[: epoch + 1],
+                        "time_val_forward": time_val_forward[: epoch + 1],
+                        "time_spectrum": time_spectrum[: epoch + 1],
+                        "time_drift": time_drift[: epoch + 1],
+                        "time_rosenstein": time_rosenstein[: epoch + 1],
+                        "time_plot": time_plot[: epoch + 1],
+                        "time_eval": time_eval[: epoch + 1],
+                    },
                 )
 
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
@@ -1494,214 +2363,239 @@ class LearningAlgorithm:
                         showing_gradient=True,
                         gradient_clip_value=self.gradient_clip,
                     )
-                # Test with longer sequence length (1000)
-                # Update dataset sequence length to 1000 temporarily
-                train_dataloader.dataset.update_sequence_length(
-                    1000, minimum_nan_ratio=0.3
-                )
-                first_batch = next(iter(train_dataloader))
-                temp_batch_data = first_batch.permute(1, 0, 2).to(self.device)
-
-                # Extract missing mask for this batch
-                temp_missing_mask = None
-                observation_process = getattr(
-                    dataset_config, "observation_process", None
-                )
-
-                if (
-                    self._is_indicate_observation(observation_process)
-                    and temp_batch_data.size(2) >= 2
-                ):
-                    # Interleaved [x,m,...]: odd dims are is_observed → per-signal missing
-                    is_observed = temp_batch_data[:, :, 1::2]
-                    temp_missing_mask = (is_observed < 0.5).float()
-
-                elif hasattr(train_dataloader.dataset, "missing_mask"):
-                    # Fallback for other observation processes
-                    seq_len_temp, batch_size_temp, x_dim_temp = temp_batch_data.shape
-                    batch_start_idx = (
-                        train_dataloader.dataset.data_idx[0]
-                        if len(train_dataloader.dataset.data_idx) > 0
-                        else 0
+                # Longer training figure. Cap to the longest in-subject
+                # span so an empty window set does not crash next(iter).
+                _viz_len = cap_eval_seq_len(train_dataloader.dataset, 1000)
+                _viz_ready = False
+                if _viz_len < 1:
+                    logger.info(
+                        "Skipping long-sequence training visualization: "
+                        "no subject can supply a window"
                     )
-                    batch_end_idx = min(
-                        batch_start_idx + seq_len_temp,
-                        len(train_dataloader.dataset.missing_mask),
+                else:
+                    try:
+                        train_dataloader.dataset.update_sequence_length(_viz_len)
+                        _viz_ready = len(train_dataloader.dataset.data_idx) > 0
+                        if not _viz_ready:
+                            logger.info(
+                                "Skipping long-sequence training visualization: "
+                                "no window of length {}".format(_viz_len)
+                            )
+                    except ValueError as _viz_exc:
+                        logger.info(
+                            "Skipping long-sequence training visualization: {}".format(
+                                _viz_exc
+                            )
+                        )
+                        _viz_ready = False
+                if not _viz_ready and _viz_len >= 1:
+                    train_dataloader.dataset.update_sequence_length(
+                        current_sequence_len
                     )
-                    missing_mask_slice = train_dataloader.dataset.missing_mask[
-                        batch_start_idx:batch_end_idx
-                    ]
+                if _viz_ready:
+                    first_batch = next(iter(train_dataloader))
+                    temp_batch_data = first_batch.permute(1, 0, 2).to(self.device)
 
-                    # Convert to tensor and expand to batch size
-                    if isinstance(missing_mask_slice, np.ndarray):
-                        temp_missing_mask = (
-                            torch.from_numpy(missing_mask_slice)
-                            .float()
-                            .unsqueeze(1)
-                            .expand(-1, batch_size_temp, -1)
+                    # Extract missing mask for this batch
+                    temp_missing_mask = None
+                    observation_process = getattr(
+                        dataset_config, "observation_process", None
+                    )
+
+                    if (
+                        self._is_indicate_observation(observation_process)
+                        and temp_batch_data.size(2) >= 2
+                    ):
+                        # Interleaved [x,m,...]: odd dims are is_observed → per-signal missing
+                        is_observed = temp_batch_data[:, :, 1::2]
+                        temp_missing_mask = (is_observed < 0.5).float()
+
+                    elif hasattr(train_dataloader.dataset, "missing_mask"):
+                        # Fallback for other observation processes
+                        seq_len_temp, batch_size_temp, x_dim_temp = temp_batch_data.shape
+                        batch_start_idx = (
+                            train_dataloader.dataset.data_idx[0]
+                            if len(train_dataloader.dataset.data_idx) > 0
+                            else 0
                         )
-                    else:
-                        temp_missing_mask = missing_mask_slice.unsqueeze(1).expand(
-                            -1, batch_size_temp, -1
+                        batch_end_idx = min(
+                            batch_start_idx + seq_len_temp,
+                            len(train_dataloader.dataset.missing_mask),
                         )
+                        missing_mask_slice = train_dataloader.dataset.missing_mask[
+                            batch_start_idx:batch_end_idx
+                        ]
 
-                # Reset sequence length back to current_sequence_len
-                train_dataloader.dataset.update_sequence_length(current_sequence_len)
+                        # Convert to tensor and expand to batch size
+                        if isinstance(missing_mask_slice, np.ndarray):
+                            temp_missing_mask = (
+                                torch.from_numpy(missing_mask_slice)
+                                .float()
+                                .unsqueeze(1)
+                                .expand(-1, batch_size_temp, -1)
+                            )
+                        else:
+                            temp_missing_mask = missing_mask_slice.unsqueeze(1).expand(
+                                -1, batch_size_temp, -1
+                            )
 
-                # SART: Compute autonomous mode selector for visualization #################
-                model_mode_selector = create_autonomous_mode_selector(
-                    temp_batch_data.size(0),
-                    mode=autonomous_config["mode"],
-                    autonomous_ratio=autonomous_config["autonomous_ratio"](),
-                    batch_size=temp_batch_data.size(1),
-                    x_dim=dataset_config.x_dim,
-                    device=self.device,
-                )
-                # replace where nan is present with 1 to fill with autonomous mode
-                model_mode_selector = torch.where(
-                    temp_batch_data.isnan().detach(),
-                    torch.tensor(1.0, device=self.device),
-                    model_mode_selector,
-                )
-                # END: Compute autonomous mode selector for visualization #################
+                    # Reset sequence length back to current_sequence_len
+                    train_dataloader.dataset.update_sequence_length(current_sequence_len)
 
-                # START: Compute noise-mixing #####################
-                noise_config = noise_configs.get(self.noise_sampling_method)
-                noise_selector = None
-                if noise_config is not None:
-                    noise_selector = create_autonomous_mode_selector(
+                    # SART: Compute autonomous mode selector for visualization #################
+                    model_mode_selector = create_autonomous_mode_selector(
                         temp_batch_data.size(0),
-                        mode=noise_config["mode"],
-                        autonomous_ratio=noise_config["ratio_fn"](),
+                        mode=autonomous_config["mode"],
+                        autonomous_ratio=autonomous_config["autonomous_ratio"](),
                         batch_size=temp_batch_data.size(1),
                         x_dim=dataset_config.x_dim,
                         device=self.device,
                     )
-                    if self.noise_target == "tf_only":
-                        noise_selector *= 1 - model_mode_selector
-                    elif self.noise_target in ["ar_only", "hybrid_ar"]:
-                        noise_selector *= model_mode_selector
-                # END: Compute noise-mixing #####################
+                    # replace where nan is present with 1 to fill with autonomous mode
+                    model_mode_selector = torch.where(
+                        temp_batch_data.isnan().detach(),
+                        torch.tensor(1.0, device=self.device),
+                        model_mode_selector,
+                    )
+                    # END: Compute autonomous mode selector for visualization #################
 
-                # Visualize teacher forcing and autonomous mode
-                visualize_teacherforcing_2_autonomous(
-                    temp_batch_data,
-                    self.model,
-                    auto_mode_selector=model_mode_selector,
-                    noise_selector=noise_selector,
-                    save_path=os.path.join(
-                        save_figures_dir, "sequence_reconstruction", "training_mode"
-                    ),
-                    explain=f"training_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
-                    inference_mode=True,
-                    missing_mask=temp_missing_mask,
-                    hide_mask_output=(
-                        self._is_indicate_observation(
-                            getattr(dataset_config, "observation_process", None)
+                    # START: Compute noise-mixing #####################
+                    noise_config = noise_configs.get(self.noise_sampling_method)
+                    noise_selector = None
+                    if noise_config is not None:
+                        noise_selector = create_autonomous_mode_selector(
+                            temp_batch_data.size(0),
+                            mode=noise_config["mode"],
+                            autonomous_ratio=noise_config["ratio_fn"](),
+                            batch_size=temp_batch_data.size(1),
+                            x_dim=dataset_config.x_dim,
+                            device=self.device,
                         )
-                    ),
-                )
+                        if self.noise_target == "tf_only":
+                            noise_selector *= 1 - model_mode_selector
+                        elif self.noise_target in ["ar_only", "hybrid_ar"]:
+                            noise_selector *= model_mode_selector
+                    # END: Compute noise-mixing #####################
 
-                # START: Compute autonomous mode selector for Even Bursts visualization #################
-                model_mode_selector_flip_test = create_autonomous_mode_selector(
-                    temp_batch_data.size(0),
-                    mode="even_bursts",
-                    autonomous_ratio=0.1,
-                    device=self.device,
-                    batch_size=temp_batch_data.size(1),
-                    x_dim=dataset_config.x_dim,
-                )
-                model_mode_selector = torch.where(
-                    temp_batch_data.isnan().detach(),
-                    torch.tensor(1.0, device=self.device),
-                    model_mode_selector,
-                )
-                # END: Compute autonomous mode selector for Even Bursts visualization #################
-                # START: Compute noise-mixing #####################
-                noise_config = noise_configs.get(self.noise_sampling_method)
-                noise_selector = None
-                if noise_config is not None:
-                    noise_selector = create_autonomous_mode_selector(
+                    # Visualize teacher forcing and autonomous mode
+                    visualize_teacherforcing_2_autonomous(
+                        temp_batch_data,
+                        self.model,
+                        auto_mode_selector=model_mode_selector,
+                        noise_selector=noise_selector,
+                        save_path=os.path.join(
+                            save_figures_dir, "sequence_reconstruction", "training_mode"
+                        ),
+                        explain=f"training_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
+                        inference_mode=True,
+                        missing_mask=temp_missing_mask,
+                        hide_mask_output=(
+                            self._is_indicate_observation(
+                                getattr(dataset_config, "observation_process", None)
+                            )
+                        ),
+                    )
+
+                    # START: Compute autonomous mode selector for Even Bursts visualization #################
+                    model_mode_selector_flip_test = create_autonomous_mode_selector(
                         temp_batch_data.size(0),
-                        mode=noise_config["mode"],
-                        autonomous_ratio=noise_config["ratio_fn"](),
+                        mode="even_bursts",
+                        autonomous_ratio=0.1,
+                        device=self.device,
                         batch_size=temp_batch_data.size(1),
                         x_dim=dataset_config.x_dim,
-                        device=self.device,
                     )
-                    if self.noise_target == "tf_only":
-                        noise_selector *= 1 - model_mode_selector
-                    elif self.noise_target in ["ar_only", "hybrid_ar"]:
-                        noise_selector *= model_mode_selector
-                # END: Compute noise-mixing #####################
-
-                visualize_teacherforcing_2_autonomous(
-                    temp_batch_data,
-                    self.model,
-                    auto_mode_selector=model_mode_selector_flip_test,
-                    noise_selector=noise_selector,
-                    save_path=os.path.join(
-                        save_figures_dir, "sequence_reconstruction", "even_bursts"
-                    ),
-                    explain=f"even_bursts_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
-                    inference_mode=True,
-                    missing_mask=temp_missing_mask,
-                    hide_mask_output=(
-                        self._is_indicate_observation(
-                            getattr(dataset_config, "observation_process", None)
+                    model_mode_selector = torch.where(
+                        temp_batch_data.isnan().detach(),
+                        torch.tensor(1.0, device=self.device),
+                        model_mode_selector,
+                    )
+                    # END: Compute autonomous mode selector for Even Bursts visualization #################
+                    # START: Compute noise-mixing #####################
+                    noise_config = noise_configs.get(self.noise_sampling_method)
+                    noise_selector = None
+                    if noise_config is not None:
+                        noise_selector = create_autonomous_mode_selector(
+                            temp_batch_data.size(0),
+                            mode=noise_config["mode"],
+                            autonomous_ratio=noise_config["ratio_fn"](),
+                            batch_size=temp_batch_data.size(1),
+                            x_dim=dataset_config.x_dim,
+                            device=self.device,
                         )
-                    ),
-                )
+                        if self.noise_target == "tf_only":
+                            noise_selector *= 1 - model_mode_selector
+                        elif self.noise_target in ["ar_only", "hybrid_ar"]:
+                            noise_selector *= model_mode_selector
+                    # END: Compute noise-mixing #####################
 
-                # START: Compute autonomous mode selector for Half-Half visualization #################
-                model_mode_selector_flip_test = create_autonomous_mode_selector(
-                    temp_batch_data.size(0),
-                    mode="half_half",
-                    device=self.device,
-                    batch_size=temp_batch_data.size(1),
-                    x_dim=dataset_config.x_dim,
-                )
-                model_mode_selector = torch.where(
-                    temp_batch_data.isnan().detach(),
-                    torch.tensor(1.0, device=self.device),
-                    model_mode_selector,
-                )
-                # END: Compute autonomous mode selector for Half-Half visualization #################
-                # START: Compute noise-mixing #####################
-                noise_config = noise_configs.get(self.noise_sampling_method)
-                noise_selector = None
-                if noise_config is not None:
-                    noise_selector = create_autonomous_mode_selector(
+                    visualize_teacherforcing_2_autonomous(
+                        temp_batch_data,
+                        self.model,
+                        auto_mode_selector=model_mode_selector_flip_test,
+                        noise_selector=noise_selector,
+                        save_path=os.path.join(
+                            save_figures_dir, "sequence_reconstruction", "even_bursts"
+                        ),
+                        explain=f"even_bursts_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
+                        inference_mode=True,
+                        missing_mask=temp_missing_mask,
+                        hide_mask_output=(
+                            self._is_indicate_observation(
+                                getattr(dataset_config, "observation_process", None)
+                            )
+                        ),
+                    )
+
+                    # START: Compute autonomous mode selector for Half-Half visualization #################
+                    model_mode_selector_flip_test = create_autonomous_mode_selector(
                         temp_batch_data.size(0),
-                        mode=noise_config["mode"],
-                        autonomous_ratio=noise_config["ratio_fn"](),
+                        mode="half_half",
+                        device=self.device,
                         batch_size=temp_batch_data.size(1),
                         x_dim=dataset_config.x_dim,
-                        device=self.device,
                     )
-                    if self.noise_target == "tf_only":
-                        noise_selector *= 1 - model_mode_selector
-                    elif self.noise_target in ["ar_only", "hybrid_ar"]:
-                        noise_selector *= model_mode_selector
-                # END: Compute noise-mixing #####################
-
-                visualize_teacherforcing_2_autonomous(
-                    temp_batch_data,
-                    self.model,
-                    auto_mode_selector=model_mode_selector_flip_test,
-                    noise_selector=noise_selector,
-                    save_path=os.path.join(
-                        save_figures_dir, "sequence_reconstruction", "half_half"
-                    ),
-                    explain=f"half_half_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
-                    inference_mode=True,
-                    missing_mask=temp_missing_mask,
-                    hide_mask_output=(
-                        self._is_indicate_observation(
-                            getattr(dataset_config, "observation_process", None)
+                    model_mode_selector = torch.where(
+                        temp_batch_data.isnan().detach(),
+                        torch.tensor(1.0, device=self.device),
+                        model_mode_selector,
+                    )
+                    # END: Compute autonomous mode selector for Half-Half visualization #################
+                    # START: Compute noise-mixing #####################
+                    noise_config = noise_configs.get(self.noise_sampling_method)
+                    noise_selector = None
+                    if noise_config is not None:
+                        noise_selector = create_autonomous_mode_selector(
+                            temp_batch_data.size(0),
+                            mode=noise_config["mode"],
+                            autonomous_ratio=noise_config["ratio_fn"](),
+                            batch_size=temp_batch_data.size(1),
+                            x_dim=dataset_config.x_dim,
+                            device=self.device,
                         )
-                    ),
-                )
+                        if self.noise_target == "tf_only":
+                            noise_selector *= 1 - model_mode_selector
+                        elif self.noise_target in ["ar_only", "hybrid_ar"]:
+                            noise_selector *= model_mode_selector
+                    # END: Compute noise-mixing #####################
+
+                    visualize_teacherforcing_2_autonomous(
+                        temp_batch_data,
+                        self.model,
+                        auto_mode_selector=model_mode_selector_flip_test,
+                        noise_selector=noise_selector,
+                        save_path=os.path.join(
+                            save_figures_dir, "sequence_reconstruction", "half_half"
+                        ),
+                        explain=f"half_half_epoch:{epoch}_klwarm{current_kl_warm}_auto_warm{current_auto_warm}_window{current_sequence_len}",
+                        inference_mode=True,
+                        missing_mask=temp_missing_mask,
+                        hide_mask_output=(
+                            self._is_indicate_observation(
+                                getattr(dataset_config, "observation_process", None)
+                            )
+                        ),
+                    )
 
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
                     alphas = 1 / (1 + np.exp(-sigmas_history[:, epoch]))
@@ -1714,6 +2608,41 @@ class LearningAlgorithm:
                     epoch,
                     alongside_mt=self.model_name in ("MT_RNN", "MT_VRNN"),
                 )
+                sync_cuda(self.device)
+                time_plot[epoch] = time.perf_counter() - plot_t0
+                write_epoch_checkpoint()
+                logger.info(
+                    "Epoch: {} ===> checkpoint loss_log updated with plot wall time {:.4f}".format(
+                        epoch, time_plot[epoch]
+                    )
+                )
+
+            # Current weights, in addition to the best checkpoint and the
+            # final best-epoch file. 0 / off leaves this path unused.
+            if self._checkpoint_every and (epoch + 1) % self._checkpoint_every == 0:
+                epoch_file = os.path.join(
+                    save_dir, "{}_epoch{}.pt".format(self.model_name, epoch)
+                )
+                torch.save(
+                    {
+                        "epoch": epoch,
+                        "best_val_loss": best_val_loss,
+                        "val_criteria": ",".join(self._val_criteria),
+                        "model_state_dict": self.model.state_dict(),
+                        "optim_state_dict": optimizer.state_dict(),
+                    },
+                    epoch_file,
+                )
+                logger.info(
+                    "Epoch: {} ===> current-epoch checkpoint stored at {}".format(
+                        epoch, epoch_file
+                    )
+                )
+
+            log_epoch_wall(epoch)
+
+        if ran_epoch and not stopped_early:
+            logger.info(format_epoch_budget_line(epoch))
 
         # Save the final weights of network with the best validation loss
         save_file = os.path.join(
@@ -1721,7 +2650,12 @@ class LearningAlgorithm:
         )
         torch.save(best_state_dict, save_file)
 
-        # Save the training loss and validation loss
+        # Save the training loss and validation loss, including every series
+        # the training figures use. Slice after the copy so the final alpha
+        # log still reads the last trained epoch.
+        loss_file = os.path.join(save_dir, "loss_model.pckl")
+        save_training_history(loss_file, history_at(epoch + 1))
+        logger.info("Loss saved in: {}".format(loss_file))
         train_loss = train_loss[: epoch + 1]
         val_loss = val_loss[: epoch + 1]
         train_recon = train_recon[: epoch + 1]
@@ -1732,31 +2666,6 @@ class LearningAlgorithm:
             sigmas_history = sigmas_history[:, : epoch + 1]
         if a_sigmas_history is not None:
             a_sigmas_history = a_sigmas_history[:, : epoch + 1]
-        loss_file = os.path.join(save_dir, "loss_model.pckl")
-
-        # create dictionary to save(pickle) the loss
-        pickle_dict = {
-            "train_loss": train_loss,
-            "val_loss": val_loss,
-            "train_recon": train_recon,
-            "train_kl": train_kl,
-            "val_recon": val_recon,
-            "val_kl": val_kl,
-            "kl_warm_epochs": kl_warm_epochs,
-        }
-        attach_timescale_history(
-            pickle_dict,
-            sigmas_history=(
-                sigmas_history
-                if self.model_name in ("MT_RNN", "MT_VRNN")
-                else None
-            ),
-            a_sigmas_history=a_sigmas_history,
-        )
-
-        with open(loss_file, "wb") as f:
-            pickle.dump(pickle_dict, f)
-            logger.info("Loss saved in: {}".format(loss_file))
 
         # Log all final alpha values
         if self.model_name in ["MT_RNN", "MT_VRNN"]:
@@ -1772,7 +2681,16 @@ class LearningAlgorithm:
 
         # run evaluation script
         eval_file = os.path.join(project_root, "src", "dvae", "eval", "eval_signal.py")
+        sync_cuda(self.device)
+        eval_t0 = time.perf_counter()
         subprocess.run(["python", eval_file, "--saved_dict", save_file])
+        sync_cuda(self.device)
+        if ran_epoch:
+            time_eval[epoch] = time.perf_counter() - eval_t0
+            logger.info(
+                "Eval inside training wall_s={:.4f}".format(time_eval[epoch])
+            )
+            save_training_history(loss_file, history_at(epoch + 1))
 
 
 # sigmoid function for arrays

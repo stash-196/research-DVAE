@@ -18,6 +18,7 @@ from .visualizers import (
 from .visualize_aggregated_results import visualize_aggregated_metrics
 from .visualize_training_metrics import (
     visualize_total_loss,
+    visualize_val_criteria,
     visualize_recon_loss,
     visualize_kld_loss,
     visualize_combined_metrics,

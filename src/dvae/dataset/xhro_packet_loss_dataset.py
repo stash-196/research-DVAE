@@ -89,6 +89,9 @@ class XhroPacketLoss(Xhro):
         the_sequence = pd.read_parquet(filename)
         self.sampling_freq = 250
         print(f"[XhroPacketLoss][{self.variant}] Loaded data from {filename}")
+        # Whole file, before the train/test cut. This path does not opt into
+        # the relative NaN filter unless a caller stored the window options.
+        self.dataset_missing_rate = self._missing_rate(the_sequence)
 
         if self.split == "test":
             the_sequence = the_sequence[-the_sequence.shape[0] // 5 :]

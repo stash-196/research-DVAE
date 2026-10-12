@@ -7,6 +7,20 @@ from torch.utils.data import Dataset
 import os
 import numpy as np
 import pandas as pd
+from .gap_grid import (
+    PRESENT_COL,
+    apply_nan_window_kwargs,
+    begin_window_recut,
+    dataset_missing_rate,
+    filter_window_starts,
+    log_current_nan_window_rule,
+    log_gap_split_recut,
+    log_window_recut,
+    note_shift_stats,
+    observed_row_mask,
+    resolve_recut_length,
+    shift_starts_onto_observed,
+)
 from .utils import data_utils
 from .utils.visualize_nans import plot_nan_heatmap, plot_segment_length_hist
 
@@ -73,6 +87,16 @@ class Xhro(Dataset):
         self.shuffle = shuffle
         self.device = device
         self.sampling_freq = None
+        # Optional window rules. XhroProper sets the parsed values; a plain
+        # Xhro run stores whatever the config passed and leaves them off.
+        self.start_on_observed = bool(kwargs.get("start_on_observed", True))
+        self.strict_non_overlap = bool(kwargs.get("strict_non_overlap", True))
+        self.max_gap_window_frac = kwargs.get("max_gap_window_frac", 0.25)
+        # Blank ratio uses dataset_missing_rate + excess (default 0.2).
+        apply_nan_window_kwargs(self, kwargs)
+        self.dataset_missing_rate = None
+        self.filled_gap_spans = kwargs.get("filled_gap_spans", None)
+        self.observed_per_row = kwargs.get("observed_per_row", None)
 
         original_base = _resolve_original_observation_process(self.observation_process)
 
@@ -103,6 +127,9 @@ class Xhro(Dataset):
             )
         # see if directory of filename exists
         the_sequence = select_observation_window_slice(self.dataset_label, the_sequence)
+        # Once, on the whole loaded series, before the train/test cut and
+        # before observation processing hides real gaps.
+        self.dataset_missing_rate = self._missing_rate(the_sequence)
 
         if self.split == "test":  # use the Latter 20% of the data for testing
             the_sequence = the_sequence[-the_sequence.shape[0] // 5 :]
@@ -155,6 +182,37 @@ class Xhro(Dataset):
         # torch.Size([80000, 1])
 
         self.update_sequence_length(self.seq_len)
+
+    def _values_for_missing_rate(self, sequence):
+        """Observation columns only, with no indicate channel and no trim."""
+        process = self.observation_process
+        cols = None
+        original = select_columns_for_obs_conditions["original"]
+        coarsed = select_columns_for_obs_conditions["coarsed"]
+        if process in original:
+            cols = original[process]
+        else:
+            base = _resolve_original_observation_process(process)
+            if base is not None:
+                cols = original[base]
+            elif process in coarsed:
+                cols = coarsed[process]
+        if cols is not None:
+            values = sequence[list(cols)].to_numpy(dtype=np.float64)
+        elif process in {"only_x_interpolate", "only_x_indicate"}:
+            values = sequence.iloc[:, 0].to_numpy(dtype=np.float64)
+        else:
+            values = sequence.select_dtypes(include="number").to_numpy(dtype=np.float64)
+        if values.ndim == 1:
+            values = values.reshape(-1, 1)
+        return values
+
+    def _missing_rate(self, sequence) -> float:
+        present = None
+        columns = getattr(sequence, "columns", [])
+        if PRESENT_COL in columns:
+            present = sequence[PRESENT_COL].to_numpy(dtype=bool)
+        return dataset_missing_rate(self._values_for_missing_rate(sequence), present)
 
     def _extract_missing_mask(self, sequence):
         """
@@ -413,41 +471,82 @@ class Xhro(Dataset):
         end_frame = min(start_frame + self.seq_len, len(self.seq))
         return self.seq[start_frame:end_frame]
 
-    def update_sequence_length(self, new_seq_len=None, minimum_nan_ratio=None):
-        # Only one index representing the start of each sequence
-        if new_seq_len is not None:
-            self.seq_len = new_seq_len
-            # Recalculate data_idx based on the new sequence length
-            num_frames = self.seq.shape[0]
-            all_indices = data_utils.find_indices(
-                num_frames, self.seq_len, num_frames // self.seq_len
-            )
+    def _window_starts(self, starts, boundaries, shift_stats=None):
+        """Honor ``start_on_observed``. Off leaves the starts unchanged."""
+        if not getattr(self, "start_on_observed", False):
+            if shift_stats is not None:
+                n = 0 if starts is None else int(np.asarray(starts).size)
+                shift_stats["dropped_unfit"] = int(shift_stats.get("dropped_unfit", 0))
+                shift_stats["shift_sum"] = float(shift_stats.get("shift_sum", 0.0))
+                shift_stats["shift_count"] = int(shift_stats.get("shift_count", 0)) + n
+            return starts
+        observed = observed_row_mask(
+            self.seq, getattr(self, "observed_per_row", None)
+        )
+        return shift_starts_onto_observed(
+            starts,
+            observed,
+            self.seq_len,
+            boundaries,
+            int(self.seq.shape[0]),
+            shift_stats=shift_stats,
+        )
 
-            if minimum_nan_ratio is not None:
-                total_frames_before = len(all_indices)  # Total frames before filtering
-                print(f"[Dataset] Total frames before filtering: {total_frames_before}")
-                valid_frames = []
-                for idx in all_indices:
-                    seq_slice = self.seq[idx : idx + self.seq_len]
-                    nan_ratio = np.float16(np.isnan(seq_slice)).mean()
-                    if nan_ratio <= minimum_nan_ratio:
-                        valid_frames.append(idx)
-                valid_frames = np.array(valid_frames)
-                total_frames_after = len(valid_frames)  # Total frames after filtering
-                disregarded_frames = (
-                    total_frames_before - total_frames_after
-                )  # Disregarded frames
-                print(f"[Dataset] Total frames after filtering: {total_frames_after}")
+    def update_sequence_length(self, new_seq_len=None, minimum_nan_ratio=None):
+        # Only one index representing the start of each sequence.
+        # ``split_boundaries`` (sample indices) are kept on the dataset and
+        # applied on every re-cut, including curriculum resizes.
+        # ``max_gap_window_frac`` adds cuts for this length only.
+        begin_window_recut(self)
+        if new_seq_len is not None:
+            num_frames = self.seq.shape[0]
+            requested = int(new_seq_len)
+            spans = getattr(self, "missing_run_spans", None)
+            if spans is None:
+                spans = getattr(self, "filled_gap_spans", None)
+            seq_len, boundaries = resolve_recut_length(
+                num_frames,
+                requested,
+                getattr(self, "split_boundaries", None),
+                spans,
+                getattr(self, "max_gap_window_frac", None),
+                gap_quantile=getattr(self, "dataset_gap_quantile", None),
+            )
+            if boundaries is not None and seq_len < requested:
                 print(
-                    f"[Dataset] Disregarded frames (due to NaN ratio > {minimum_nan_ratio}): {disregarded_frames}"
+                    f"[{type(self).__name__}] seq_len {requested} exceeds the "
+                    f"longest unbroken span {seq_len}; using {seq_len}."
                 )
+            self.seq_len = seq_len
+            log_gap_split_recut(self, self.seq_len, num_frames)
+            # Recalculate data_idx based on the new sequence length.
+            # Each span uses the local RandomState inside find_indices.
+            strict = bool(getattr(self, "strict_non_overlap", False))
+            observed = None
+            shift_stats = {}
+            if strict and getattr(self, "start_on_observed", False):
+                observed = observed_row_mask(
+                    self.seq, getattr(self, "observed_per_row", None)
+                )
+            all_indices = data_utils.find_indices(
+                num_frames,
+                self.seq_len,
+                num_frames // self.seq_len,
+                boundaries=boundaries,
+                strict_non_overlap=strict,
+                observed=observed,
+                shift_stats=shift_stats if observed is not None else None,
+            )
+            # Strict mode already shifted inside find_indices. A second pass
+            # would count those windows again at shift 0.
+            if observed is not None:
+                all_indices = self._window_starts(all_indices, boundaries)
             else:
-                valid_frames = all_indices
-                total_frames_after = len(valid_frames)
-                disregarded_frames = 0
-                print(
-                    f"[Dataset] No filtering applied (minimum_nan_ratio is None). Total frames: {total_frames_after}"
+                all_indices = self._window_starts(
+                    all_indices, boundaries, shift_stats=shift_stats
                 )
+            note_shift_stats(self, shift_stats)
+            valid_frames = filter_window_starts(self, all_indices, minimum_nan_ratio)
 
             train_indices, validation_indices = self.split_dataset(
                 valid_frames, self.val_indices
@@ -461,7 +560,11 @@ class Xhro(Dataset):
             # Use entire sequence if seq_len is None
             self.data_idx = [0]
             print("[Dataset] Using entire sequence (seq_len is None). Total frames: 1")
+            log_gap_split_recut(self, None, getattr(self.seq, "shape", [0])[0])
+            log_current_nan_window_rule(self, 0, minimum_nan_ratio)
+            self.window_recut_stats["windows_kept"] = 1
 
+        log_window_recut(self)
         return
 
 

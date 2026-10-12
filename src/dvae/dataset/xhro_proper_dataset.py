@@ -20,6 +20,51 @@ Time axis: prefers ``datetime_ns`` on the NPZ (UTC ns + ``tz``). If missing
 (old runs), reconstructs from ``config_snapshot.json`` / inventory ``t_start``
 plus relative ``t``.
 
+Lost packets on the native grid (stages 05–09b, also emitted on stage 04):
+optional keys ``present``, ``segment_id``, ``segment_bounds``, ``gap_indices``,
+and the per-gap table ``gap_t_start`` / ``gap_n_missing`` / ``gap_duration_s`` /
+``gap_filled`` / ``gap_kind`` / ``gap_index``. When they are absent the
+waveform path is unchanged. ``present=False`` is an inserted NaN row and is
+missing in the observation and the missing-data mask. Window starts stay
+inside one ``segment_id`` run, the same way coarse windows stay inside one
+subject. ``[DataFrame] max_fill_gap_sec`` (unset by default) additionally
+splits filled gaps longer than that many seconds. Those split sample
+indices stay on the dataset and are applied again whenever
+``update_sequence_length`` rebuilds windows (curriculum resizes included).
+``[DataFrame] max_gap_window_frac`` (default 0.25) splits a contiguous
+missing run (NaN or ``present=False``) only when its length exceeds
+``max(fraction * sequence length, dataset_gap_quantile)``.
+``[DataFrame] gap_split_quantile`` (default 0.99) is that quantile of
+the missing-run lengths, computed once after the block mask and the
+time crop, before windowing. Empty or ``none`` drops the quantile term.
+The comparison is recomputed on every re-cut. ``legacy_defaults`` true
+(alias ``legacy_windowing``) disables the split when the fraction key
+is blank. ``[DataFrame] start_on_observed``
+(default true) moves a start that lands on ``present=False`` forward to
+the next observed sample in the same segment. ``[DataFrame]
+strict_non_overlap`` (default true) tiles each segment with abutting
+windows. False keeps the historical ``find_indices`` placement, including
+its local ``RandomState(1234567890)``. A blank
+``[DataFrame] max_window_nan_ratio`` drops a window whose NaN fraction
+exceeds the dataset missing rate plus ``[DataFrame] max_window_nan_excess``
+(default 0.2). The rate is computed once after the block mask and the
+time crop, before the train/test cut and before windowing, from NaN and
+``present=False`` only. A threshold of at least 1 drops nothing. An
+explicit ratio is an absolute cap, and ``off`` disables both rules.
+``[DataFrame] legacy_defaults`` (default false; ``legacy_windowing`` is
+the same switch) restores the previous bundle when the placement keys
+are blank: starts may land on a missing sample, the historical picker
+is used, the fraction split is off, and both NaN rules are off. The
+same switch restores recon-only model selection when ``val_criteria``
+is blank, and restores ``auto_first`` warm-up plus a single
+``early_stop_patience`` when those training keys are blank. An explicit
+value for one key still wins, including an explicit ratio under the
+legacy switch.
+``[DataFrame] block_mask_file`` (unset) is an npz of block flags applied
+before the time crop. ``block_mask_mode`` defaults to ``not_good``.
+``filled_nan_log_sec`` is the re-cut log cutoff when ``max_fill_gap_sec``
+is unset. Crop stays time-based.
+
 Session directory
 -----------------
 ``data_dir`` (``path_to_data``) is the dataset root. The folder that
@@ -142,6 +187,30 @@ import numpy as np
 import pandas as pd
 import torch
 
+from .gap_grid import (
+    FILLED_RUN_COL,
+    GROUP_COL,
+    PRESENT_COL,
+    _as_bool,
+    _blank_absent_rows,
+    attach_gap_grid,
+    combine_gap_grid,
+    contiguous_run_lengths,
+    begin_window_recut,
+    dataset_missing_rate,
+    filter_window_starts,
+    gap_length_quantile,
+    gap_load_stats,
+    log_gap_split_recut,
+    missing_row_mask,
+    groups_from_boundaries,
+    log_current_nan_window_rule,
+    log_window_recut,
+    note_shift_stats,
+    resolve_recut_length,
+    split_boundaries_from_ids,
+)
+from .utils.data_utils import _boundary_cuts
 from .xhro_dataset import (
     Xhro,
     _resolve_original_observation_process,
@@ -457,6 +526,7 @@ def _df_from_npz(
     columns: dict[str, np.ndarray],
     *,
     t0: pd.Timestamp | None,
+    max_fill_gap_sec=None,
 ) -> pd.DataFrame:
     dt = datetime_from_npz(npz, t0=t0)
     data = {"datetime": dt}
@@ -468,11 +538,12 @@ def _df_from_npz(
                 f"Column {name!r} length {len(a)} != datetime length {n}"
             )
         data[name] = a
-    return pd.DataFrame(data)
+    return attach_gap_grid(pd.DataFrame(data), npz, max_fill_gap_sec)
 
 
 def _align_on_datetime(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
-    return pd.merge(left, right, on="datetime", how="outer", sort=True)
+    merged = pd.merge(left, right, on="datetime", how="outer", sort=True)
+    return combine_gap_grid(merged)
 
 
 def _maybe_resample(df: pd.DataFrame, resample_hz: float | None) -> pd.DataFrame:
@@ -497,13 +568,24 @@ def load_proper_frame(
     base_process: str,
     *,
     resample_hz: float | None = None,
+    max_fill_gap_sec=None,
 ) -> pd.DataFrame:
-    """Build a datetime-indexed table for one observation-process base name."""
+    """Build a datetime-indexed table for one observation-process base name.
+
+    ``max_fill_gap_sec`` unset leaves filled gaps inside windows. Gap-grid
+    keys are read from the stage NPZ when present. ``resample_hz`` is still
+    the unchanged exact reindex; segment indices are on the native grid.
+    """
     inter = session_dir / "intermediates"
     t0 = _infer_t0(session_dir)
 
     def load_stage(name: str):
         return _load_npz(inter / name)
+
+    def frame_from(npz, columns: dict[str, np.ndarray]) -> pd.DataFrame:
+        return _df_from_npz(
+            npz, columns, t0=t0, max_fill_gap_sec=max_fill_gap_sec
+        )
 
     need05 = base_process in {
         "raw_ch1",
@@ -525,10 +607,10 @@ def load_proper_frame(
         frames = []
         if need05:
             z = load_stage("stage05_ecg_filtered.npz")
-            frames.append(_df_from_npz(z, _series_from_stage05(z), t0=t0))
+            frames.append(frame_from(z, _series_from_stage05(z)))
         if need06:
             z = load_stage("stage06_eeg_filtered.npz")
-            frames.append(_df_from_npz(z, _series_from_stage06(z), t0=t0))
+            frames.append(frame_from(z, _series_from_stage06(z)))
         df = frames[0] if len(frames) == 1 else _align_on_datetime(frames[0], frames[1])
         return _maybe_resample(df, resample_hz)
 
@@ -546,25 +628,24 @@ def load_proper_frame(
                 f"{path} has no 'eeg_clean_template' array "
                 f"(found {sorted(z.files)})."
             )
-        df = _df_from_npz(
+        df = frame_from(
             z,
             {
                 "eeg_clean_template": np.asarray(
                     z["eeg_clean_template"], dtype=np.float64
                 )
             },
-            t0=t0,
         )
         return _maybe_resample(df, resample_hz)
 
     if base_process.startswith("ppg_"):
         z = load_stage("stage07_ppg_filtered.npz")
-        df = _df_from_npz(z, _series_from_stage07(z), t0=t0)
+        df = frame_from(z, _series_from_stage07(z))
         return _maybe_resample(df, resample_hz)
 
     if base_process.startswith("acc_"):
         z = load_stage("stage08_acc.npz")
-        df = _df_from_npz(z, _series_from_stage08(z), t0=t0)
+        df = frame_from(z, _series_from_stage08(z))
         return _maybe_resample(df, resample_hz)
 
     raise ValueError(f"Unknown XhroProper observation base: {base_process!r}")
@@ -707,6 +788,179 @@ def _normalize_coarse_test_split(value) -> str:
             f"{_COARSE_TEST_SPLITS}, got {value!r}."
         )
     return key
+
+
+def _optional_bool(value, name: str, default: bool = False) -> bool:
+    """Blank and ``None`` take ``default``. ``true`` / ``false`` / ``off`` parse."""
+    if _is_unset(value):
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "y", "on"):
+        return True
+    if text in ("0", "false", "no", "n", "off"):
+        return False
+    raise ValueError(f"{name} must be true or false, got {value!r}.")
+
+
+def optional_config_bool(cfg, section: str, option: str, default: bool = False) -> bool:
+    """Optional ini bool. Missing, blank, and ``None`` take ``default``."""
+    return _optional_bool(
+        optional_config_str(cfg, section, option),
+        f"[{section}] {option}",
+        default,
+    )
+
+
+def _optional_nonnegative_float(value, name: str) -> float | None:
+    out = _optional_user_float(value, name)
+    if out is not None and out < 0:
+        raise ValueError(f"{name} must be >= 0, got {out!r}.")
+    return out
+
+
+# Blank keys take these. ``legacy_windowing`` true makes a blank key mean off.
+# A blank NaN ratio is not a fixed cap: it uses the missing rate + excess.
+DEFAULT_MAX_WINDOW_NAN_EXCESS = 0.2
+DEFAULT_MAX_GAP_WINDOW_FRAC = 0.25
+DEFAULT_GAP_SPLIT_QUANTILE = 0.99
+_QUANTILE_OFF = {"", "none", "null", "empty"}
+_WINDOW_DEFAULT = object()
+_FLOAT_OFF = {"off", "unset", "false", "no"}
+
+
+def _window_bool(value, name: str, default: bool) -> bool:
+    if value is _WINDOW_DEFAULT or _is_unset(value):
+        return default
+    return _optional_bool(value, name, default=default)
+
+
+def _window_float(value, name: str, default: float | None) -> float | None:
+    """Blank uses ``default``. ``off`` is an explicit disable."""
+    number, _disabled = _window_float_spec(value, name, default)
+    return number
+
+
+def _window_float_spec(value, name: str, default: float | None):
+    """``(number or None, explicitly_off)``. Blank uses ``default``."""
+    if value is _WINDOW_DEFAULT or _is_unset(value):
+        return default, False
+    if isinstance(value, str) and value.strip().lower() in _FLOAT_OFF:
+        return None, True
+    return _optional_nonnegative_float(value, name), False
+
+
+def _window_quantile(value, default: float | None) -> float | None:
+    """Blank uses ``default``. Empty or ``none`` disables the quantile term."""
+    if value is _WINDOW_DEFAULT or value is None:
+        return default
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _QUANTILE_OFF or text in _FLOAT_OFF:
+            return None
+    try:
+        quantile = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"gap_split_quantile must be in [0, 1], got {value!r}."
+        ) from exc
+    if not np.isfinite(quantile) or quantile < 0 or quantile > 1:
+        raise ValueError(f"gap_split_quantile must be in [0, 1], got {value!r}.")
+    return quantile
+
+
+def gap_split_quantile_from_config(cfg):
+    """Missing key keeps the default. An empty value or ``none`` disables it."""
+    section, option = "DataFrame", "gap_split_quantile"
+    if not cfg.has_section(section) or not cfg.has_option(section, option):
+        return _WINDOW_DEFAULT
+    raw = cfg.get(section, option)
+    if raw is None:
+        return ""
+    return raw
+
+
+def resolve_windowing(
+    legacy_windowing=_WINDOW_DEFAULT,
+    start_on_observed=_WINDOW_DEFAULT,
+    strict_non_overlap=_WINDOW_DEFAULT,
+    max_window_nan_ratio=_WINDOW_DEFAULT,
+    max_window_nan_excess=_WINDOW_DEFAULT,
+    max_gap_window_frac=_WINDOW_DEFAULT,
+    gap_split_quantile=_WINDOW_DEFAULT,
+    legacy_defaults=_WINDOW_DEFAULT,
+) -> dict:
+    """Defaults for the window rules, and the legacy override.
+
+    A blank key takes the new default. ``legacy_defaults`` or
+    ``legacy_windowing`` true changes that blank-key default back to the
+    historical one (starts may be missing, historical ``find_indices``,
+    no fraction split, no NaN filter). Either name is enough. A blank
+    ``max_window_nan_ratio`` is the relative rule (missing rate + excess),
+    not a fixed 0.3. ``off`` on that key disables both the absolute cap
+    and the relative rule. A value that is actually set still wins.
+    """
+    legacy = _window_bool(legacy_windowing, "legacy_windowing", False) or (
+        _window_bool(legacy_defaults, "legacy_defaults", False)
+    )
+    if legacy:
+        start_default = False
+        strict_default = False
+        frac_default = None
+        excess_default = None
+    else:
+        start_default = True
+        strict_default = True
+        frac_default = DEFAULT_MAX_GAP_WINDOW_FRAC
+        excess_default = DEFAULT_MAX_WINDOW_NAN_EXCESS
+    ratio, ratio_off = _window_float_spec(
+        max_window_nan_ratio, "max_window_nan_ratio", None
+    )
+    excess, excess_off = _window_float_spec(
+        max_window_nan_excess, "max_window_nan_excess", excess_default
+    )
+    if excess_off:
+        excess = None
+    return {
+        "legacy_windowing": legacy,
+        "legacy_defaults": legacy,
+        "start_on_observed": _window_bool(
+            start_on_observed, "start_on_observed", start_default
+        ),
+        "strict_non_overlap": _window_bool(
+            strict_non_overlap, "strict_non_overlap", strict_default
+        ),
+        "max_window_nan_ratio": ratio,
+        "max_window_nan_ratio_off": ratio_off,
+        "max_window_nan_excess": excess,
+        "max_gap_window_frac": _window_float(
+            max_gap_window_frac, "max_gap_window_frac", frac_default
+        ),
+        "gap_split_quantile": _window_quantile(
+            gap_split_quantile, DEFAULT_GAP_SPLIT_QUANTILE
+        ),
+    }
+
+
+def windowing_from_config(cfg) -> dict:
+    """Resolve the ``[DataFrame]`` window rules, including a blank legacy key."""
+    return resolve_windowing(
+        legacy_windowing=optional_config_str(cfg, "DataFrame", "legacy_windowing"),
+        legacy_defaults=optional_config_str(cfg, "DataFrame", "legacy_defaults"),
+        start_on_observed=optional_config_str(cfg, "DataFrame", "start_on_observed"),
+        strict_non_overlap=optional_config_str(cfg, "DataFrame", "strict_non_overlap"),
+        max_window_nan_ratio=optional_config_str(
+            cfg, "DataFrame", "max_window_nan_ratio"
+        ),
+        max_window_nan_excess=optional_config_str(
+            cfg, "DataFrame", "max_window_nan_excess"
+        ),
+        max_gap_window_frac=optional_config_str(
+            cfg, "DataFrame", "max_gap_window_frac"
+        ),
+        gap_split_quantile=gap_split_quantile_from_config(cfg),
+    )
 
 
 def _optional_user_float(value, name: str) -> float | None:
@@ -1019,12 +1273,14 @@ def coarse_test_cut(usable: np.ndarray, mode: str) -> int:
     """Row index where the contiguous test tail starts.
 
     ``usable_tail`` places ``n_usable // 5`` jointly usable epochs in the
-    tail (same floor as Xhro's ``n // 5``). ``last20_rows`` is ``n - n // 5``.
+    tail (same floor as Xhro's ``n // 5``). ``last20_rows`` uses
+    ``n + ((-n) // 5)``, the same ceil tail as Xhro's ``-n // 5`` slice.
+    ``_provisional_nontest_mask`` keeps the floor cut ``n - n // 5``.
     """
     usable = np.asarray(usable, dtype=bool)
     n = int(usable.shape[0])
     if mode == "last20_rows":
-        return n - (n // 5)
+        return n + ((-n) // 5)
     if mode == "usable_tail":
         idx = np.flatnonzero(usable)
         n_test = int(idx.size // 5)
@@ -1128,7 +1384,9 @@ def _apply_coarse_suffix(features: np.ndarray, suffix: str | None) -> np.ndarray
         return out.astype(np.float32)
     if suffix == "indicate":
         missing = ~np.isfinite(arr)
-        imputed = np.nan_to_num(arr, nan=0.0).astype(np.float32)
+        # Zero every non-finite, including +/-inf. nan_to_num leaves inf as
+        # the float extreme, and the float32 cast turns that back into inf.
+        imputed = np.where(missing, 0.0, arr).astype(np.float32)
         is_obs = (~missing).astype(np.float32)
         result = np.empty((arr.shape[0], arr.shape[1] * 2), dtype=np.float32)
         result[:, 0::2] = imputed
@@ -1158,6 +1416,235 @@ def intra_subject_window_starts(
             starts.extend(range(i, j - seq_len + 1, step))
         i = j
     return np.asarray(starts, dtype=np.int64)
+
+
+def max_group_span(group_index, n_rows: int) -> int:
+    """Longest contiguous run. ``group_index is None`` means one series."""
+    n_rows = int(n_rows)
+    if n_rows <= 0:
+        return 0
+    if group_index is None:
+        return n_rows
+    index = np.asarray(group_index)
+    if index.size == 0:
+        return 0
+    if index.size == 1:
+        return 1
+    changes = np.flatnonzero(index[1:] != index[:-1]) + 1
+    bounds = np.r_[0, changes, index.size]
+    return int(np.diff(bounds).max())
+
+
+def dataset_row_group(dataset):
+    """Per-row subject, stay, or waveform segment. None if the series is one piece."""
+    for name in (
+        "subject_index_per_row",
+        "stay_id_per_row",
+        "segment_index_per_row",
+    ):
+        group = getattr(dataset, name, None)
+        if group is not None:
+            return np.asarray(group)
+    return None
+
+
+def dataset_max_window_length(dataset) -> int:
+    """Longest window that stays inside one subject, stay, or waveform segment."""
+    seq = getattr(dataset, "seq", None)
+    n_rows = 0 if seq is None else int(len(seq))
+    return max_group_span(dataset_row_group(dataset), n_rows)
+
+
+_BLOCK_MASK_MODES = ("not_good", "dirty", "lowamp", "dirty_or_lowamp")
+
+
+def parse_block_mask_mode(value) -> str:
+    """``not_good`` when unset. Other accepted names are the flag columns."""
+    if _is_unset(value):
+        return "not_good"
+    key = str(value).strip().lower()
+    if key not in _BLOCK_MASK_MODES:
+        raise ValueError(
+            "block_mask_mode must be one of "
+            f"{_BLOCK_MASK_MODES}, got {value!r}."
+        )
+    return key
+
+
+def _frame_sampling_hz(frame: pd.DataFrame) -> float:
+    """Median positive sample rate of the frame's datetime column."""
+    if frame is None or len(frame) < 2 or "datetime" not in frame.columns:
+        raise ValueError(
+            "block_mask_file needs a datetime column with at least two rows."
+        )
+    deltas = frame["datetime"].diff().dt.total_seconds().to_numpy(dtype=np.float64)
+    deltas = deltas[np.isfinite(deltas) & (deltas > 0)]
+    if deltas.size == 0:
+        raise ValueError("block_mask_file needs a positive sampling interval.")
+    return 1.0 / float(np.median(deltas))
+
+
+def _block_length_sec(t0: np.ndarray) -> float:
+    """Median positive spacing of block start times. Not a fixed 10 s."""
+    times = np.asarray(t0, dtype=np.float64).reshape(-1)
+    times = times[np.isfinite(times)]
+    if times.size < 2:
+        raise ValueError(
+            "block_mask t0 needs at least two finite times so the block "
+            "length can be inferred from their spacing."
+        )
+    step = np.diff(np.sort(times))
+    step = step[np.isfinite(step) & (step > 0)]
+    if step.size == 0:
+        raise ValueError("block_mask t0 spacing must be positive.")
+    return float(np.median(step))
+
+
+def block_mask_rows(n_rows: int, fs_hz: float, t0, flagged) -> np.ndarray:
+    """Rows covered by flagged blocks. Row 0 is session time 0.
+
+    Block ``i`` covers ``[t0, t0 + block_len)`` seconds, which is rows
+    ``[rint(fs * t0), rint(fs * (t0 + block_len)))``. ``fs_hz`` and the
+    block length are the caller's inferred values. Rows outside every
+    block stay False.
+    """
+    n = int(n_rows)
+    masked = np.zeros(n, dtype=bool)
+    if n == 0:
+        return masked
+    fs = float(fs_hz)
+    if not np.isfinite(fs) or fs <= 0:
+        raise ValueError(f"sampling rate must be positive, got {fs_hz!r}.")
+    times = np.asarray(t0, dtype=np.float64).reshape(-1)
+    flags = np.asarray(flagged, dtype=bool).reshape(-1)
+    if times.shape != flags.shape:
+        raise ValueError(
+            f"block mask t0 length {times.shape[0]} != flag length {flags.shape[0]}"
+        )
+    block_len = _block_length_sec(times)
+    use = flags & np.isfinite(times)
+    starts = np.rint(times[use] * fs).astype(np.int64)
+    ends = np.rint((times[use] + block_len) * fs).astype(np.int64)
+    for start, end in zip(starts, ends):
+        lo = max(int(start), 0)
+        hi = min(int(end), n)
+        if hi > lo:
+            masked[lo:hi] = True
+    return masked
+
+
+def block_flags(dirty, lowamp, good, mode: str) -> np.ndarray:
+    """Which blocks the mode masks. ``not_good`` is the complement of ``good``."""
+    mode = parse_block_mask_mode(mode)
+    dirty = np.asarray(dirty, dtype=bool).reshape(-1)
+    lowamp = np.asarray(lowamp, dtype=bool).reshape(-1)
+    good = np.asarray(good, dtype=bool).reshape(-1)
+    if mode == "dirty":
+        return dirty
+    if mode == "lowamp":
+        return lowamp
+    if mode == "dirty_or_lowamp":
+        return dirty | lowamp
+    return ~good
+
+
+def apply_block_mask(frame: pd.DataFrame, path, mode) -> pd.DataFrame:
+    """NaN masked rows and mark them absent. Unset path leaves the frame.
+
+    Applied on the waveform frame before the time crop. The same file is
+    used for every variant. Rows the file does not cover stay as they are.
+    """
+    if _is_unset(path):
+        return frame
+    mask_path = Path(path)
+    if not mask_path.is_file():
+        raise FileNotFoundError(f"block_mask_file not found: {mask_path}")
+    chosen = parse_block_mask_mode(mode)
+    with np.load(mask_path, allow_pickle=False) as npz:
+        missing = [key for key in ("t0", "dirty", "lowamp", "good") if key not in npz.files]
+        if missing:
+            raise ValueError(
+                f"block_mask_file {mask_path} is missing keys {missing}."
+            )
+        t0 = np.asarray(npz["t0"], dtype=np.float64).reshape(-1)
+        dirty = _as_bool(npz["dirty"]).reshape(-1)
+        lowamp = _as_bool(npz["lowamp"]).reshape(-1)
+        good = _as_bool(npz["good"]).reshape(-1)
+    lengths = {
+        "t0": int(t0.size),
+        "dirty": int(dirty.size),
+        "lowamp": int(lowamp.size),
+        "good": int(good.size),
+    }
+    if len(set(lengths.values())) != 1:
+        raise ValueError(
+            "block mask columns must share one length, got "
+            + ", ".join(f"{key}={length}" for key, length in sorted(lengths.items()))
+        )
+    n = 0 if frame is None else int(len(frame))
+    fs = _frame_sampling_hz(frame)
+    flagged = block_flags(dirty, lowamp, good, chosen)
+    masked = block_mask_rows(n, fs, t0, flagged)
+    if PRESENT_COL in frame.columns:
+        present = frame[PRESENT_COL].to_numpy(dtype=bool).copy()
+    else:
+        present = np.ones(n, dtype=bool)
+    present[masked] = False
+    frame = frame.copy()
+    frame[PRESENT_COL] = present
+    _blank_absent_rows(frame, present)
+    n_masked = int(masked.sum())
+    frac = (n_masked / n) if n else 0.0
+    frame.attrs["block_mask_fraction"] = float(frac)
+    print(
+        f"[XhroProper] block mask mode={chosen} file={mask_path} "
+        f"masked={n_masked}/{n} ({frac:.3f}) "
+        f"block_sec={_block_length_sec(t0):.6g} fs≈{fs:.6g} Hz"
+    )
+    return frame
+
+
+def crop_proper_frame(
+    frame: pd.DataFrame,
+    crop_start_sec,
+    crop_end_sec,
+) -> pd.DataFrame:
+    """Keep rows with ``crop_start_sec <= t <= crop_end_sec`` from the first timestamp.
+
+    Both bounds unset leaves the frame unchanged. Seconds are measured from
+    ``min(datetime)`` so a later resample does not move the crop. Applied on
+    the waveform path only, after ``load_proper_frame`` and before the test split.
+    """
+    if _is_unset(crop_start_sec) and _is_unset(crop_end_sec):
+        return frame
+    if frame is None or len(frame) == 0:
+        return frame
+    if "datetime" not in frame.columns:
+        warnings.warn(
+            "crop_start_sec/crop_end_sec ignored: frame has no datetime column.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return frame
+    t0 = frame["datetime"].min()
+    elapsed = (frame["datetime"] - t0).dt.total_seconds().to_numpy(dtype=np.float64)
+    keep = np.ones(len(frame), dtype=bool)
+    if not _is_unset(crop_start_sec):
+        keep &= elapsed >= float(crop_start_sec)
+    if not _is_unset(crop_end_sec):
+        keep &= elapsed <= float(crop_end_sec)
+    cropped = frame.loc[keep].reset_index(drop=True)
+    if len(cropped) == 0:
+        raise ValueError(
+            "crop_start_sec/crop_end_sec removed every row "
+            f"(start={crop_start_sec!r}, end={crop_end_sec!r}, "
+            f"span_sec={float(np.nanmax(elapsed) - np.nanmin(elapsed)):.6g})."
+        )
+    print(
+        f"[XhroProper] crop seconds [{crop_start_sec}, {crop_end_sec}] "
+        f"kept {len(cropped)}/{len(frame)} rows"
+    )
+    return cropped
 
 
 def build_coarse_subject(
@@ -1306,6 +1793,27 @@ def _log_coarse_subject(report: dict) -> None:
         )
 
 
+def _align_missing_mask(mask, processed) -> np.ndarray:
+    """Force the mask onto the rows ``apply_observation_process`` returned.
+
+    A longer mask means a leading all-NaN prefix was dropped from the signal.
+    Keep that suffix. A shorter mask is a bug: the signal rows are left as
+    apply produced them.
+    """
+    aligned = np.asarray(mask)
+    if aligned.ndim == 1:
+        aligned = aligned.reshape(-1, 1)
+    n_proc = int(processed.shape[0])
+    if len(aligned) == n_proc:
+        return aligned
+    if len(aligned) > n_proc:
+        return aligned[-n_proc:]
+    raise RuntimeError(
+        f"missing_mask length {len(aligned)} is shorter than the processed "
+        f"signal ({n_proc}). The mask must follow apply_observation_process."
+    )
+
+
 class XhroProper(Xhro):
     """Grok-pipeline XHRO sequences with named banks and honest gaps.
 
@@ -1326,6 +1834,57 @@ class XhroProper(Xhro):
         ``log_total_power_robust``.
       - coarse_eeg_artifact_k: required when the power rule is on.
       - coarse_eeg_max_rel_delta: optional rel_delta cap; unset means off.
+      - crop_start_sec / crop_end_sec: inclusive seconds from the first
+        timestamp. Unset means no crop. Waveform path only, after load and
+        before the 20% test split.
+      - max_fill_gap_sec: waveform only. Unset keeps filled gaps as NaN
+        inside windows. When set, a filled gap with ``gap_duration_s``
+        greater than this becomes a window split, like a segment boundary.
+        The split indices are stored and reused on every re-cut.
+      - legacy_defaults: false by default. ``legacy_windowing`` is the
+        same switch; either name set to true restores the previous
+        window bundle when the placement keys below are blank, disables
+        both NaN rules when ``max_window_nan_ratio`` is blank, restores
+        recon-only selection when ``val_criteria`` is blank, and restores
+        ``auto_first`` plus a single patience when those warm-up keys
+        are blank.
+      - max_gap_window_frac: waveform only. Blank is 0.25 (off when
+        ``legacy_windowing`` is true). A contiguous missing run longer
+        than ``max(fraction * sequence length, gap quantile)`` is a
+        split for that re-cut only. ``off`` disables the rule.
+      - gap_split_quantile: waveform only. Blank is 0.99. The 0.99
+        quantile of contiguous missing-run lengths on the loaded series
+        after the block mask and the time crop, before windowing.
+        Empty or ``none`` disables the quantile term. ``legacy_windowing``
+        true disables the whole split when the fraction key is blank.
+      - start_on_observed: waveform and coarse. Blank is true (false when
+        ``legacy_windowing`` is true). True moves a start on a missing
+        sample forward to the next observed sample that still fits in
+        the segment.
+      - strict_non_overlap: waveform only. Blank is true (false when
+        ``legacy_windowing`` is true). False keeps the historical
+        ``find_indices`` starts. True tiles each segment without overlap
+        or interior holes; the only unused samples are the final remainder
+        of each piece, plus any gap a start had to step over.
+      - block_mask_file / block_mask_mode: waveform only. Unset file means
+        no block mask. The file's flagged blocks are set to NaN and
+        ``present=False`` before the time crop, so they act as gaps.
+      - max_window_nan_ratio: waveform, coarse, and PhysioNet re-cuts.
+        Blank uses the relative rule (off when ``legacy_windowing`` is
+        true, and ``off`` disables both rules). A number is an absolute
+        cap and wins over the excess and over legacy windowing. An
+        explicit ``minimum_nan_ratio`` argument is also an absolute cap.
+        The long-sequence training figure still passes its own 0.3.
+      - max_window_nan_excess: blank is 0.2 (off when
+        ``legacy_windowing`` is true). A window is dropped when its NaN
+        fraction is above ``dataset_missing_rate + excess``. The rate is
+        computed once on the whole loaded series after the block mask
+        and the time crop, before the train/test cut and before
+        windowing. Only NaN and ``present=False`` count. A threshold of
+        at least 1 drops nothing. ``off`` disables the relative rule.
+      - filled_nan_log_sec: waveform log only. When ``max_fill_gap_sec``
+        is unset, a re-cut reports how many windows contain a filled NaN
+        run longer than this. Unset means that count is ``na``.
 
     Omit both ``data_root`` and ``corpus`` to keep today's packet-loss path:
     ``{data_dir}/xhro_packet_loss/grok_output/{dataset_label}_{variant}``.
@@ -1353,6 +1912,19 @@ class XhroProper(Xhro):
         coarse_eeg_artifact_mask=None,
         coarse_eeg_artifact_k=None,
         coarse_eeg_max_rel_delta=None,
+        crop_start_sec=None,
+        crop_end_sec=None,
+        max_fill_gap_sec=None,
+        filled_nan_log_sec=None,
+        legacy_windowing=_WINDOW_DEFAULT,
+        max_gap_window_frac=_WINDOW_DEFAULT,
+        start_on_observed=_WINDOW_DEFAULT,
+        strict_non_overlap=_WINDOW_DEFAULT,
+        max_window_nan_ratio=_WINDOW_DEFAULT,
+        max_window_nan_excess=_WINDOW_DEFAULT,
+        gap_split_quantile=_WINDOW_DEFAULT,
+        block_mask_file=None,
+        block_mask_mode=None,
         **kwargs,
     ):
         self.path_to_data = data_dir
@@ -1378,10 +1950,54 @@ class XhroProper(Xhro):
         self.device = device
         self.sampling_freq = None
         self.resample_hz = resample_hz
+        self.crop_start_sec = crop_start_sec
+        self.crop_end_sec = crop_end_sec
+        self.max_fill_gap_sec = _optional_nonnegative_float(
+            max_fill_gap_sec, "max_fill_gap_sec"
+        )
+        self.filled_nan_log_sec = _optional_nonnegative_float(
+            filled_nan_log_sec, "filled_nan_log_sec"
+        )
+        windowing = resolve_windowing(
+            legacy_windowing=legacy_windowing,
+            start_on_observed=start_on_observed,
+            strict_non_overlap=strict_non_overlap,
+            max_window_nan_ratio=max_window_nan_ratio,
+            max_window_nan_excess=max_window_nan_excess,
+            max_gap_window_frac=max_gap_window_frac,
+            gap_split_quantile=gap_split_quantile,
+        )
+        self.legacy_windowing = windowing["legacy_windowing"]
+        self.max_gap_window_frac = windowing["max_gap_window_frac"]
+        self.start_on_observed = windowing["start_on_observed"]
+        self.strict_non_overlap = windowing["strict_non_overlap"]
+        self.max_window_nan_ratio = windowing["max_window_nan_ratio"]
+        self.max_window_nan_ratio_off = windowing["max_window_nan_ratio_off"]
+        self.max_window_nan_excess = windowing["max_window_nan_excess"]
+        self.gap_split_quantile = windowing["gap_split_quantile"]
+        self.dataset_missing_rate = None
+        self.dataset_gap_quantile = None
+        self.missing_run_spans = []
+        self.block_mask_file = (
+            None if _is_unset(block_mask_file) else str(block_mask_file).strip()
+        )
+        self.block_mask_mode = parse_block_mask_mode(block_mask_mode)
+        self.block_mask_fraction = None
+        self.segment_index_per_row = None
+        self.split_boundaries = None
+        self.filled_run_sec = None
+        self.filled_gap_spans = []
+        self.observed_per_row = None
         self.coarse_mode = False
         base, _suffix = _split_process(self.observation_process)
         if base in COARSE_OBS_COLUMNS:
             self.coarse_mode = True
+            if self.block_mask_file is not None:
+                warnings.warn(
+                    "block_mask_file is ignored for coarse observations.",
+                    UserWarning,
+                    stacklevel=2,
+                )
             self._init_coarse(
                 base,
                 _suffix,
@@ -1410,8 +2026,40 @@ class XhroProper(Xhro):
             )
 
         the_sequence = load_proper_frame(
-            self.session_dir, base, resample_hz=self.resample_hz
+            self.session_dir,
+            base,
+            resample_hz=self.resample_hz,
+            max_fill_gap_sec=self.max_fill_gap_sec,
         )
+        the_sequence = apply_block_mask(
+            the_sequence, self.block_mask_file, self.block_mask_mode
+        )
+        if self.block_mask_file is not None:
+            self.block_mask_fraction = the_sequence.attrs.get("block_mask_fraction")
+        else:
+            self.block_mask_fraction = None
+        the_sequence = crop_proper_frame(
+            the_sequence, self.crop_start_sec, self.crop_end_sec
+        )
+        # Once, on the whole post-crop series, before the train/test cut
+        # and before interpolate/indicate. Observation columns only.
+        obs_cols = _columns_for_base(base)
+        present = (
+            the_sequence[PRESENT_COL].to_numpy(dtype=bool)
+            if PRESENT_COL in the_sequence.columns
+            else None
+        )
+        obs_values = the_sequence[obs_cols].to_numpy(dtype=np.float64)
+        self.dataset_missing_rate = dataset_missing_rate(obs_values, present)
+        # Once, on the same post-crop series. Empty or none leaves this unset
+        # so the fraction term stands alone.
+        if self.gap_split_quantile is None:
+            self.dataset_gap_quantile = None
+        else:
+            self.dataset_gap_quantile = gap_length_quantile(
+                contiguous_run_lengths(missing_row_mask(obs_values, present)),
+                self.gap_split_quantile,
+            )
         if "datetime" in the_sequence.columns:
             # native rate from median Δt
             deltas = the_sequence["datetime"].diff().dt.total_seconds().dropna()
@@ -1421,10 +2069,14 @@ class XhroProper(Xhro):
         if self.sampling_freq is None:
             self.sampling_freq = 250.0
         log_tag = self.variant if self.variant is not None else self.corpus
+        gap_stats = gap_load_stats(the_sequence)
         print(
             f"[XhroProper][{log_tag}] {self.observation_process} "
-            f"from {self.session_dir}  rows={len(the_sequence)}  "
-            f"fs≈{self.sampling_freq:.4g} Hz"
+            f"from {self.session_dir}  rows={gap_stats['rows']}  "
+            f"fs≈{self.sampling_freq:.4g} Hz  "
+            f"present_frac={gap_stats['present_frac']:.3f}  "
+            f"segments={gap_stats['segments']}  "
+            f"split_points={gap_stats['split_points']}"
         )
 
         if self.split == "test":
@@ -1440,6 +2092,7 @@ class XhroProper(Xhro):
         self.missing_mask = self._extract_missing_mask(the_sequence)
         the_sequence = self.apply_observation_process(the_sequence)
         the_sequence = the_sequence.squeeze()
+        self.missing_mask = _align_missing_mask(self.missing_mask, the_sequence)
 
         if self.x_dim is None:
             if the_sequence.ndim == 1:
@@ -1474,7 +2127,171 @@ class XhroProper(Xhro):
             )
 
         self.seq = the_sequence
+        self.segment_index_per_row = self._aligned_segment_index(
+            self.full_sequence, len(self.seq)
+        )
+        self.filled_run_sec = self._aligned_float_column(
+            self.full_sequence, FILLED_RUN_COL, len(self.seq)
+        )
+        self.observed_per_row = self._aligned_bool_column(
+            self.full_sequence, PRESENT_COL, len(self.seq)
+        )
+        self.filled_gap_spans = self._filled_gap_spans(
+            self.full_sequence, len(self.seq)
+        )
+        self.missing_run_spans = self._missing_run_spans(
+            self.full_sequence, len(self.seq)
+        )
+        if self.segment_index_per_row is not None:
+            self.split_boundaries = split_boundaries_from_ids(
+                self.segment_index_per_row
+            )
         self.update_sequence_length(self.seq_len)
+
+    def _apply_keep_positions(self, sequence: pd.DataFrame) -> np.ndarray:
+        """Positions ``apply_observation_process`` keeps, in order."""
+        n = len(sequence)
+        base, _suffix = _split_process(self.observation_process)
+        if base in PARITY_PROCESSES:
+            first_valid = sequence.first_valid_index()
+        else:
+            first_valid = self._value_frame(sequence).first_valid_index()
+        if first_valid is None:
+            return np.arange(n, dtype=np.int64)
+        loc = sequence.index.get_loc(first_valid)
+        if isinstance(loc, slice):
+            start = 0 if loc.start is None else int(loc.start)
+        elif isinstance(loc, np.ndarray):
+            start = int(np.flatnonzero(loc)[0])
+        else:
+            start = int(loc)
+        return np.arange(start, n, dtype=np.int64)
+
+    def _aligned_segment_index(self, frame: pd.DataFrame, n_seq: int):
+        """Window-group ids on the same rows as ``seq``. None on old files."""
+        if GROUP_COL not in frame.columns:
+            return None
+        group = frame[GROUP_COL].to_numpy(dtype=np.int64)
+        group = group[self._apply_keep_positions(frame)]
+        if len(group) != int(n_seq):
+            warnings.warn(
+                f"[XhroProper] window groups ({len(group)}) do not match "
+                f"seq ({n_seq}); segment windowing disabled for this series.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return None
+        return group
+
+    def _aligned_float_column(self, frame: pd.DataFrame, column: str, n_seq: int):
+        """One float per ``seq`` row, or None when the frame has no such column."""
+        if column not in frame.columns:
+            return None
+        values = frame[column].to_numpy(dtype=np.float64)
+        values = values[self._apply_keep_positions(frame)]
+        if len(values) != int(n_seq):
+            warnings.warn(
+                f"[XhroProper] {column} length {len(values)} does not match "
+                f"seq ({n_seq}); filled-gap durations are not logged.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return None
+        return values
+
+    def _aligned_bool_column(self, frame: pd.DataFrame, column: str, n_seq: int):
+        """One bool per ``seq`` row, or None when the frame has no such column."""
+        if column not in frame.columns:
+            return None
+        values = frame[column].to_numpy(dtype=bool)
+        values = values[self._apply_keep_positions(frame)]
+        if len(values) != int(n_seq):
+            warnings.warn(
+                f"[XhroProper] {column} length {len(values)} does not match "
+                f"seq ({n_seq}); start_on_observed cannot use it.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return None
+        return values
+
+    def _filled_gap_spans(self, frame: pd.DataFrame, n_seq: int):
+        """Contiguous ``present=False`` runs, in ``seq`` row indices.
+
+        The gap-split rule uses ``_missing_run_spans`` (NaN or
+        ``present=False``). These present-only runs stay available for
+        the filled-gap log. A length mismatch yields no spans.
+        """
+        if PRESENT_COL not in frame.columns:
+            return []
+        present = frame[PRESENT_COL].to_numpy(dtype=bool)
+        keep = self._apply_keep_positions(frame)
+        loc = np.full(len(frame), -1, dtype=np.int64)
+        loc[keep] = np.arange(len(keep), dtype=np.int64)
+        if int((loc >= 0).sum()) != int(n_seq):
+            warnings.warn(
+                f"[XhroProper] filled-gap rows do not match seq ({n_seq}); "
+                "max_gap_window_frac will not add splits.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return []
+        spans = []
+        i = 0
+        n = len(present)
+        while i < n:
+            if present[i]:
+                i += 1
+                continue
+            j = i + 1
+            while j < n and not present[j]:
+                j += 1
+            rows = loc[i:j]
+            rows = rows[rows >= 0]
+            if rows.size:
+                spans.append(rows.astype(np.int64, copy=False))
+            i = j
+        return spans
+
+    def _missing_run_spans(self, frame: pd.DataFrame, n_seq: int):
+        """Contiguous missing runs in ``seq`` row indices.
+
+        A row is missing when any observation cell is NaN or ``present``
+        is False. These are the runs ``max_gap_window_frac`` can split.
+        A length mismatch yields no spans.
+        """
+        values = self._value_frame(frame).to_numpy(dtype=np.float64)
+        present = None
+        if PRESENT_COL in frame.columns:
+            present = frame[PRESENT_COL].to_numpy(dtype=bool)
+        mask = missing_row_mask(values, present)
+        keep = self._apply_keep_positions(frame)
+        loc = np.full(len(frame), -1, dtype=np.int64)
+        loc[keep] = np.arange(len(keep), dtype=np.int64)
+        if int((loc >= 0).sum()) != int(n_seq):
+            warnings.warn(
+                f"[XhroProper] missing-run rows do not match seq ({n_seq}); "
+                "max_gap_window_frac will not add splits.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return []
+        spans = []
+        i = 0
+        n = int(mask.shape[0])
+        while i < n:
+            if not mask[i]:
+                i += 1
+                continue
+            j = i + 1
+            while j < n and mask[j]:
+                j += 1
+            rows = loc[i:j]
+            rows = rows[rows >= 0]
+            if rows.size:
+                spans.append(rows.astype(np.int64, copy=False))
+            i = j
+        return spans
 
     def _value_frame(self, sequence: pd.DataFrame) -> pd.DataFrame:
         base, _ = _split_process(self.observation_process)
@@ -1487,24 +2304,42 @@ class XhroProper(Xhro):
             )
         return sequence[cols]
 
-    def _extract_missing_mask(self, sequence):
-        base, _ = _split_process(self.observation_process)
+    def _values_apply_keeps(self, sequence: pd.DataFrame) -> np.ndarray:
+        """Value rows ``apply_observation_process`` keeps, before normalize.
+
+        Grok extras trim on the value frame's ``first_valid_index``. Parity
+        trims on the full frame, matching ``Xhro``. The missing mask uses
+        this same slice so a leading all-NaN value row cannot disagree with
+        the processed length. Which signal rows are kept does not change.
+        """
+        base, _suffix = _split_process(self.observation_process)
         if base in PARITY_PROCESSES:
-            # Reuse Xhro column names on the constructed frame.
-            return super()._extract_missing_mask(sequence)
-        values = self._value_frame(sequence).to_numpy(dtype=np.float64)
-        return np.isnan(values)
+            cols = select_columns_for_obs_conditions["original"][base]
+            data = sequence[cols]
+            first_valid = sequence.first_valid_index()
+        else:
+            data = self._value_frame(sequence)
+            first_valid = data.first_valid_index()
+        if first_valid is not None:
+            data = data.loc[first_valid:]
+        arr = data.to_numpy(dtype=np.float64)
+        if arr.ndim == 1:
+            arr = arr.reshape(-1, 1)
+        return arr
+
+    def _extract_missing_mask(self, sequence):
+        # Same rows apply keeps, including a datetime-valid leading row.
+        mask = np.isnan(self._values_apply_keeps(sequence))
+        if mask.ndim == 1:
+            mask = mask.reshape(-1, 1)
+        return mask
 
     def apply_observation_process(self, sequence) -> torch.Tensor:
         base, suffix = _split_process(self.observation_process)
         if base in PARITY_PROCESSES:
             return super().apply_observation_process(sequence)
 
-        data = self._value_frame(sequence)
-        first_valid = data.first_valid_index()
-        if first_valid is not None:
-            data = data.loc[first_valid:]
-        arr = data.to_numpy(dtype=np.float64)
+        arr = self._values_apply_keeps(sequence)
 
         if suffix is None:
             mean = np.nanmean(arr, axis=0)
@@ -1597,6 +2432,17 @@ class XhroProper(Xhro):
             prepared.append(item)
         self.session_dir = self.session_dirs[0]
         self.coarse_reports = [item["report"] for item in prepared]
+        # Full subject matrices, before the test cut and before indicate.
+        full_features = [
+            np.asarray(item["features"], dtype=np.float64) for item in prepared
+        ]
+        if full_features:
+            stacked = np.concatenate(full_features, axis=0)
+            if stacked.ndim == 1:
+                stacked = stacked.reshape(-1, 1)
+            self.dataset_missing_rate = dataset_missing_rate(stacked)
+        else:
+            self.dataset_missing_rate = 0.0
 
         seq_blocks = []
         mask_blocks = []
@@ -1642,6 +2488,7 @@ class XhroProper(Xhro):
                 f"result_shape={tuple(self.seq.shape)}"
             )
         self.window_subject = []
+        self.split_boundaries = split_boundaries_from_ids(self.subject_index_per_row)
         self.update_sequence_length(self.seq_len)
 
     def window_subject_id(self, index: int) -> str:
@@ -1650,7 +2497,39 @@ class XhroProper(Xhro):
 
     def update_sequence_length(self, new_seq_len=None, minimum_nan_ratio=None):
         if not getattr(self, "coarse_mode", False):
+            # Overlapping waveform windows use the per-segment stride when
+            # this re-cut has any split (segment, max_fill, or frac).
+            # Non-overlapping windows, including curriculum resizes, go
+            # through ``Xhro.update_sequence_length`` → ``find_indices``.
+            if new_seq_len is None:
+                return super().update_sequence_length(None, minimum_nan_ratio)
+            num_frames = int(self.seq.shape[0])
+            requested = int(new_seq_len)
+            seq_len, boundaries = resolve_recut_length(
+                num_frames,
+                requested,
+                getattr(self, "split_boundaries", None),
+                getattr(self, "missing_run_spans", None),
+                getattr(self, "max_gap_window_frac", None),
+                gap_quantile=getattr(self, "dataset_gap_quantile", None),
+            )
+            if (
+                self.overlap
+                and not getattr(self, "strict_non_overlap", False)
+                and _boundary_cuts(boundaries, num_frames) is not None
+            ):
+                if seq_len < requested:
+                    print(
+                        f"[XhroProper] seq_len {requested} exceeds the longest "
+                        f"unbroken span {seq_len}; using {seq_len}."
+                    )
+                begin_window_recut(self)
+                log_gap_split_recut(self, seq_len, num_frames)
+                return self._update_waveform_segment_windows(
+                    seq_len, minimum_nan_ratio, boundaries
+                )
             return super().update_sequence_length(new_seq_len, minimum_nan_ratio)
+        begin_window_recut(self)
         if new_seq_len is None:
             self.data_idx = [0]
             if len(self.subject_per_row):
@@ -1660,35 +2539,41 @@ class XhroProper(Xhro):
             print(
                 "[XhroProper][coarse] seq_len is None; one placeholder window at 0."
             )
+            log_current_nan_window_rule(self, 0, minimum_nan_ratio)
+            self.window_recut_stats["windows_kept"] = 1
+            log_window_recut(self)
             return
         new_seq_len = int(new_seq_len)
         if new_seq_len < 1:
             raise ValueError(f"seq_len must be >= 1, got {new_seq_len}.")
+        span = max_group_span(
+            self.subject_index_per_row, len(self.subject_index_per_row)
+        )
+        if span < 1:
+            self.seq_len = new_seq_len
+            self.data_idx = []
+            self.window_subject = []
+            print("[XhroProper][coarse] no subject rows; window set is empty.")
+            log_current_nan_window_rule(self, 0, minimum_nan_ratio)
+            self.window_recut_stats["windows_kept"] = 0
+            log_window_recut(self)
+            return
+        if new_seq_len > span:
+            print(
+                f"[XhroProper][coarse] seq_len {new_seq_len} exceeds the longest "
+                f"subject span {span}; using {span}."
+            )
+            new_seq_len = span
         self.seq_len = new_seq_len
         starts = intra_subject_window_starts(
             self.subject_index_per_row,
             self.seq_len,
             overlap=bool(self.overlap),
         )
-        if minimum_nan_ratio is not None:
-            seq_np = (
-                self.seq.detach().cpu().numpy()
-                if torch.is_tensor(self.seq)
-                else np.asarray(self.seq)
-            )
-            kept = []
-            for idx in starts:
-                window = seq_np[int(idx) : int(idx) + self.seq_len]
-                if window.size == 0:
-                    continue
-                nan_ratio = float(np.float16(np.isnan(window)).mean())
-                if nan_ratio <= float(minimum_nan_ratio):
-                    kept.append(int(idx))
-            starts = np.asarray(kept, dtype=np.int64)
-            print(
-                f"[XhroProper][coarse] nan_ratio<={minimum_nan_ratio}: "
-                f"windows={len(starts)}"
-            )
+        shift_stats = {}
+        starts = self._window_starts(starts, self.split_boundaries, shift_stats=shift_stats)
+        note_shift_stats(self, shift_stats)
+        starts = filter_window_starts(self, starts, minimum_nan_ratio)
         if self.split == "test":
             chosen = starts
         else:
@@ -1703,4 +2588,58 @@ class XhroProper(Xhro):
                 chosen = chosen[split_point:]
         self.data_idx = [int(i) for i in np.asarray(chosen).tolist()]
         self.window_subject = [str(self.subject_per_row[i]) for i in self.data_idx]
+        log_window_recut(self)
+        return
+
+    def _update_waveform_segment_windows(
+        self, new_seq_len, minimum_nan_ratio, boundaries=None
+    ):
+        """Starts that lie inside one segment. Same split rule as coarse windows."""
+        if new_seq_len is None:
+            self.data_idx = [0]
+            print("[XhroProper] seq_len is None; one placeholder window at 0.")
+            log_current_nan_window_rule(self, 0, minimum_nan_ratio)
+            self.window_recut_stats["windows_kept"] = 1
+            log_window_recut(self)
+            return
+        new_seq_len = int(new_seq_len)
+        if new_seq_len < 1:
+            raise ValueError(f"seq_len must be >= 1, got {new_seq_len}.")
+        if boundaries is not None:
+            n_rows = int(self.seq.shape[0])
+            group = groups_from_boundaries(n_rows, boundaries)
+        else:
+            group = np.asarray(self.segment_index_per_row)
+            boundaries = self.split_boundaries
+        span = max_group_span(group, len(group))
+        if span < 1:
+            self.seq_len = new_seq_len
+            self.data_idx = []
+            print("[XhroProper] no rows; window set is empty.")
+            log_current_nan_window_rule(self, 0, minimum_nan_ratio)
+            self.window_recut_stats["windows_kept"] = 0
+            log_window_recut(self)
+            return
+        if new_seq_len > span:
+            print(
+                f"[XhroProper] seq_len {new_seq_len} exceeds the longest "
+                f"segment span {span}; using {span}."
+            )
+            new_seq_len = span
+        self.seq_len = new_seq_len
+        starts = intra_subject_window_starts(
+            group, self.seq_len, overlap=bool(self.overlap)
+        )
+        shift_stats = {}
+        starts = self._window_starts(starts, boundaries, shift_stats=shift_stats)
+        note_shift_stats(self, shift_stats)
+        starts = filter_window_starts(self, starts, minimum_nan_ratio)
+        if self.split == "test":
+            chosen = starts
+        else:
+            chosen = np.array(starts, copy=True)
+            train_idx, val_idx = self.split_dataset(chosen, self.val_indices)
+            chosen = train_idx if self.split == "train" else val_idx
+        self.data_idx = [int(i) for i in np.asarray(chosen).tolist()]
+        log_window_recut(self)
         return

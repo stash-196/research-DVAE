@@ -26,6 +26,15 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
+from .gap_grid import (
+    apply_nan_window_kwargs,
+    begin_window_recut,
+    dataset_missing_rate,
+    filter_window_starts,
+    log_current_nan_window_rule,
+    nan_window_threshold,
+)
+
 HOURS_PER_STAY = 48
 DEFAULT_LABEL = "hourly_v1"
 # 1 sample / hour. eval dt = 1 / sampling_freq = 3600 s.
@@ -277,6 +286,8 @@ class PhysioNet2012(Dataset):
         self.shuffle = shuffle
         self.device = device
         self.sampling_freq = SAMPLING_FREQ_HZ
+        apply_nan_window_kwargs(self, kwargs)
+        self.dataset_missing_rate = None
 
         parquet = processed_parquet_path(data_dir, dataset_label)
         if not parquet.is_file():
@@ -292,6 +303,12 @@ class PhysioNet2012(Dataset):
             raise ValueError(f"{parquet} missing columns {sorted(missing)}")
         the_sequence = the_sequence.sort_values(["stay_id", "hour"]).reset_index(
             drop=True
+        )
+        # Once, on every loaded vital, before the stay split and before
+        # interpolate/indicate. Indicate's 0/1 channel is not in these columns.
+        base, _suffix = _resolve_obs_base(self.observation_process)
+        self.dataset_missing_rate = dataset_missing_rate(
+            the_sequence[PHYSINET_OBS_COLUMNS[base]].to_numpy(dtype=np.float64)
         )
 
         unique_ids = unique_stay_ids_in_order(the_sequence["stay_id"].tolist())
@@ -418,8 +435,11 @@ class PhysioNet2012(Dataset):
         return torch.as_tensor(item, dtype=torch.float32)
 
     def update_sequence_length(self, new_seq_len=None, minimum_nan_ratio=None):
+        begin_window_recut(self)
         if new_seq_len is None:
             self.data_idx = [0]
+            log_current_nan_window_rule(self, 0, minimum_nan_ratio)
+            self.window_recut_stats["windows_kept"] = 1
             return
         stay_lens = np.diff(
             np.r_[
@@ -440,21 +460,13 @@ class PhysioNet2012(Dataset):
                 f"No intra-stay windows of length {self.seq_len} "
                 f"(max stay length {max_stay})."
             )
-        if minimum_nan_ratio is not None:
-            valid_frames = []
-            for idx in all_indices:
-                seq_slice = self.seq[idx : idx + self.seq_len]
-                nan_ratio = np.float16(np.isnan(seq_slice)).mean()
-                if nan_ratio <= minimum_nan_ratio:
-                    valid_frames.append(idx)
-            valid_frames = np.array(valid_frames, dtype=np.int64)
-            if valid_frames.size == 0:
-                raise ValueError(
-                    f"No intra-stay windows of length {self.seq_len} "
-                    f"with nan_ratio <= {minimum_nan_ratio}."
-                )
-        else:
-            valid_frames = all_indices
+        valid_frames = filter_window_starts(self, all_indices, minimum_nan_ratio)
+        if valid_frames.size == 0:
+            _threshold, label, _rate = nan_window_threshold(self, minimum_nan_ratio)
+            raise ValueError(
+                f"No intra-stay windows of length {self.seq_len} "
+                f"under NaN threshold {label}."
+            )
         # Stay membership already selected this split; keep every intra-stay
         # window (do not re-split by val_indices).
         if self.shuffle:
