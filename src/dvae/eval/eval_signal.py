@@ -94,6 +94,7 @@ from dvae.eval.utils.jacobian_lyapunov import (
 )
 from dvae.eval.utils.free_run_metrics import (
     free_run_window_metrics,
+    resolve_compute_emd_rosenstein,
     resolve_free_run_metric_settings,
 )
 
@@ -260,6 +261,18 @@ class Options:
             action="store_true",
             default=False,
             help="Ignore an existing GT delay cache and scan again.",
+        )
+        self.parser.add_argument(
+            "--compute-emd-rosenstein",
+            dest="compute_emd_rosenstein",
+            type=lambda s: str(s).lower() in ("true", "1", "yes", "y", "on"),
+            default=None,
+            help=(
+                "Per-dimension Wasserstein W1, sliced Wasserstein, and "
+                "Rosenstein LLE on the free run. Default on. Pass false "
+                "to skip them, or set [Evaluation] compute_emd_rosenstein "
+                "to false. Does not change the other eval scores."
+            ),
         )
         self.parser.add_argument(
             "--compute-lyapunov",
@@ -1196,7 +1209,20 @@ if __name__ == "__main__":
         )
         delay_benchmark_kwargs = delay_choice.as_benchmark_kwargs()
         free_run_settings = resolve_free_run_metric_settings(cfg)
+        compute_emd_rosenstein = resolve_compute_emd_rosenstein(
+            params.get("compute_emd_rosenstein"), cfg
+        )
         free_run_book: dict[str, Any] = {}
+        if compute_emd_rosenstein:
+            print(
+                "[Eval] EMD (per-dim W1, sliced Wasserstein) and "
+                "Rosenstein LLE: on"
+            )
+        else:
+            print(
+                "[Eval] EMD and Rosenstein LLE: disabled "
+                "(compute_emd_rosenstein=false)"
+            )
 
         print(
             f"[Eval] Quantitative metrics: up to {n_eval_windows} window(s) "
@@ -1455,15 +1481,16 @@ if __name__ == "__main__":
             batch_scalars = flatten_analysis_to_batch_metrics(
                 mse_results, geom_results, spectrum_results
             )
-            try:
-                free_scalars, free_run_book = free_run_window_metrics(
-                    channel_benchmarks, free_run_settings
-                )
-                batch_scalars.update(free_scalars)
-            except Exception as free_exc:
-                print(
-                    f"[Eval] EMD / Rosenstein LLE skipped (batch={i}): {free_exc}"
-                )
+            if compute_emd_rosenstein:
+                try:
+                    free_scalars, free_run_book = free_run_window_metrics(
+                        channel_benchmarks, free_run_settings
+                    )
+                    batch_scalars.update(free_scalars)
+                except Exception as free_exc:
+                    print(
+                        f"[Eval] EMD / Rosenstein LLE skipped (batch={i}): {free_exc}"
+                    )
             batch_metric_dicts.append(batch_scalars)
             mse_results_list.append(mse_results)
             geom_results_list.append(geom_results)

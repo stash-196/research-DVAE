@@ -7,6 +7,7 @@ parameters, whose largest exponent is about 0.9 per unit time.
 from __future__ import annotations
 
 import configparser
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -19,6 +20,7 @@ from dvae.eval.utils.distribution_distance import (
 )
 from dvae.eval.utils.free_run_metrics import (
     free_run_window_metrics,
+    resolve_compute_emd_rosenstein,
     resolve_free_run_metric_settings,
 )
 from dvae.eval.utils.rosenstein_lyapunov import rosenstein_lle, rosenstein_on_benchmarks
@@ -152,6 +154,23 @@ def test_rosenstein_reports_gt_auto_and_difference():
 
 def test_short_series_returns_nan_without_raising():
     assert np.isnan(rosenstein_lle(np.linspace(0.0, 1.0, 30), m=5, tau=4, dt=0.01))
+
+
+def test_emd_rosenstein_runs_unless_disabled():
+    assert resolve_compute_emd_rosenstein(None, None) is True
+    cfg = configparser.ConfigParser()
+    cfg.add_section("Evaluation")
+    assert resolve_compute_emd_rosenstein(None, cfg) is True
+    cfg.set("Evaluation", "compute_emd_rosenstein", "")
+    assert resolve_compute_emd_rosenstein(None, cfg) is True
+    cfg.set("Evaluation", "compute_emd_rosenstein", "false")
+    assert resolve_compute_emd_rosenstein(None, cfg) is False
+    assert resolve_compute_emd_rosenstein(True, cfg) is True
+    text = (
+        Path(__file__).resolve().parents[1]
+        / "config/general_signal/cfg_base_template.ini"
+    ).read_text()
+    assert "compute_emd_rosenstein = {compute_emd_rosenstein}" in text
 
 
 def test_free_run_settings_default_and_config_override():

@@ -2,7 +2,9 @@
 
 Defaults match the module constants. An empty or missing ``[Evaluation]``
 key keeps that default, so an existing config that never mentions these
-options still records the scores.
+options still records the scores. ``compute_emd_rosenstein`` defaults to
+true; false skips per-dim W1, sliced Wasserstein, Rosenstein LLE, and
+the exact POT EMD from the same pass.
 """
 
 from __future__ import annotations
@@ -52,6 +54,35 @@ def _optional_int_option(cfg, option: str) -> Optional[int]:
     if text is None:
         return None
     return int(text)
+
+
+def _parse_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "y", "on"):
+        return True
+    if text in ("0", "false", "no", "n", "off"):
+        return False
+    raise ValueError(
+        f"compute_emd_rosenstein must be true or false, got {value!r}."
+    )
+
+
+def resolve_compute_emd_rosenstein(cli_value, cfg=None) -> bool:
+    """Whether eval records per-dim W1, sliced Wasserstein, and Rosenstein LLE.
+
+    The command-line value wins when it is not None. A missing or blank
+    ``[Evaluation] compute_emd_rosenstein`` stays on, so an old config
+    still records the scores. ``false`` skips that pass, including the
+    exact POT EMD that runs with it.
+    """
+    if cli_value is not None:
+        return _parse_bool(cli_value)
+    text = _raw_option(cfg, "compute_emd_rosenstein")
+    if text is None:
+        return True
+    return _parse_bool(text)
 
 
 def resolve_free_run_metric_settings(cfg=None) -> dict[str, Any]:
