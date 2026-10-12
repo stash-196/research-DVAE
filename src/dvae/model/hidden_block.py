@@ -250,7 +250,7 @@ def decoder_mask(
 
 
 def _tile_tensor(src: torch.Tensor, n: int) -> torch.Tensor:
-    """Repeat ``src`` along the block. The same tensor object is reused so grad accumulates."""
+    """Repeat ``src`` to length ``n``, or truncate when ``src`` is longer."""
     src = src.reshape(-1)
     if n <= src.numel():
         return src[:n]
@@ -275,56 +275,44 @@ def _range_values(
     )
 
 
-def block_alpha_init(values, bounds, width) -> torch.Tensor | None:
-    """Alpha-space start for one block, or None when that block stays shared.
+def initial_per_unit_alphas(shared_alphas, split, dim_rnn: int):
+    """Initial per-unit alphas for the shared ``sigmas`` parameter.
 
-    A comma list is the learnable vector (tiled over the block in the
-    forward). A min,max range is one sample per unit, spread with linspace.
+    Returns None when the split is off or neither block names a list or
+    a range. The caller then keeps the short shared list and the usual
+    tile. Otherwise the vector has length ``dim_rnn``: the shared list
+    tiled the usual way, then each specified block overwritten. A blank
+    side keeps that slice of the tiled shared list. A comma list is
+    tiled inside its block. A min,max range is one linspace sample per
+    unit. These numbers are only the starting values of ``sigmas``.
     """
-    if bounds is not None:
-        low, high = bounds
-        return torch.linspace(float(low), float(high), int(width))
-    if values is not None:
-        return torch.tensor(list(values), dtype=torch.float32)
-    return None
-
-
-def apply_trainable_block_alphas(
-    shared: torch.Tensor,
-    split: HiddenBlockSplit,
-    heart: torch.Tensor | None = None,
-    brain: torch.Tensor | None = None,
-) -> torch.Tensor:
-    """Write sigmoid-constrained block parameters onto the per-unit vector.
-
-    ``heart`` and ``brain`` are already in alpha space (base-10 sigmoid of
-    the block logits). A missing side keeps that slice of ``shared``, so a
-    blank block still follows the shared MT-RNN list. Lists shorter than
-    the block are tiled; a range is already one value per unit.
-    """
-    if heart is None and brain is None:
-        return shared
-    if heart is None:
-        heart_piece = shared[: split.heart]
+    if split is None:
+        return None
+    if (
+        split.heart_alphas is None
+        and split.brain_alphas is None
+        and split.heart_alpha_range is None
+        and split.brain_alpha_range is None
+    ):
+        return None
+    base = torch.tensor(list(shared_alphas), dtype=torch.float32)
+    if dim_rnn > base.numel():
+        repeats = dim_rnn // base.numel()
+        remainder = dim_rnn % base.numel()
+        parts = [base for _ in range(repeats)]
+        if remainder:
+            parts.append(base[:remainder])
+        per_unit = torch.cat(parts)
     else:
-        heart_piece = _tile_tensor(heart, split.heart).to(
-            dtype=shared.dtype, device=shared.device
-        )
-    if brain is None:
-        brain_piece = shared[split.heart :]
-    else:
-        brain_piece = _tile_tensor(brain, split.brain).to(
-            dtype=shared.dtype, device=shared.device
-        )
-    return torch.cat((heart_piece, brain_piece), dim=0)
+        per_unit = base[:dim_rnn].clone()
+    return apply_block_alphas(per_unit, split)
 
 
 def apply_block_alphas(shared: torch.Tensor, split: HiddenBlockSplit) -> torch.Tensor:
     """Replace a block with its list (tiled) or its min,max range.
 
-    A blank block keeps that slice of ``shared``. These values are
-    constants. The trainable path is ``apply_trainable_block_alphas``,
-    used when ``optimize_alphas`` is on.
+    A blank block keeps that slice of ``shared``. Used once, to fill the
+    initial values of the shared sigmas parameter.
     """
     out = shared
     replacements = (
