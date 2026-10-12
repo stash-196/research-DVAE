@@ -145,6 +145,66 @@ def test_spectrum_windows_are_copies_and_do_not_resize():
     assert windows[0].shape == (20, 1)
 
 
+def test_tf_clean_windows_are_deterministic_and_relax_when_short():
+    clean = np.ones((4000, 1), dtype=np.float64)
+    dataset = _Series(clean, split="valid", overlap=True, val_indices=1.0)
+    first, info = capture_fixed_spectrum_windows(
+        dataset,
+        n_windows=10,
+        window_len=200,
+        tf_steps=100,
+        min_observed=0.95,
+        max_gap_frac=0.01,
+        return_info=True,
+    )
+    second, again = capture_fixed_spectrum_windows(
+        dataset,
+        n_windows=10,
+        window_len=200,
+        tf_steps=100,
+        min_observed=0.95,
+        max_gap_frac=0.01,
+        return_info=True,
+    )
+    assert len(first) == 10
+    assert info["relaxed"] is False
+    assert info["qualified"].all()
+    assert info["tf_observed"].min() >= 0.95
+    assert info["tf_max_gap"].max() <= 1
+    assert info["seed"] == 1234567890
+    np.testing.assert_array_equal(info["starts"], again["starts"])
+    assert np.array_equal(first[0], second[0])
+    for start, window in zip(info["starts"], first):
+        assert np.isfinite(clean[int(start), 0])
+        assert window.shape == (200, 1)
+
+    gappy = np.ones((2000, 1), dtype=np.float64)
+    for index in range(8):
+        begin = index * 200
+        gappy[begin + 10 : begin + 30] = np.nan
+    gappy[0, 0] = np.nan
+    gappy_set = _Series(gappy, split="valid", overlap=False, val_indices=1.0)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _windows, relaxed = capture_fixed_spectrum_windows(
+            gappy_set,
+            n_windows=10,
+            window_len=200,
+            tf_steps=100,
+            min_observed=0.95,
+            max_gap_frac=0.01,
+            return_info=True,
+        )
+    assert relaxed["relaxed"] is True
+    assert any(issubclass(item.category, UserWarning) for item in caught)
+    assert "observed=" in str(caught[0].message)
+    assert int(relaxed["starts"][0]) != 0
+    assert relaxed["qualified"].sum() == 2
+    assert relaxed["qualified"].size < 10
+    for start in relaxed["starts"]:
+        assert np.isfinite(gappy[int(start), 0])
+
+
 def test_spectrum_windows_do_not_cross_subjects():
     dataset = _Subjects(
         [np.ones((30, 1)), np.full((30, 1), 2.0)],

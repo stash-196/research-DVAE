@@ -50,10 +50,13 @@ from dvae.dataset.xhro_proper_dataset import (
 from dvae.eval.utils.local_drift_analysis import (
     DRIFT_METRIC_NAMES,
     DRIFT_PLOT_NAMES,
+    RAW_DRIFT_METRICS,
     enforce_drift_span,
+    rosenstein_on_free_run,
     score_fixed_validation_windows,
     x_true_variance,
 )
+from dvae.eval.utils.delay_params import _get_delay_params
 from dvae.eval.utils.spectrum_validation import capture_fixed_spectrum_windows
 from dvae.eval.window_length import cap_eval_seq_len
 from dvae.warmup_curriculum import (
@@ -63,11 +66,17 @@ from dvae.warmup_curriculum import (
     warmup_settings_from_config,
 )
 from dvae.run_options import (
+    DEFAULT_TF_MAX_GAP_FRAC,
+    DEFAULT_TF_MIN_OBSERVED,
+    canonical_criterion_name,
     normalised_criterion_sum,
     parse_checkpoint_every_n_epochs,
     parse_optional_int,
+    parse_unit_interval,
     parse_val_drift_horizon,
+    parse_val_rosenstein,
     legacy_defaults_from_config,
+    resolve_ftle_fit,
     resolve_val_criteria,
     spectrum_monitoring_enabled,
 )
@@ -80,6 +89,7 @@ from dvae.model import (
 from dvae.dataset.gap_grid import snapshot_window_stats
 from dvae.training_history import (
     build_training_history,
+    drift_series_source,
     restore_matrix,
     save_training_history,
     series_or_new,
@@ -317,6 +327,11 @@ class LearningAlgorithm:
                     variance=self._x_true_var,
                     observation_process=self._spectrum_observation,
                     device=self.device,
+                    ftle_k_start=self._ftle_fit[0],
+                    ftle_k_end=self._ftle_fit[1],
+                    rosenstein=self._val_rosenstein,
+                    embed_dim=self._embed_dim,
+                    embed_tau=self._embed_tau,
                 )
         finally:
             if was_training:
@@ -352,37 +367,52 @@ class LearningAlgorithm:
                 )
             )
             self.logger.info(
-                "Val drift horizon {}: base_error {:.6f} drift {:.6f} "
-                "cross {:.6f} auto_total {:.6f}".format(
+                "Val drift horizon {}: base_error {:.6f} auto_drift {:.6f} "
+                "error_drift_cross {:.6f} error_drift_total {:.6f} "
+                "recon_k {:.6f}".format(
                     self._drift_horizon,
                     scored["base_error"],
-                    scored["drift"],
-                    scored["cross"],
-                    scored["auto_total"],
+                    scored["auto_drift"],
+                    scored["error_drift_cross"],
+                    scored["error_drift_total"],
+                    scored["recon_k"],
                 )
             )
             self.logger.info(
-                "Val drift / var: base_error {:.6f} drift {:.6f} "
-                "cross {:.6f} auto_total {:.6f}".format(
+                "Val drift / var: base_error {:.6f} auto_drift {:.6f} "
+                "error_drift_cross {:.6f} error_drift_total {:.6f}".format(
                     scored["base_error_varnorm"],
-                    scored["drift_varnorm"],
-                    scored["cross_varnorm"],
-                    scored["auto_total_varnorm"],
+                    scored["auto_drift_varnorm"],
+                    scored["error_drift_cross_varnorm"],
+                    scored["error_drift_total_varnorm"],
                 )
             )
             self.logger.info(
-                "Val drift at k=1 {:.6f}, k=5 {:.6f}, k={} {:.6f}".format(
-                    scored["drift_k1"],
-                    scored["drift_k5"],
+                "Val auto_drift at k=1 {:.6f}, k=5 {:.6f}, k={} {:.6f}".format(
+                    scored["auto_drift_k1"],
+                    scored["auto_drift_k5"],
                     self._drift_horizon,
-                    scored["drift_k"],
+                    scored["auto_drift_k"],
                 )
             )
+            self.logger.info(
+                "Val finite-time exponent (k={}..{}): {:.6f}".format(
+                    self._ftle_fit[0], self._ftle_fit[1], scored["ftle"]
+                )
+            )
+            if self._val_rosenstein:
+                gt = self._lle_gt
+                gt_text = "nan" if gt is None or not np.isfinite(gt) else "{:.6f}".format(gt)
+                self.logger.info(
+                    "Val Rosenstein LLE mean {:.6f} std {:.6f} (GT {})".format(
+                        scored["lle_mean"], scored["lle_std"], gt_text
+                    )
+                )
         if self._metric_reference is None:
             reference = {"recon": float(val_loss[epoch])}
             if self._spectrum_windows is not None:
                 reference["spectrum"] = float(val_spectrum[epoch])
-                for name in ("base_error", "drift", "cross", "auto_total"):
+                for name in RAW_DRIFT_METRICS:
                     reference[name] = float(drift_arrays["val_" + name][epoch])
             self._metric_reference = reference
             self.logger.info(
@@ -577,6 +607,11 @@ class LearningAlgorithm:
         self._spectrum_observation = dataset_config.observation_process
         self._drift_horizon = None
         self._x_true_var = None
+        self._window_info = None
+        self._ftle_fit = (1, 1)
+        self._val_rosenstein = False
+        self._lle_gt = None
+        self._embed_tau, self._embed_dim = _get_delay_params(self.dataset_name)
         if self._monitor_spectrum:
             n_windows = parse_optional_int(
                 self.cfg.get("Training", "val_spectrum_n_windows", fallback=None),
@@ -603,10 +638,32 @@ class LearningAlgorithm:
                 self.cfg.get("Training", "val_drift_horizon", fallback=None)
             )
             enforce_drift_span(window_len, tf_steps, self._drift_horizon)
-            self._spectrum_windows = capture_fixed_spectrum_windows(
+            min_observed = parse_unit_interval(
+                self.cfg.get("Training", "val_window_tf_min_observed", fallback=None),
+                DEFAULT_TF_MIN_OBSERVED,
+                "val_window_tf_min_observed",
+            )
+            max_gap_frac = parse_unit_interval(
+                self.cfg.get("Training", "val_window_tf_max_gap_frac", fallback=None),
+                DEFAULT_TF_MAX_GAP_FRAC,
+                "val_window_tf_max_gap_frac",
+            )
+            self._ftle_fit = resolve_ftle_fit(
+                self.cfg.get("Training", "val_ftle_fit_start", fallback=None),
+                self.cfg.get("Training", "val_ftle_fit_end", fallback=None),
+                self._drift_horizon,
+            )
+            self._val_rosenstein = parse_val_rosenstein(
+                self.cfg.get("Training", "val_rosenstein", fallback=None)
+            )
+            self._spectrum_windows, self._window_info = capture_fixed_spectrum_windows(
                 val_dataloader.dataset,
                 n_windows=n_windows,
                 window_len=window_len,
+                tf_steps=tf_steps,
+                min_observed=min_observed,
+                max_gap_frac=max_gap_frac,
+                return_info=True,
             )
             for window in self._spectrum_windows:
                 enforce_drift_span(
@@ -624,12 +681,57 @@ class LearningAlgorithm:
             )
             logger.info(
                 "Drift validation fixed at start: flip {}, horizon {}, "
-                "variance over {} channel(s).".format(
+                "variance over {} channel(s). Finite-time fit k={}..{}.".format(
                     tf_steps,
                     self._drift_horizon,
                     int(self._x_true_var.shape[0]),
+                    self._ftle_fit[0],
+                    self._ftle_fit[1],
                 )
             )
+            info = self._window_info
+            logger.info(
+                "Validation windows fixed at start (seed {}): starts {}, "
+                "TF observed {}, max missing run {}, qualified {}.".format(
+                    info["seed"],
+                    info["starts"].tolist(),
+                    [round(float(v), 4) for v in info["tf_observed"]],
+                    info["tf_max_gap"].tolist(),
+                    info["qualified"].tolist(),
+                )
+            )
+            if info["relaxed"]:
+                logger.warning(
+                    "Fewer than {} validation windows met TF observed "
+                    "fraction >= {} and max gap fraction {}. Using the "
+                    "best-ranked windows listed above.".format(
+                        n_windows, min_observed, max_gap_frac
+                    )
+                )
+            if self._val_rosenstein:
+                import time
+
+                started = time.perf_counter()
+                self._lle_gt, _gt_std = rosenstein_on_free_run(
+                    self._spectrum_windows,
+                    tf_steps,
+                    m=self._embed_dim,
+                    tau=self._embed_tau,
+                    observation_process=self._spectrum_observation,
+                )
+                elapsed = time.perf_counter() - started
+                logger.info(
+                    "Rosenstein GT LLE {:.6f} on the free-run half "
+                    "(embed m={}, tau={}) in {:.3f}s. The same cost is "
+                    "paid again each epoch on the autonomous pass.".format(
+                        self._lle_gt, self._embed_dim, self._embed_tau, elapsed
+                    )
+                )
+            else:
+                logger.info(
+                    "val_rosenstein is false: skipping Rosenstein LLE. "
+                    "The finite-time exponent is still computed."
+                )
 
         ######################
         ### Batch Training ###
@@ -778,24 +880,33 @@ class LearningAlgorithm:
         warm_up_happened = False
         val_spectrum = series_or_new(loss_log, "val_spectrum", epochs)
         val_criteria_score = series_or_new(loss_log, "val_criteria_score", epochs)
+        drift_source = drift_series_source(loss_log)
         drift_arrays = {
-            "val_" + name: series_or_new(loss_log, "val_" + name, epochs)
+            "val_" + name: series_or_new(drift_source, "val_" + name, epochs)
             for name in DRIFT_METRIC_NAMES
         }
         if self.params["reload"] and isinstance(loss_log, dict):
             saved_ref = loss_log.get("val_criteria_reference")
             if isinstance(saved_ref, dict):
+                aliased = {}
+                for name, value in saved_ref.items():
+                    key = canonical_criterion_name(name)
+                    if key not in aliased or str(name) == key:
+                        aliased[key] = float(value)
                 restored = {}
                 for name in self._val_criteria:
-                    if name in saved_ref:
-                        restored[name] = float(saved_ref[name])
+                    if name in aliased:
+                        restored[name] = aliased[name]
                 if len(restored) == len(self._val_criteria):
                     self._val_reference = restored
             saved_metrics = loss_log.get("val_metric_reference")
             if isinstance(saved_metrics, dict) and saved_metrics:
-                self._metric_reference = {
-                    str(name): float(saved_metrics[name]) for name in saved_metrics
-                }
+                restored_metrics = {}
+                for name, value in saved_metrics.items():
+                    key = canonical_criterion_name(name)
+                    if key not in restored_metrics or str(name) == key:
+                        restored_metrics[key] = float(value)
+                self._metric_reference = restored_metrics
             if self._monitor_spectrum:
                 saved_horizon = loss_log.get("val_drift_horizon")
                 if saved_horizon is not None and int(saved_horizon) != int(
@@ -826,6 +937,36 @@ class LearningAlgorithm:
                             "windows at training start and does not match "
                             "this resume."
                         )
+                saved_starts = loss_log.get("val_window_starts")
+                if saved_starts is not None and self._window_info is not None:
+                    saved_starts = np.asarray(saved_starts, dtype=np.int64).reshape(-1)
+                    current = np.asarray(self._window_info["starts"], dtype=np.int64)
+                    if saved_starts.shape != current.shape or not np.array_equal(
+                        saved_starts, current
+                    ):
+                        raise ValueError(
+                            "validation window starts are fixed at training "
+                            f"start ({saved_starts.tolist()}); this resume "
+                            f"chose {current.tolist()}."
+                        )
+                saved_fit_start = loss_log.get("val_ftle_fit_start")
+                saved_fit_end = loss_log.get("val_ftle_fit_end")
+                if saved_fit_start is not None and int(saved_fit_start) != int(
+                    self._ftle_fit[0]
+                ):
+                    raise ValueError(
+                        "val_ftle_fit_start is fixed at training start "
+                        f"({int(saved_fit_start)}); this resume parsed "
+                        f"{int(self._ftle_fit[0])}."
+                    )
+                if saved_fit_end is not None and int(saved_fit_end) != int(
+                    self._ftle_fit[1]
+                ):
+                    raise ValueError(
+                        "val_ftle_fit_end is fixed at training start "
+                        f"({int(saved_fit_end)}); this resume parsed "
+                        f"{int(self._ftle_fit[1])}."
+                    )
 
         # Blank warmup_order is window_first. A blank warmup_patience_start
         # is max(1, round(frac * early_stop_patience)), frac 0.2.
@@ -898,6 +1039,10 @@ class LearningAlgorithm:
                 drift_horizon=self._drift_horizon,
                 drift_flip=self._spectrum_tf_steps,
                 x_true_var=self._x_true_var,
+                window_info=self._window_info,
+                lle_gt=self._lle_gt,
+                rosenstein=self._val_rosenstein if self._monitor_spectrum else None,
+                ftle_fit=self._ftle_fit if self._monitor_spectrum else None,
                 series={
                     **logged,
                     "kl_warm_values": kl_warm_values,
@@ -1725,6 +1870,21 @@ class LearningAlgorithm:
                         {
                             name: drift_arrays["val_" + name][: epoch + 1]
                             for name in DRIFT_PLOT_NAMES
+                        }
+                        if self._monitor_spectrum
+                        else None
+                    ),
+                    recon_k=(
+                        drift_arrays["val_recon_k"][: epoch + 1]
+                        if self._monitor_spectrum
+                        else None
+                    ),
+                    lyapunov=(
+                        {
+                            "ftle": drift_arrays["val_ftle"][: epoch + 1],
+                            "lle_mean": drift_arrays["val_lle_mean"][: epoch + 1],
+                            "lle_std": drift_arrays["val_lle_std"][: epoch + 1],
+                            "lle_gt": self._lle_gt,
                         }
                         if self._monitor_spectrum
                         else None

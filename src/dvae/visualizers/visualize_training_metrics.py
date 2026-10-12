@@ -32,17 +32,27 @@ def draw_loss_warmup_lines(
         ax.axvline(x=sequence_len_epoch, color="m", linestyle="-.")
 
 
+# Four Appendix B terms. Log figures use a symlog axis so a negative
+# error_drift_cross stays on the panel; the linear band is one decade
+# below the smallest nonzero magnitude (floor 1e-4).
+_DRIFT_LINE_ORDER = (
+    "base_error",
+    "auto_drift",
+    "error_drift_cross",
+    "error_drift_total",
+)
+_DRIFT_LINE_COLORS = {
+    "base_error": "tab:blue",
+    "auto_drift": "tab:orange",
+    "error_drift_cross": "tab:green",
+    "error_drift_total": "tab:red",
+}
 _DRIFT_PANEL_LABELS = {
     "base_error": "base_error",
-    "drift": "drift",
-    "cross": "cross",
-    "auto_total": "auto_total",
-    "base_error_varnorm": "base_error / var",
-    "drift_varnorm": "drift / var",
-    "cross_varnorm": "cross / var",
-    "auto_total_varnorm": "auto_total / var",
+    "auto_drift": "auto_drift",
+    "error_drift_cross": "error_drift_cross",
+    "error_drift_total": "error_drift_total",
 }
-_DRIFT_PANEL_ORDER = tuple(_DRIFT_PANEL_LABELS)
 
 
 def val_criteria_plot_series(
@@ -53,18 +63,20 @@ def val_criteria_plot_series(
     include_spectrum=None,
     drift=None,
 ):
-    """Raw recon, spectrum, Appendix B drift terms, then the selection score.
+    """Raw recon, spectrum, then the selection score.
 
     Checkpoint selection does not decide the panels. ``recon`` is always
     the raw validation loss. ``spectrum`` is the raw free-run spectral
     error, included when ``include_spectrum`` is true. The default is true
     when ``val_spectrum`` is an array, so passing ``None`` does not invent
-    a zero series. ``drift`` is a dict of raw and variance-normalised
-    Appendix B series; each present key is its own panel. The selection
-    score is included only when more than one criterion is selected.
-    Each entry is ``(name, values, selected)``. Arrays are used as given
-    (already sliced to the current epoch).
+    a zero series. The Appendix B terms are drawn by the overlay and the
+    separate drift figure, not as extra rows here. ``drift`` is accepted
+    so older callers keep working and is not turned into panels. The
+    selection score is included only when more than one criterion is
+    selected. Each entry is ``(name, values, selected)``. Arrays are used
+    as given (already sliced to the current epoch).
     """
+    del drift
     names = tuple(criteria)
     if include_spectrum is None:
         include_spectrum = val_spectrum is not None
@@ -83,22 +95,66 @@ def val_criteria_plot_series(
                 "spectrum" in names,
             )
         )
-    if drift:
-        for name in _DRIFT_PANEL_ORDER:
-            if name not in drift or drift[name] is None:
-                continue
-            series.append(
-                (
-                    name,
-                    np.asarray(drift[name], dtype=float),
-                    name in names,
-                )
-            )
     if len(names) > 1 and val_criteria_score is not None:
         series.append(
             ("combined", np.asarray(val_criteria_score, dtype=float), True)
         )
     return series
+
+
+def _drift_arrays(drift):
+    """The four Appendix B series, or None when none of them were stored."""
+    if not drift:
+        return None
+    out = {}
+    for name in _DRIFT_LINE_ORDER:
+        if name not in drift or drift[name] is None:
+            continue
+        out[name] = np.asarray(drift[name], dtype=float).reshape(-1)
+    return out or None
+
+
+def _finite_limits(arrays, pad=0.05):
+    chunks = []
+    for arr in arrays:
+        values = np.asarray(arr, dtype=float).reshape(-1)
+        values = values[np.isfinite(values)]
+        if values.size:
+            chunks.append(values)
+    if not chunks:
+        return None
+    vals = np.concatenate(chunks)
+    lo = float(vals.min())
+    hi = float(vals.max())
+    if lo == hi:
+        span = 1.0 if lo == 0.0 else abs(lo) * 0.05
+        return lo - span, hi + span
+    span = hi - lo
+    return lo - pad * span, hi + pad * span
+
+
+def _symlog_linthresh(arrays) -> float:
+    """Linear half-width for a symlog axis that still shows a negative cross.
+
+    One decade below the smallest nonzero magnitude, and at least 1e-4,
+    so values near zero are not crushed and a sign change stays visible.
+    """
+    chunks = []
+    for arr in arrays:
+        values = np.abs(np.asarray(arr, dtype=float).reshape(-1))
+        values = values[np.isfinite(values) & (values > 0.0)]
+        if values.size:
+            chunks.append(values)
+    if not chunks:
+        return 1e-3
+    return float(max(np.min(np.concatenate(chunks)) * 0.1, 1e-4))
+
+
+def _apply_symlog(ax, arrays, linthresh=None):
+    ax.set_yscale(
+        "symlog",
+        linthresh=_symlog_linthresh(arrays) if linthresh is None else float(linthresh),
+    )
 
 
 def _criteria_panel_title(model_name, name, selected):
@@ -113,7 +169,7 @@ def _criteria_panel_title(model_name, name, selected):
     return f"{model_name}: {label}"
 
 
-def _mark_best_epoch(ax, values, best_epoch):
+def _mark_best_epoch(ax, values, best_epoch, labeled=True):
     """Black circle at the checkpoint epoch. Skipped when it is not drawable."""
     if best_epoch is None:
         return
@@ -131,7 +187,7 @@ def _mark_best_epoch(ax, values, best_epoch):
         marker="o",
         color="black",
         markersize=8,
-        label="best epoch",
+        label="best epoch" if labeled else None,
         zorder=5,
     )
 
@@ -143,6 +199,130 @@ def _style_loss_panel(ax, values, label, title, ylabel, best_epoch=None):
     ax.set_xlabel("epochs", fontdict={"size": 16})
     ax.set_ylabel(ylabel, fontdict={"size": 16})
     ax.grid(True)
+
+
+def _canon_criteria(criteria):
+    from dvae.run_options import canonical_criterion_name
+
+    names = []
+    for name in criteria:
+        canon = canonical_criterion_name(name)
+        if canon and canon not in names:
+            names.append(canon)
+    return tuple(names)
+
+
+def _selected_label(name, criteria):
+    label = _DRIFT_PANEL_LABELS.get(name, name)
+    if name in _canon_criteria(criteria):
+        return f"{label} (selected)"
+    return label
+
+
+def _draw_warmup(ax, model_name, auto_sampling_method, noise_sampling_method, kl_warm_epochs, auto_warm_epochs, noise_warm_epochs, sequence_len_epochs):
+    draw_loss_warmup_lines(
+        ax,
+        model_name,
+        auto_sampling_method,
+        noise_sampling_method,
+        kl_warm_epochs,
+        auto_warm_epochs,
+        noise_warm_epochs,
+        sequence_len_epochs,
+    )
+
+
+def _draw_drift_overlay(ax, drift, recon_k, criteria, best_epoch, title):
+    """Four drift terms on one axes. ``recon_k`` sits behind the total."""
+    if recon_k is not None:
+        ax.plot(
+            np.asarray(recon_k, dtype=float).reshape(-1),
+            color="0.75",
+            linewidth=6,
+            solid_capstyle="round",
+            label="recon_k",
+            zorder=1,
+        )
+    has_total = "error_drift_total" in drift
+    labeled_best = False
+    for name in _DRIFT_LINE_ORDER:
+        if name not in drift:
+            continue
+        values = drift[name]
+        on_top = name == "error_drift_total"
+        ax.plot(
+            values,
+            color=_DRIFT_LINE_COLORS[name],
+            linewidth=2.0 if on_top else 1.5,
+            label=_selected_label(name, criteria),
+            zorder=4 if on_top else 3,
+        )
+        label_this = on_top or (not has_total and not labeled_best)
+        _mark_best_epoch(ax, values, best_epoch, labeled=label_this)
+        labeled_best = labeled_best or label_this
+    ax.legend(fontsize=12, title=title, title_fontsize=16)
+    ax.set_xlabel("epochs", fontdict={"size": 16})
+    ax.set_ylabel("drift terms", fontdict={"size": 16})
+    ax.grid(True)
+
+
+def _draw_lyapunov(ax, lyapunov, best_epoch, title):
+    """Finite-time exponent and Rosenstein mean ± std, with the GT line."""
+    ftle = lyapunov.get("ftle")
+    lle_mean = lyapunov.get("lle_mean")
+    lle_std = lyapunov.get("lle_std")
+    lle_gt = lyapunov.get("lle_gt")
+    labeled_best = False
+    if ftle is not None:
+        ftle = np.asarray(ftle, dtype=float).reshape(-1)
+        ax.plot(ftle, color="tab:purple", label="finite-time exponent")
+        _mark_best_epoch(ax, ftle, best_epoch, labeled=True)
+        labeled_best = True
+    if lle_mean is not None:
+        mean = np.asarray(lle_mean, dtype=float).reshape(-1)
+        if np.isfinite(mean).any():
+            ax.plot(mean, color="tab:brown", label="Rosenstein LLE")
+            if lle_std is not None:
+                std = np.asarray(lle_std, dtype=float).reshape(-1)
+                n = int(min(mean.size, std.size))
+                band = np.isfinite(mean[:n]) & np.isfinite(std[:n])
+                if band.any():
+                    xs = np.arange(n)
+                    low = mean[:n] - std[:n]
+                    high = mean[:n] + std[:n]
+                    ax.fill_between(
+                        xs[band],
+                        low[band],
+                        high[band],
+                        color="tab:brown",
+                        alpha=0.2,
+                        label="Rosenstein ± std",
+                    )
+            _mark_best_epoch(ax, mean, best_epoch, labeled=not labeled_best)
+    if lle_gt is not None and np.isfinite(float(lle_gt)):
+        ax.axhline(
+            float(lle_gt),
+            color="black",
+            linestyle="--",
+            linewidth=1.5,
+            label="GT LLE",
+        )
+    ax.legend(fontsize=12, title=title, title_fontsize=16)
+    ax.set_xlabel("epochs", fontdict={"size": 16})
+    ax.set_ylabel("exponent", fontdict={"size": 16})
+    ax.grid(True)
+
+
+def _lyapunov_present(lyapunov) -> bool:
+    if not lyapunov:
+        return False
+    ftle = lyapunov.get("ftle")
+    mean = lyapunov.get("lle_mean")
+    if ftle is not None and np.asarray(ftle).size:
+        return True
+    if mean is not None and np.isfinite(np.asarray(mean, dtype=float)).any():
+        return True
+    return False
 
 
 def build_val_criteria_figure(
@@ -160,23 +340,49 @@ def build_val_criteria_figure(
     best_epoch=None,
     include_spectrum=None,
     drift=None,
+    recon_k=None,
+    lyapunov=None,
+    log_scale=False,
 ):
-    """One axes per plotted metric, with warm-up lines and a best-epoch marker.
+    """Recon, spectrum, the four drift terms overlaid, then Lyapunov.
 
-    Recon is always drawn. Spectrum is drawn when it was computed.
-    Appendix B terms are drawn when ``drift`` supplies them.
-    The selection score is drawn when more than one criterion is selected.
-    ``best_epoch`` is a point on each series, not another vertical line.
+    The overlay sits under the spectrum panel. ``recon_k`` is a thick
+    light line behind ``error_drift_total``. Lyapunov is the finite-time
+    exponent and, when it was computed, Rosenstein mean ± std with the
+    ground-truth exponent as a horizontal line. The selection score is
+    last, and only when more than one criterion is selected.
+
+    ``log_scale`` uses a symlog y axis on every panel so a negative
+    ``error_drift_cross`` is drawn with its sign. Warm-up lines and the
+    best-epoch marker are on every panel.
     """
+    criteria = _canon_criteria(criteria)
     series = val_criteria_plot_series(
         criteria,
         val_loss,
         val_spectrum,
         val_criteria_score,
         include_spectrum=include_spectrum,
-        drift=drift,
     )
-    n_panels = max(len(series), 1)
+    combined = None
+    if series and series[-1][0] == "combined":
+        combined = series.pop()
+    drift_terms = _drift_arrays(drift)
+    blocks = [("series", item) for item in series]
+    if drift_terms is not None:
+        insert_at = 0
+        for i, block in enumerate(blocks):
+            if block[0] == "series" and block[1][0] == "spectrum":
+                insert_at = i + 1
+                break
+        else:
+            insert_at = len(blocks)
+        blocks.insert(insert_at, ("overlay", drift_terms))
+        if _lyapunov_present(lyapunov):
+            blocks.insert(insert_at + 1, ("lyapunov", lyapunov))
+    if combined is not None:
+        blocks.append(("series", combined))
+    n_panels = max(len(blocks), 1)
     fig, axes = plt.subplots(
         n_panels, 1, figsize=(8, 6 * n_panels), squeeze=False
     )
@@ -186,9 +392,14 @@ def build_val_criteria_figure(
         "spectrum": "spectrum error",
         "combined": "normalised sum",
     }
-    ylabel.update(_DRIFT_PANEL_LABELS)
-    for ax, (name, values, selected) in zip(axes[:, 0], series):
-        draw_loss_warmup_lines(
+    sym_arrays = []
+    if drift_terms is not None:
+        sym_arrays.extend(drift_terms.values())
+    if recon_k is not None:
+        sym_arrays.append(np.asarray(recon_k, dtype=float))
+    linthresh = _symlog_linthresh(sym_arrays) if sym_arrays else None
+    for ax, (kind, payload) in zip(axes[:, 0], blocks):
+        _draw_warmup(
             ax,
             model_name,
             auto_sampling_method,
@@ -198,17 +409,113 @@ def build_val_criteria_figure(
             noise_warm_epochs,
             sequence_len_epochs,
         )
-        _style_loss_panel(
-            ax,
-            values,
-            "validation",
-            _criteria_panel_title(model_name, name, selected),
-            ylabel.get(name, name),
-            best_epoch=best_epoch,
-        )
+        if kind == "overlay":
+            _draw_drift_overlay(
+                ax,
+                payload,
+                recon_k,
+                criteria,
+                best_epoch,
+                f"{model_name}: drift terms",
+            )
+            if log_scale:
+                _apply_symlog(ax, list(payload.values()) + (
+                    [] if recon_k is None else [np.asarray(recon_k, dtype=float)]
+                ), linthresh=linthresh)
+        elif kind == "lyapunov":
+            _draw_lyapunov(
+                ax, payload, best_epoch, f"{model_name}: Lyapunov"
+            )
+            if log_scale:
+                pieces = []
+                for key in ("ftle", "lle_mean"):
+                    if payload.get(key) is not None:
+                        pieces.append(payload[key])
+                if payload.get("lle_gt") is not None:
+                    pieces.append([payload["lle_gt"]])
+                _apply_symlog(ax, pieces or [[1.0]])
+        else:
+            name, values, selected = payload
+            _style_loss_panel(
+                ax,
+                values,
+                "validation",
+                _criteria_panel_title(model_name, name, selected),
+                ylabel.get(name, name),
+                best_epoch=best_epoch,
+            )
+            if log_scale:
+                _apply_symlog(ax, [values])
     if n_panels > 1:
         fig.tight_layout()
     return fig
+
+
+def build_drift_panels_figure(
+    drift,
+    kl_warm_epochs,
+    auto_warm_epochs,
+    noise_warm_epochs,
+    sequence_len_epochs,
+    model_name,
+    auto_sampling_method,
+    noise_sampling_method,
+    criteria=(),
+    best_epoch=None,
+    log_scale=False,
+):
+    """One subplot per Appendix B term, with one shared y range.
+
+    Order is base_error, auto_drift, error_drift_cross, error_drift_total.
+    ``log_scale`` is a symlog axis with that same range, so a negative
+    cross stays on the figure. Warm-up lines and the best-epoch marker
+    are on every subplot.
+    """
+    criteria = _canon_criteria(criteria)
+    terms = _drift_arrays(drift)
+    if terms is None:
+        raise ValueError("drift panels need at least one Appendix B series.")
+    names = [name for name in _DRIFT_LINE_ORDER if name in terms]
+    limits = _finite_limits([terms[name] for name in names])
+    linthresh = _symlog_linthresh([terms[name] for name in names])
+    fig, axes = plt.subplots(
+        len(names), 1, figsize=(8, 6 * len(names)), squeeze=False, sharey=True
+    )
+    plt.rcParams["font.size"] = 12
+    for ax, name in zip(axes[:, 0], names):
+        _draw_warmup(
+            ax,
+            model_name,
+            auto_sampling_method,
+            noise_sampling_method,
+            kl_warm_epochs,
+            auto_warm_epochs,
+            noise_warm_epochs,
+            sequence_len_epochs,
+        )
+        selected = name in tuple(criteria)
+        _style_loss_panel(
+            ax,
+            terms[name],
+            "validation",
+            _criteria_panel_title(model_name, name, selected),
+            _DRIFT_PANEL_LABELS[name],
+            best_epoch=best_epoch,
+        )
+        if log_scale:
+            _apply_symlog(ax, [terms[name] for name in names], linthresh=linthresh)
+        if limits is not None:
+            ax.set_ylim(*limits)
+    if len(names) > 1:
+        fig.tight_layout()
+    return fig
+
+
+def _save_val_figure(fig, save_figures_dir, filename):
+    fig_file = os.path.join(save_figures_dir, filename)
+    fig.savefig(fig_file)
+    plt.close(fig)
+    return fig_file
 
 
 def visualize_val_criteria(
@@ -228,28 +535,65 @@ def visualize_val_criteria(
     best_epoch=None,
     include_spectrum=None,
     drift=None,
+    recon_k=None,
+    lyapunov=None,
 ):
-    """Save validation criteria over epochs at the loss-figure cadence."""
+    """Save both validation layouts, each on a linear y axis and a symlog y axis.
+
+    The criteria figure is recon, spectrum, the overlaid drift terms, and
+    Lyapunov. The drift figure is the four terms on separate subplots that
+    share a y range. Log files use a ``_log`` suffix. A negative
+    ``error_drift_cross`` is kept by the symlog axis.
+    """
     plt.clf()
-    fig = build_val_criteria_figure(
-        criteria,
-        val_loss,
-        val_spectrum,
-        val_criteria_score,
-        kl_warm_epochs,
-        auto_warm_epochs,
-        noise_warm_epochs,
-        sequence_len_epochs,
-        model_name,
-        auto_sampling_method,
-        noise_sampling_method,
+    common = dict(
+        criteria=criteria,
+        val_loss=val_loss,
+        val_spectrum=val_spectrum,
+        val_criteria_score=val_criteria_score,
+        kl_warm_epochs=kl_warm_epochs,
+        auto_warm_epochs=auto_warm_epochs,
+        noise_warm_epochs=noise_warm_epochs,
+        sequence_len_epochs=sequence_len_epochs,
+        model_name=model_name,
+        auto_sampling_method=auto_sampling_method,
+        noise_sampling_method=noise_sampling_method,
         best_epoch=best_epoch,
         include_spectrum=include_spectrum,
         drift=drift,
+        recon_k=recon_k,
+        lyapunov=lyapunov,
     )
-    fig_file = os.path.join(save_figures_dir, f"vis_training_val_criteria_{tag}.png")
-    fig.savefig(fig_file)
-    plt.close(fig)
+    fig_file = None
+    for log_scale, suffix in ((False, ""), (True, "_log")):
+        fig = build_val_criteria_figure(**common, log_scale=log_scale)
+        saved = _save_val_figure(
+            fig,
+            save_figures_dir,
+            f"vis_training_val_criteria_{tag}{suffix}.png",
+        )
+        if fig_file is None:
+            fig_file = saved
+    if _drift_arrays(drift) is not None:
+        panel_kwargs = dict(
+            drift=drift,
+            kl_warm_epochs=kl_warm_epochs,
+            auto_warm_epochs=auto_warm_epochs,
+            noise_warm_epochs=noise_warm_epochs,
+            sequence_len_epochs=sequence_len_epochs,
+            model_name=model_name,
+            auto_sampling_method=auto_sampling_method,
+            noise_sampling_method=noise_sampling_method,
+            criteria=criteria,
+            best_epoch=best_epoch,
+        )
+        for log_scale, suffix in ((False, ""), (True, "_log")):
+            fig = build_drift_panels_figure(**panel_kwargs, log_scale=log_scale)
+            _save_val_figure(
+                fig,
+                save_figures_dir,
+                f"vis_training_val_drift_{tag}{suffix}.png",
+            )
     return fig_file
 
 

@@ -34,12 +34,18 @@ from those fields: raw recon, raw spectrum error when monitoring was on,
 and the stored selection score when more than one criterion was selected.
 
 When those windows were built, the history also stores the Appendix B
-terms ``val_base_error``, ``val_drift``, ``val_cross``, and
-``val_auto_total``, the same terms divided by the per-channel variance
-of ``x_true`` (``*_varnorm``), drift on the first 1, 5, and K steps,
-``val_x_true_var``, and the fixed flip and horizon. ``drift_monitored``
-is false when the windows were not built, and the figure then omits
-those panels.
+terms ``val_base_error``, ``val_auto_drift``, ``val_error_drift_cross``,
+and ``val_error_drift_total``, the same terms divided by the per-channel
+variance of ``x_true`` (``*_varnorm``), ``val_auto_drift_k1``,
+``val_auto_drift_k5``, and ``val_auto_drift_k``, ``val_recon_k`` (the
+autonomous MSE on those same K entries), ``val_ftle``, and when
+Rosenstein is on ``val_lle_mean`` / ``val_lle_std`` plus the scalar
+``val_lle_gt``. The chosen window starts and their teacher-forced
+observed fraction, longest missing run, and qualified flag are stored
+once. ``drift_monitored`` is false when the windows were not built, and
+the figure then omits those panels. Older files that still use
+``val_drift``, ``val_cross``, ``val_auto_total``, and ``val_drift_k*``
+are read as the new names.
 """
 
 from __future__ import annotations
@@ -53,17 +59,35 @@ import numpy as np
 # Appendix B series. Stored when the fixed windows were scored.
 DRIFT_SERIES_KEYS = (
     "val_base_error",
-    "val_drift",
-    "val_cross",
-    "val_auto_total",
+    "val_auto_drift",
+    "val_error_drift_cross",
+    "val_error_drift_total",
     "val_base_error_varnorm",
-    "val_drift_varnorm",
-    "val_cross_varnorm",
-    "val_auto_total_varnorm",
-    "val_drift_k1",
-    "val_drift_k5",
-    "val_drift_k",
+    "val_auto_drift_varnorm",
+    "val_error_drift_cross_varnorm",
+    "val_error_drift_total_varnorm",
+    "val_auto_drift_k1",
+    "val_auto_drift_k5",
+    "val_auto_drift_k",
+    "val_recon_k",
+    "val_ftle",
+    "val_lle_mean",
+    "val_lle_std",
 )
+
+# Names written before the rename. A reload copies them onto the new keys
+# when the new key is absent, so an older pickle still replots.
+_DRIFT_KEY_ALIASES = {
+    "val_drift": "val_auto_drift",
+    "val_cross": "val_error_drift_cross",
+    "val_auto_total": "val_error_drift_total",
+    "val_drift_varnorm": "val_auto_drift_varnorm",
+    "val_cross_varnorm": "val_error_drift_cross_varnorm",
+    "val_auto_total_varnorm": "val_error_drift_total_varnorm",
+    "val_drift_k1": "val_auto_drift_k1",
+    "val_drift_k5": "val_auto_drift_k5",
+    "val_drift_k": "val_auto_drift_k",
+}
 
 # Epoch series the training figures read. Present in every new history file.
 EPOCH_SERIES_KEYS = (
@@ -216,6 +240,10 @@ def build_training_history(
     drift_horizon=None,
     drift_flip=None,
     x_true_var=None,
+    window_info=None,
+    lle_gt=None,
+    rosenstein=None,
+    ftle_fit=None,
 ) -> dict:
     """One dict for the checkpoint ``loss_log`` and for ``loss_model.pckl``.
 
@@ -255,6 +283,28 @@ def build_training_history(
         history["val_drift_flip"] = int(drift_flip)
     if x_true_var is not None:
         history["val_x_true_var"] = np.asarray(x_true_var, dtype=float).reshape(-1)
+    if window_info:
+        history["val_window_starts"] = np.asarray(window_info["starts"], dtype=np.int64)
+        history["val_window_tf_observed"] = np.asarray(
+            window_info["tf_observed"], dtype=float
+        )
+        history["val_window_tf_max_gap"] = np.asarray(
+            window_info["tf_max_gap"], dtype=np.int64
+        )
+        history["val_window_qualified"] = np.asarray(
+            window_info["qualified"], dtype=bool
+        )
+        history["val_window_relaxed"] = bool(window_info["relaxed"])
+        history["val_window_tf_min_observed"] = float(window_info["min_observed"])
+        history["val_window_tf_max_gap_frac"] = float(window_info["max_gap_frac"])
+        history["val_window_seed"] = int(window_info["seed"])
+    if lle_gt is not None and np.isfinite(float(lle_gt)):
+        history["val_lle_gt"] = float(lle_gt)
+    if rosenstein is not None:
+        history["val_rosenstein"] = bool(rosenstein)
+    if ftle_fit is not None:
+        history["val_ftle_fit_start"] = int(ftle_fit[0])
+        history["val_ftle_fit_end"] = int(ftle_fit[1])
     metric = _float_reference(metric_reference)
     if metric is None:
         metric = _float_reference(val_reference)
@@ -367,10 +417,43 @@ def load_training_history(path) -> dict:
 
 
 def _criteria_names(history):
+    from dvae.run_options import canonical_criterion_name
+
     raw = history.get("val_criteria")
     if raw is None or str(raw).strip() == "":
         return ("recon",)
-    return tuple(part.strip() for part in str(raw).split(",") if part.strip())
+    names = []
+    for part in str(raw).split(","):
+        canon = canonical_criterion_name(part)
+        if canon and canon not in names:
+            names.append(canon)
+    return tuple(names) or ("recon",)
+
+
+def drift_series_source(loss_log):
+    """History dict with pre-rename drift series copied onto the current keys."""
+    if not isinstance(loss_log, dict):
+        return loss_log
+    return _with_drift_aliases(loss_log)
+
+
+def _with_drift_aliases(history) -> dict:
+    """Copy pre-rename drift keys onto the current names when those are absent."""
+    out = dict(history)
+    for old, new in _DRIFT_KEY_ALIASES.items():
+        if old in out and new not in out:
+            out[new] = out[old]
+    reference = out.get("val_metric_reference")
+    if isinstance(reference, dict):
+        from dvae.run_options import canonical_criterion_name
+
+        mapped = {}
+        for name, value in reference.items():
+            key = canonical_criterion_name(name)
+            if key not in mapped or str(name) == key:
+                mapped[key] = value
+        out["val_metric_reference"] = mapped
+    return out
 
 
 def _best_epoch_index(history, n):
@@ -395,9 +478,10 @@ def _drift_for_figure(history, n):
     A file with ``drift_monitored`` false does not grow zero panels.
     Older pickles without the series stay on recon and spectrum only.
     """
+    history = _with_drift_aliases(history)
     if "drift_monitored" in history and not bool(history["drift_monitored"]):
         return None
-    if "val_base_error" not in history:
+    if "val_base_error" not in history and "val_auto_drift" not in history:
         return None
     from dvae.eval.utils.local_drift_analysis import DRIFT_PLOT_NAMES
 
@@ -408,6 +492,40 @@ def _drift_for_figure(history, n):
             continue
         out[name] = np.asarray(history[key], dtype=float).reshape(-1)[: int(n)]
     return out or None
+
+
+def _recon_k_for_figure(history, n):
+    history = _with_drift_aliases(history)
+    if "drift_monitored" in history and not bool(history["drift_monitored"]):
+        return None
+    if "val_recon_k" not in history:
+        return None
+    return np.asarray(history["val_recon_k"], dtype=float).reshape(-1)[: int(n)]
+
+
+def _lyapunov_for_figure(history, n):
+    history = _with_drift_aliases(history)
+    if "drift_monitored" in history and not bool(history["drift_monitored"]):
+        return None
+    if "val_ftle" not in history and "val_lle_mean" not in history:
+        return None
+
+    def _opt(key):
+        if key not in history:
+            return None
+        return np.asarray(history[key], dtype=float).reshape(-1)[: int(n)]
+
+    gt = history.get("val_lle_gt")
+    try:
+        gt_value = None if gt is None else float(gt)
+    except (TypeError, ValueError):
+        gt_value = None
+    return {
+        "ftle": _opt("val_ftle"),
+        "lle_mean": _opt("val_lle_mean"),
+        "lle_std": _opt("val_lle_std"),
+        "lle_gt": gt_value,
+    }
 
 
 def _spectrum_for_figure(history, criteria):
@@ -536,6 +654,8 @@ def regenerate_training_figures(history, save_figures_dir, tag=None):
         best_epoch=_best_epoch_index(history, n),
         include_spectrum=include_spectrum,
         drift=_drift_for_figure(history, n),
+        recon_k=_recon_k_for_figure(history, n),
+        lyapunov=_lyapunov_for_figure(history, n),
     )
     if model_name in ("VRNN", "MT_VRNN"):
         visualize_recon_loss(

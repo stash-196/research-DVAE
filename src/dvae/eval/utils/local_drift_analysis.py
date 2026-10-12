@@ -3,15 +3,27 @@ import torch
 
 from dvae.eval.utils.forward_modes import is_indicate_observation, run_forward_with_mode
 
-# Appendix B names. ``cross`` is the mean of 2 d e, so
-# base_error + drift + cross equals the autonomous MSE on the same entries.
-RAW_DRIFT_METRICS = ("base_error", "drift", "cross", "auto_total")
+# Appendix B names. ``error_drift_cross`` is the mean of 2 d e, so
+# base_error + auto_drift + error_drift_cross equals the autonomous MSE
+# on the same entries. That MSE is also stored as ``recon_k``.
+RAW_DRIFT_METRICS = (
+    "base_error",
+    "auto_drift",
+    "error_drift_cross",
+    "error_drift_total",
+)
 VARNORM_DRIFT_METRICS = tuple(name + "_varnorm" for name in RAW_DRIFT_METRICS)
 # Prefix mean of ||d||^2 over the first k steps after the flip.
-DRIFT_SNAPSHOTS = ("drift_k1", "drift_k5", "drift_k")
-DRIFT_METRIC_NAMES = RAW_DRIFT_METRICS + VARNORM_DRIFT_METRICS + DRIFT_SNAPSHOTS
-# Plotted every epoch. Snapshots are logged and stored, not extra panels.
-DRIFT_PLOT_NAMES = RAW_DRIFT_METRICS + VARNORM_DRIFT_METRICS
+DRIFT_SNAPSHOTS = ("auto_drift_k1", "auto_drift_k5", "auto_drift_k")
+# recon_k matches error_drift_total. ftle is the log-norm slope.
+# lle_mean / lle_std are the Rosenstein summary (NaN when skipped).
+EXTRA_VAL_SERIES = ("recon_k", "ftle", "lle_mean", "lle_std")
+DRIFT_METRIC_NAMES = (
+    RAW_DRIFT_METRICS + VARNORM_DRIFT_METRICS + DRIFT_SNAPSHOTS + EXTRA_VAL_SERIES
+)
+# The four terms drawn on the validation figures. Snapshots and the
+# variance-normalised copies are stored, not given their own panels.
+DRIFT_PLOT_NAMES = RAW_DRIFT_METRICS
 
 
 def fork_tf_and_auto(
@@ -139,6 +151,77 @@ def _mean_masked(values, mask) -> float:
     return float(np.sum(np.where(mask, values, 0.0)) / count)
 
 
+def finite_time_exponent(d_norm_by_k, k_start=1, k_end=None) -> float:
+    """Slope of ``log ||d_k||`` versus ``k``.
+
+    ``k`` is 1-indexed from the first step after the flip. ``d_norm_by_k``
+    is that norm at each step (NaN or non-positive steps are left out).
+    Blank ``k_end`` uses the last step. Fewer than two usable steps is NaN.
+    """
+    norms = np.asarray(d_norm_by_k, dtype=np.float64).reshape(-1)
+    if norms.size == 0:
+        return float("nan")
+    k_start = int(k_start)
+    k_end = int(norms.size if k_end is None else k_end)
+    ks = np.arange(1, norms.size + 1)
+    use = (ks >= k_start) & (ks <= k_end) & np.isfinite(norms) & (norms > 0.0)
+    if int(use.sum()) < 2:
+        return float("nan")
+    slope = np.polyfit(ks[use].astype(np.float64), np.log(norms[use]), 1)[0]
+    if not np.isfinite(slope):
+        return float("nan")
+    return float(slope)
+
+
+def _signal_columns(n_channels: int, observation_process) -> list:
+    """Channels the free-run Lyapunov score uses. Mask channels are skipped."""
+    n_channels = int(n_channels)
+    if (
+        is_indicate_observation(observation_process)
+        and n_channels > 1
+    ):
+        return list(range(0, n_channels, 2))
+    return list(range(n_channels))
+
+
+def rosenstein_on_free_run(
+    windows,
+    tf_steps,
+    m=3,
+    tau=5,
+    dt=1.0,
+    observation_process=None,
+) -> tuple:
+    """Mean and sample std of Rosenstein LLE on each window's free-run tail.
+
+    Each channel is scored with ``rosenstein_lle`` from the eval module,
+    then averaged inside the window. The mean and std are across windows.
+    A window with no finite channel score is left out. An empty set is
+    ``(nan, nan)``.
+    """
+    from dvae.eval.utils.rosenstein_lyapunov import rosenstein_lle
+
+    tf_steps = int(tf_steps)
+    scores = []
+    for window in windows:
+        arr = _as_window(window)
+        tail = arr[tf_steps:]
+        channel_scores = []
+        for column in _signal_columns(arr.shape[1], observation_process):
+            value = rosenstein_lle(
+                tail[:, column], m=int(m), tau=int(tau), dt=float(dt)
+            )
+            if np.isfinite(value):
+                channel_scores.append(float(value))
+        if channel_scores:
+            scores.append(float(np.mean(channel_scores)))
+    if not scores:
+        return float("nan"), float("nan")
+    arr = np.asarray(scores, dtype=np.float64)
+    std = float(np.std(arr, ddof=1)) if arr.size > 1 else 0.0
+    return float(np.mean(arr)), std
+
+
 def drift_metrics_from_series(
     truths,
     teacher,
@@ -147,17 +230,24 @@ def drift_metrics_from_series(
     horizon,
     variance,
     observation_process=None,
+    ftle_k_start=1,
+    ftle_k_end=None,
 ) -> dict:
     """Appendix B decomposition on the first ``horizon`` steps after ``flip``.
 
     ``e = x_tf - x_true`` and ``d = x_auto - x_tf``. Over observed entries
-    in that span, ``base_error`` is mean ``e^2``, ``drift`` is mean ``d^2``,
-    ``cross`` is mean ``2 d e``, and ``auto_total`` is their sum. That sum
-    is the autonomous MSE on the same entries.
+    in that span, ``base_error`` is mean ``e^2``, ``auto_drift`` is mean
+    ``d^2``, ``error_drift_cross`` is mean ``2 d e``, and
+    ``error_drift_total`` is their sum. ``recon_k`` is the autonomous
+    MSE on those same entries, so it matches ``error_drift_total``.
 
     The ``*_varnorm`` values divide each entry by the variance of its
-    channel before the mean. ``drift_k1``, ``drift_k5``, and ``drift_k``
-    are the same drift reduced on the first 1, 5, and K steps.
+    channel before the mean. ``auto_drift_k1``, ``auto_drift_k5``, and
+    ``auto_drift_k`` are the same drift reduced on the first 1, 5, and
+    K steps. ``ftle`` is the slope of ``log ||d_k||`` versus ``k`` on
+    ``ftle_k_start..ftle_k_end`` (default ``1..K``). ``||d_k||`` is the
+    Euclidean norm of the observed entries at that step, pooled across
+    windows.
     """
     horizon = int(horizon)
     flip = int(flip)
@@ -177,6 +267,7 @@ def drift_metrics_from_series(
     e2_rows = []
     d2_rows = []
     cross_rows = []
+    auto_rows = []
     mask_rows = []
     for truth, tf, auto in zip(truths, teacher, autonomous):
         if truth.shape != (length, width) or tf.shape != truth.shape or auto.shape != truth.shape:
@@ -187,18 +278,23 @@ def drift_metrics_from_series(
         sl = slice(flip, flip + horizon)
         err = tf[sl] - truth[sl]
         delta = auto[sl] - tf[sl]
+        auto_err = auto[sl] - truth[sl]
         mask = observed_entry_mask(truth[sl], observation_process)
         e2_rows.append(err * err)
         d2_rows.append(delta * delta)
         cross_rows.append(2.0 * delta * err)
+        auto_rows.append(auto_err * auto_err)
         mask_rows.append(mask)
     e2 = np.stack(e2_rows, axis=0)
     d2 = np.stack(d2_rows, axis=0)
     cross = np.stack(cross_rows, axis=0)
+    auto2 = np.stack(auto_rows, axis=0)
     mask = np.stack(mask_rows, axis=0)
     base_error = _mean_masked(e2, mask)
-    drift = _mean_masked(d2, mask)
+    auto_drift = _mean_masked(d2, mask)
     cross_term = _mean_masked(cross, mask)
+    error_drift_total = base_error + auto_drift + cross_term
+    recon_k = _mean_masked(auto2, mask)
     safe = np.where(np.isfinite(scale) & (scale > 0.0), scale, 1.0)
     usable = mask & np.isfinite(scale) & (scale > 0.0)
     if int(usable.sum()) == 0:
@@ -208,18 +304,30 @@ def drift_metrics_from_series(
         base_n = _mean_masked(e2 * weights, usable)
         drift_n = _mean_masked(d2 * weights, usable)
         cross_n = _mean_masked(cross * weights, usable)
+    d_norm_by_k = np.full(horizon, np.nan, dtype=np.float64)
+    for step in range(horizon):
+        step_mask = mask[:, step, :]
+        if int(step_mask.sum()) == 0:
+            continue
+        d_norm_by_k[step] = float(
+            np.sqrt(np.sum(np.where(step_mask, d2[:, step, :], 0.0)))
+        )
     return {
         "base_error": base_error,
-        "drift": drift,
-        "cross": cross_term,
-        "auto_total": base_error + drift + cross_term,
+        "auto_drift": auto_drift,
+        "error_drift_cross": cross_term,
+        "error_drift_total": error_drift_total,
         "base_error_varnorm": base_n,
-        "drift_varnorm": drift_n,
-        "cross_varnorm": cross_n,
-        "auto_total_varnorm": base_n + drift_n + cross_n,
-        "drift_k1": _mean_masked(d2[:, :1], mask[:, :1]),
-        "drift_k5": _mean_masked(d2[:, :5], mask[:, :5]),
-        "drift_k": drift,
+        "auto_drift_varnorm": drift_n,
+        "error_drift_cross_varnorm": cross_n,
+        "error_drift_total_varnorm": base_n + drift_n + cross_n,
+        "auto_drift_k1": _mean_masked(d2[:, :1], mask[:, :1]),
+        "auto_drift_k5": _mean_masked(d2[:, :5], mask[:, :5]),
+        "auto_drift_k": auto_drift,
+        "recon_k": recon_k,
+        "ftle": finite_time_exponent(
+            d_norm_by_k, k_start=ftle_k_start, k_end=ftle_k_end
+        ),
     }
 
 
@@ -231,6 +339,11 @@ def score_fixed_validation_windows(
     variance,
     observation_process,
     device,
+    ftle_k_start=1,
+    ftle_k_end=None,
+    rosenstein=False,
+    embed_dim=3,
+    embed_tau=5,
 ) -> dict:
     """Spectrum error plus the Appendix B drift metrics on one window set.
 
@@ -268,7 +381,21 @@ def score_fixed_validation_windows(
         horizon=int(horizon),
         variance=variance,
         observation_process=observation_process,
+        ftle_k_start=ftle_k_start,
+        ftle_k_end=ftle_k_end,
     )
+    if rosenstein:
+        lle_mean, lle_std = rosenstein_on_free_run(
+            autonomous,
+            int(tf_steps),
+            m=embed_dim,
+            tau=embed_tau,
+            observation_process=observation_process,
+        )
+    else:
+        lle_mean, lle_std = float("nan"), float("nan")
+    metrics["lle_mean"] = lle_mean
+    metrics["lle_std"] = lle_std
     metrics["spectrum"] = float(
         free_run_spectrum_error(autonomous, truths, int(tf_steps))
     )

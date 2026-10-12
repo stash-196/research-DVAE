@@ -183,17 +183,23 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
 
     def _fig_save(self, fig_path, *args, **kwargs):
         name = str(fig_path)
-        if "val_criteria" in name:
-            if "val_criteria_legacy" in name:
+        stem = Path(name).name
+        if "val_criteria" in stem or stem.startswith("vis_training_val_drift"):
+            is_log = stem.endswith("_log.png")
+            if stem.startswith("vis_training_val_drift"):
+                key = "panels"
+            elif "val_criteria_legacy" in stem:
                 key = "legacy"
-            elif "val_criteria_recononly" in name:
+            elif "val_criteria_recononly" in stem:
                 key = "recon"
-            elif "val_criteria_nodrift" in name:
+            elif "val_criteria_nodrift" in stem:
                 key = "nodrift"
-            elif "val_criteria_drift" in name:
+            elif "val_criteria_drift" in stem:
                 key = "drift"
             else:
                 key = "both"
+            if is_log:
+                key = key + "_log"
             captured[key] = {
                 "titles": [
                     ax.get_legend().get_title().get_text() for ax in self.axes
@@ -206,6 +212,13 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
                     if line.get_label() == "best epoch"
                 ],
                 "warmup": [_vertical_colors(ax) for ax in self.axes],
+                "scales": [ax.get_yscale() for ax in self.axes],
+                "ylims": [ax.get_ylim() for ax in self.axes],
+                "labels": [
+                    line.get_label()
+                    for ax in self.axes
+                    for line in ax.lines
+                ],
             }
         return real_fig_save(self, fig_path, *args, **kwargs)
 
@@ -313,18 +326,32 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
     drift_series.update(
         {
             "val_base_error": np.array([1.0, 1.5, 2.0, 2.5]),
-            "val_drift": np.array([0.4, 0.4, 0.2, 0.2]),
-            "val_cross": np.array([0.1, 0.0, -0.1, 0.05]),
-            "val_auto_total": np.array([1.5, 1.9, 2.1, 2.75]),
+            "val_auto_drift": np.array([0.4, 0.4, 0.2, 0.2]),
+            "val_error_drift_cross": np.array([0.1, 0.0, -0.1, 0.05]),
+            "val_error_drift_total": np.array([1.5, 1.9, 2.1, 2.75]),
             "val_base_error_varnorm": np.array([0.5, 0.75, 1.0, 1.25]),
-            "val_drift_varnorm": np.array([0.2, 0.2, 0.1, 0.1]),
-            "val_cross_varnorm": np.array([0.05, 0.0, -0.05, 0.025]),
-            "val_auto_total_varnorm": np.array([0.75, 0.95, 1.05, 1.375]),
-            "val_drift_k1": np.array([0.1, 0.1, 0.05, 0.05]),
-            "val_drift_k5": np.array([0.2, 0.2, 0.1, 0.1]),
-            "val_drift_k": np.array([0.4, 0.4, 0.2, 0.2]),
+            "val_auto_drift_varnorm": np.array([0.2, 0.2, 0.1, 0.1]),
+            "val_error_drift_cross_varnorm": np.array([0.05, 0.0, -0.05, 0.025]),
+            "val_error_drift_total_varnorm": np.array([0.75, 0.95, 1.05, 1.375]),
+            "val_auto_drift_k1": np.array([0.1, 0.1, 0.05, 0.05]),
+            "val_auto_drift_k5": np.array([0.2, 0.2, 0.1, 0.1]),
+            "val_auto_drift_k": np.array([0.4, 0.4, 0.2, 0.2]),
+            "val_recon_k": np.array([1.5, 1.9, 2.1, 2.75]),
+            "val_ftle": np.array([0.02, 0.03, 0.05, 0.04]),
+            "val_lle_mean": np.array([0.40, 0.41, 0.42, 0.43]),
+            "val_lle_std": np.array([0.01, 0.01, 0.02, 0.02]),
         }
     )
+    window_info = {
+        "starts": np.array([100, 2200]),
+        "tf_observed": np.array([1.0, 0.97]),
+        "tf_max_gap": np.array([0, 4]),
+        "qualified": np.array([True, False]),
+        "relaxed": True,
+        "min_observed": 0.95,
+        "max_gap_frac": 0.01,
+        "seed": 1234567890,
+    }
     drift_history = build_training_history(
         end=4,
         model_name="MT_VRNN",
@@ -332,21 +359,25 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
         auto_sampling_method="ss",
         noise_sampling_method="none",
         delta_threshold=1e-4,
-        val_criteria=("recon", "drift"),
-        val_reference={"recon": 0.5, "drift": 0.4},
+        val_criteria=("recon", "auto_drift"),
+        val_reference={"recon": 0.5, "auto_drift": 0.4},
         metric_reference={
             "recon": 0.5,
             "spectrum": 0.3,
             "base_error": 1.0,
-            "drift": 0.4,
-            "cross": 0.1,
-            "auto_total": 1.5,
+            "auto_drift": 0.4,
+            "error_drift_cross": 0.1,
+            "error_drift_total": 1.5,
         },
         spectrum_monitored=True,
         drift_monitored=True,
         drift_horizon=60,
         drift_flip=1000,
         x_true_var=np.array([0.5, 2.0]),
+        window_info=window_info,
+        lle_gt=0.69,
+        rosenstein=True,
+        ftle_fit=(1, 60),
         series=drift_series,
         dataset_stats=_stats(),
     )
@@ -357,44 +388,61 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
     np.testing.assert_allclose(
         drift_loaded["val_base_error_varnorm"], [0.5, 0.75, 1.0, 1.25]
     )
-    np.testing.assert_allclose(drift_loaded["val_drift"], drift_loaded["val_drift_k"])
-    np.testing.assert_allclose(drift_loaded["val_drift_k1"], [0.1, 0.1, 0.05, 0.05])
-    np.testing.assert_allclose(drift_loaded["val_drift_k5"], [0.2, 0.2, 0.1, 0.1])
+    np.testing.assert_allclose(
+        drift_loaded["val_auto_drift"], drift_loaded["val_auto_drift_k"]
+    )
+    np.testing.assert_allclose(drift_loaded["val_auto_drift_k1"], [0.1, 0.1, 0.05, 0.05])
+    np.testing.assert_allclose(drift_loaded["val_auto_drift_k5"], [0.2, 0.2, 0.1, 0.1])
+    np.testing.assert_allclose(drift_loaded["val_recon_k"], drift_loaded["val_error_drift_total"])
+    np.testing.assert_allclose(drift_loaded["val_ftle"], [0.02, 0.03, 0.05, 0.04])
+    np.testing.assert_allclose(drift_loaded["val_lle_mean"], [0.40, 0.41, 0.42, 0.43])
+    np.testing.assert_allclose(drift_loaded["val_lle_std"], [0.01, 0.01, 0.02, 0.02])
+    assert drift_loaded["val_lle_gt"] == 0.69
+    assert drift_loaded["val_rosenstein"] is True
+    assert drift_loaded["val_ftle_fit_start"] == 1
+    assert drift_loaded["val_ftle_fit_end"] == 60
+    np.testing.assert_array_equal(drift_loaded["val_window_starts"], [100, 2200])
+    np.testing.assert_allclose(drift_loaded["val_window_tf_observed"], [1.0, 0.97])
+    np.testing.assert_array_equal(drift_loaded["val_window_tf_max_gap"], [0, 4])
+    assert list(drift_loaded["val_window_qualified"]) == [True, False]
+    assert drift_loaded["val_window_relaxed"] is True
+    assert drift_loaded["val_window_tf_min_observed"] == 0.95
+    assert drift_loaded["val_window_tf_max_gap_frac"] == 0.01
+    assert drift_loaded["val_window_seed"] == 1234567890
     assert drift_loaded["val_base_error"][0] == 1.0
     assert drift_loaded["val_metric_reference"]["base_error"] == 1.0
-    assert drift_loaded["val_metric_reference"]["drift"] == 0.4
+    assert drift_loaded["val_metric_reference"]["auto_drift"] == 0.4
     np.testing.assert_allclose(drift_loaded["val_x_true_var"], [0.5, 2.0])
     assert drift_loaded["val_drift_horizon"] == 60
     assert drift_loaded["val_drift_flip"] == 1000
     assert drift_loaded["drift_monitored"] is True
-    assert drift_loaded["val_criteria_reference"]["drift"] == 0.4
+    assert drift_loaded["val_criteria_reference"]["auto_drift"] == 0.4
     regenerate_training_figures(drift_loaded, tmp_path / "drift_figs")
     assert captured["drift"]["titles"] == [
         "MT_VRNN: recon (selected)",
         "MT_VRNN: spectrum error",
-        "MT_VRNN: base_error",
-        "MT_VRNN: drift (selected)",
-        "MT_VRNN: cross",
-        "MT_VRNN: auto_total",
-        "MT_VRNN: base_error / var",
-        "MT_VRNN: drift / var",
-        "MT_VRNN: cross / var",
-        "MT_VRNN: auto_total / var",
+        "MT_VRNN: drift terms",
+        "MT_VRNN: Lyapunov",
         "MT_VRNN: selection score",
     ]
-    assert captured["drift"]["best"] == [
-        2.5,
-        2.3,
-        2.0,
-        0.2,
-        -0.1,
-        2.1,
-        1.0,
-        0.1,
-        -0.05,
-        1.05,
-        4.0,
+    assert "recon_k" in captured["drift"]["labels"]
+    assert "auto_drift (selected)" in captured["drift"]["labels"]
+    assert "finite-time exponent" in captured["drift"]["labels"]
+    assert "GT LLE" in captured["drift"]["labels"]
+    assert captured["drift"]["best"] == [2.5, 2.3, 2.1, 0.05, 4.0]
+    assert captured["drift_log"]["scales"] == ["symlog"] * 5
+    assert captured["panels"]["titles"] == [
+        "MT_VRNN: base_error",
+        "MT_VRNN: auto_drift (selected)",
+        "MT_VRNN: error_drift_cross",
+        "MT_VRNN: error_drift_total",
     ]
+    assert captured["panels"]["ylims"][0] == captured["panels"]["ylims"][-1]
+    assert captured["panels_log"]["scales"] == ["symlog"] * 4
+    assert (tmp_path / "drift_figs" / "vis_training_val_criteria_drift.png").is_file()
+    assert (tmp_path / "drift_figs" / "vis_training_val_criteria_drift_log.png").is_file()
+    assert (tmp_path / "drift_figs" / "vis_training_val_drift_drift.png").is_file()
+    assert (tmp_path / "drift_figs" / "vis_training_val_drift_drift_log.png").is_file()
     for colors in captured["drift"]["warmup"]:
         assert "c" in colors and "r" in colors and "m" in colors
 
