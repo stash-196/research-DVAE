@@ -558,9 +558,10 @@ class LearningAlgorithm:
         # Blank val_criteria is recon,spectrum: each term divided by its
         # first validation epoch, then summed. Explicit recon, or
         # legacy_defaults / legacy_windowing, stays on the raw val_loss
-        # comparison. The figure still records raw recon and spectrum
-        # unless that legacy switch is on and spectrum is not selected.
-        # spectrum scores fixed free-run windows and does not resize them.
+        # comparison. The figure still records raw recon, spectrum, and
+        # the Appendix B drift terms unless that legacy switch is on and
+        # neither spectrum nor a drift term is selected. The windows, the
+        # flip, and val_drift_horizon are fixed here and are not resized.
         self._val_criteria = resolve_val_criteria(self.cfg)
         self._val_reference = None
         self._metric_reference = None
