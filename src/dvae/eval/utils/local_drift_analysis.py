@@ -192,18 +192,19 @@ def rosenstein_on_free_run(
     dt=1.0,
     observation_process=None,
 ) -> tuple:
-    """Mean and sample std of Rosenstein LLE on each window's free-run tail.
+    """Mean, sample std, and one Rosenstein LLE per window.
 
     Each channel is scored with ``rosenstein_lle`` from the eval module,
-    then averaged inside the window. The mean and std are across windows.
-    A window with no finite channel score is left out. An empty set is
-    ``(nan, nan)``.
+    then averaged inside the window. The mean and std are across windows
+    that returned a finite score. A window with no finite channel score
+    is NaN in the per-window array, so column ``i`` stays window ``i``.
+    An empty set is ``(nan, nan, empty array)``.
     """
     from dvae.eval.utils.rosenstein_lyapunov import rosenstein_lle
 
     tf_steps = int(tf_steps)
-    scores = []
-    for window in windows:
+    per_window = np.full(len(windows), np.nan, dtype=np.float64)
+    for index, window in enumerate(windows):
         arr = _as_window(window)
         tail = arr[tf_steps:]
         channel_scores = []
@@ -214,12 +215,12 @@ def rosenstein_on_free_run(
             if np.isfinite(value):
                 channel_scores.append(float(value))
         if channel_scores:
-            scores.append(float(np.mean(channel_scores)))
-    if not scores:
-        return float("nan"), float("nan")
-    arr = np.asarray(scores, dtype=np.float64)
-    std = float(np.std(arr, ddof=1)) if arr.size > 1 else 0.0
-    return float(np.mean(arr)), std
+            per_window[index] = float(np.mean(channel_scores))
+    finite = per_window[np.isfinite(per_window)]
+    if finite.size == 0:
+        return float("nan"), float("nan"), per_window
+    std = float(np.std(finite, ddof=1)) if finite.size > 1 else 0.0
+    return float(np.mean(finite)), std, per_window
 
 
 def drift_metrics_from_series(
@@ -312,6 +313,19 @@ def drift_metrics_from_series(
         d_norm_by_k[step] = float(
             np.sqrt(np.sum(np.where(step_mask, d2[:, step, :], 0.0)))
         )
+    ftle_per_window = np.full(d2.shape[0], np.nan, dtype=np.float64)
+    for index in range(d2.shape[0]):
+        norms = np.full(horizon, np.nan, dtype=np.float64)
+        for step in range(horizon):
+            step_mask = mask[index, step, :]
+            if int(step_mask.sum()) == 0:
+                continue
+            norms[step] = float(
+                np.sqrt(np.sum(np.where(step_mask, d2[index, step, :], 0.0)))
+            )
+        ftle_per_window[index] = finite_time_exponent(
+            norms, k_start=ftle_k_start, k_end=ftle_k_end
+        )
     return {
         "base_error": base_error,
         "auto_drift": auto_drift,
@@ -328,6 +342,7 @@ def drift_metrics_from_series(
         "ftle": finite_time_exponent(
             d_norm_by_k, k_start=ftle_k_start, k_end=ftle_k_end
         ),
+        "ftle_per_window": ftle_per_window,
     }
 
 
@@ -385,7 +400,7 @@ def score_fixed_validation_windows(
         ftle_k_end=ftle_k_end,
     )
     if rosenstein:
-        lle_mean, lle_std = rosenstein_on_free_run(
+        lle_mean, lle_std, lle_per_window = rosenstein_on_free_run(
             autonomous,
             int(tf_steps),
             m=embed_dim,
@@ -394,8 +409,10 @@ def score_fixed_validation_windows(
         )
     else:
         lle_mean, lle_std = float("nan"), float("nan")
+        lle_per_window = np.full(len(autonomous), np.nan, dtype=np.float64)
     metrics["lle_mean"] = lle_mean
     metrics["lle_std"] = lle_std
+    metrics["lle_per_window"] = lle_per_window
     metrics["spectrum"] = float(
         free_run_spectrum_error(autonomous, truths, int(tf_steps))
     )

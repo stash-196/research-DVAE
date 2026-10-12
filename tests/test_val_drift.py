@@ -253,6 +253,10 @@ def test_drift_layouts_share_range_and_keep_markers():
         "auto_drift": [0.4, 0.2],
         "error_drift_cross": [0.1, -0.1],
         "error_drift_total": [1.5, 2.1],
+        "base_error_varnorm": [0.5, 1.0],
+        "auto_drift_varnorm": [0.2, 0.1],
+        "error_drift_cross_varnorm": [0.05, -0.05],
+        "error_drift_total_varnorm": [0.75, 1.05],
     }
     recon_k = [1.5, 2.1]
     lyapunov = {
@@ -307,6 +311,8 @@ def test_drift_layouts_share_range_and_keep_markers():
     assert "finite-time exponent" in lyap_labels
     assert "Rosenstein LLE" in lyap_labels
     assert "GT LLE" in lyap_labels
+    band_labels = [coll.get_label() for coll in lyap.collections]
+    assert "Rosenstein ± std" in band_labels
     for ax in fig.axes:
         colors = _warmup_colors(ax)
         assert colors.count("c") == 2
@@ -390,6 +396,60 @@ def test_drift_layouts_share_range_and_keep_markers():
     assert [ax.get_ylim() for ax in log_panels.axes][0] == [
         ax.get_ylim() for ax in log_panels.axes
     ][-1]
+    var_fig = build_val_criteria_figure(
+        ("recon", "auto_drift"),
+        [0.5, 2.5],
+        [0.3, 2.3],
+        [2.0, 4.0],
+        [0, 3],
+        [0, 4],
+        [0],
+        [0, 6],
+        "VRNN",
+        "ss",
+        "none",
+        best_epoch=1,
+        drift=drift,
+        recon_k=recon_k,
+        lyapunov=lyapunov,
+        normalized=True,
+    )
+    assert [ax.get_legend().get_title().get_text() for ax in var_fig.axes][2] == (
+        "VRNN: drift terms / var"
+    )
+    var_labels = [line.get_label() for line in var_fig.axes[2].lines]
+    assert "recon_k / var" in var_labels
+    assert "auto_drift / var (selected)" in var_labels
+    var_best = next(
+        line for line in var_fig.axes[2].lines if line.get_label() == "best epoch"
+    )
+    assert float(np.asarray(var_best.get_ydata(), dtype=float).reshape(-1)[0]) == 1.05
+    var_panels = build_drift_panels_figure(
+        drift,
+        [0, 3],
+        [0, 4],
+        [0],
+        [0, 6],
+        "VRNN",
+        "ss",
+        "none",
+        criteria=("auto_drift",),
+        best_epoch=1,
+        normalized=True,
+    )
+    assert [ax.get_legend().get_title().get_text() for ax in var_panels.axes] == [
+        "VRNN: base_error / var",
+        "VRNN: auto_drift / var (selected)",
+        "VRNN: error_drift_cross / var",
+        "VRNN: error_drift_total / var",
+    ]
+    var_panel_best = [
+        float(np.asarray(line.get_ydata(), dtype=float).reshape(-1)[0])
+        for ax in var_panels.axes
+        for line in ax.lines
+        if line.get_label() == "best epoch"
+    ]
+    assert var_panel_best == [1.0, 0.1, -0.05, 1.05]
     for ax in list(panels.axes) + list(log_panels.axes):
         colors = _warmup_colors(ax)
         assert "c" in colors and "r" in colors and "m" in colors
@@ -410,6 +470,7 @@ def test_finite_time_exponent_is_the_log_norm_slope():
         [truth], [teacher], [autonomous], flip, horizon, np.array([1.0])
     )
     assert metrics["ftle"] == pytest.approx(0.1)
+    assert metrics["ftle_per_window"] == pytest.approx([0.1])
     assert metrics["recon_k"] == pytest.approx(metrics["error_drift_total"])
     assert finite_time_exponent(
         [np.exp(0.1 * k) for k in range(1, 9)], k_start=1, k_end=8
@@ -425,6 +486,31 @@ def test_finite_time_exponent_is_the_log_norm_slope():
         ftle_k_end=6,
     )
     assert narrowed["ftle"] == pytest.approx(0.1)
+    assert narrowed["ftle_per_window"] == pytest.approx([0.1])
+
+
+def test_ftle_per_window_keeps_each_window_slope():
+    horizon = 8
+    flip = 2
+    length = flip + horizon
+    windows = []
+    for slope in (0.1, 0.2):
+        truth = np.zeros((length, 1))
+        teacher = np.zeros((length, 1))
+        autonomous = np.zeros((length, 1))
+        for step in range(horizon):
+            autonomous[flip + step, 0] = np.exp(slope * (step + 1))
+        windows.append((truth, teacher, autonomous))
+    metrics = drift_metrics_from_series(
+        [item[0] for item in windows],
+        [item[1] for item in windows],
+        [item[2] for item in windows],
+        flip,
+        horizon,
+        np.array([1.0]),
+    )
+    assert metrics["ftle_per_window"] == pytest.approx([0.1, 0.2])
+    assert np.isfinite(metrics["ftle"])
 
 
 def test_rosenstein_cost_on_a_synthetic_epoch(capsys):
@@ -444,13 +530,19 @@ def test_rosenstein_cost_on_a_synthetic_epoch(capsys):
         windows.append(series.reshape(-1, 1))
         state = series[-1]
     started = time.perf_counter()
-    mean, std = rosenstein_on_free_run(windows, tf_steps=1000, m=3, tau=5)
+    mean, std, per_window = rosenstein_on_free_run(
+        windows, tf_steps=1000, m=3, tau=5
+    )
     elapsed = time.perf_counter() - started
-    assert np.isfinite(mean)
-    assert np.isfinite(std)
-    assert std >= 0.0
-    gt, _gt_std = rosenstein_on_free_run(windows, tf_steps=1000, m=3, tau=5)
+    assert per_window.shape == (10,)
+    assert np.isfinite(per_window).all()
+    assert mean == pytest.approx(float(np.mean(per_window)))
+    assert std == pytest.approx(float(np.std(per_window, ddof=1)))
+    gt, _gt_std, gt_windows = rosenstein_on_free_run(
+        windows, tf_steps=1000, m=3, tau=5
+    )
     assert gt == pytest.approx(mean)
+    assert gt_windows.shape == (10,)
     print(f"Rosenstein synthetic cost per epoch: {elapsed:.4f} s")
     captured = capsys.readouterr().out
     assert "Rosenstein synthetic cost per epoch:" in captured

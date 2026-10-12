@@ -51,6 +51,7 @@ from dvae.eval.utils.local_drift_analysis import (
     DRIFT_METRIC_NAMES,
     DRIFT_PLOT_NAMES,
     RAW_DRIFT_METRICS,
+    VARNORM_DRIFT_METRICS,
     enforce_drift_span,
     rosenstein_on_free_run,
     score_fixed_validation_windows,
@@ -90,6 +91,7 @@ from dvae.dataset.gap_grid import snapshot_window_stats
 from dvae.training_history import (
     build_training_history,
     drift_series_source,
+    restore_per_window,
     restore_matrix,
     save_training_history,
     series_or_new,
@@ -361,6 +363,13 @@ class LearningAlgorithm:
             val_spectrum[epoch] = float(scored["spectrum"])
             for name in DRIFT_METRIC_NAMES:
                 drift_arrays["val_" + name][epoch] = float(scored[name])
+            if self._lle_per_window is not None:
+                self._lle_per_window[epoch] = np.asarray(
+                    scored["lle_per_window"], dtype=float
+                )
+                self._ftle_per_window[epoch] = np.asarray(
+                    scored["ftle_per_window"], dtype=float
+                )
             self.logger.info(
                 "Val spectrum error (free-run half): {:.6f}".format(
                     val_spectrum[epoch]
@@ -611,6 +620,9 @@ class LearningAlgorithm:
         self._ftle_fit = (1, 1)
         self._val_rosenstein = False
         self._lle_gt = None
+        self._lle_gt_per_window = None
+        self._lle_per_window = None
+        self._ftle_per_window = None
         self._embed_tau, self._embed_dim = _get_delay_params(self.dataset_name)
         if self._monitor_spectrum:
             n_windows = parse_optional_int(
@@ -712,7 +724,7 @@ class LearningAlgorithm:
                 import time
 
                 started = time.perf_counter()
-                self._lle_gt, _gt_std = rosenstein_on_free_run(
+                self._lle_gt, _gt_std, self._lle_gt_per_window = rosenstein_on_free_run(
                     self._spectrum_windows,
                     tf_steps,
                     m=self._embed_dim,
@@ -885,6 +897,12 @@ class LearningAlgorithm:
             "val_" + name: series_or_new(drift_source, "val_" + name, epochs)
             for name in DRIFT_METRIC_NAMES
         }
+        n_val_windows = (
+            0 if self._spectrum_windows is None else len(self._spectrum_windows)
+        )
+        if self._monitor_spectrum:
+            self._lle_per_window = np.full((epochs, n_val_windows), np.nan)
+            self._ftle_per_window = np.full((epochs, n_val_windows), np.nan)
         if self.params["reload"] and isinstance(loss_log, dict):
             saved_ref = loss_log.get("val_criteria_reference")
             if isinstance(saved_ref, dict):
@@ -967,6 +985,25 @@ class LearningAlgorithm:
                         f"({int(saved_fit_end)}); this resume parsed "
                         f"{int(self._ftle_fit[1])}."
                     )
+                if "val_lle_per_window" in loss_log:
+                    self._lle_per_window = restore_per_window(
+                        loss_log["val_lle_per_window"], epochs, n_val_windows
+                    )
+                if "val_ftle_per_window" in loss_log:
+                    self._ftle_per_window = restore_per_window(
+                        loss_log["val_ftle_per_window"], epochs, n_val_windows
+                    )
+                saved_gt_windows = loss_log.get("val_lle_gt_per_window")
+                if saved_gt_windows is not None and self._lle_gt_per_window is not None:
+                    saved_gt_windows = np.asarray(saved_gt_windows, dtype=float).reshape(-1)
+                    if saved_gt_windows.shape != self._lle_gt_per_window.shape or not np.allclose(
+                        saved_gt_windows, self._lle_gt_per_window, equal_nan=True
+                    ):
+                        raise ValueError(
+                            "val_lle_gt_per_window is fixed from the "
+                            "validation windows at training start and does "
+                            "not match this resume."
+                        )
 
         # Blank warmup_order is window_first. A blank warmup_patience_start
         # is max(1, round(frac * early_stop_patience)), frac 0.2.
@@ -1043,6 +1080,9 @@ class LearningAlgorithm:
                 lle_gt=self._lle_gt,
                 rosenstein=self._val_rosenstein if self._monitor_spectrum else None,
                 ftle_fit=self._ftle_fit if self._monitor_spectrum else None,
+                lle_per_window=self._lle_per_window,
+                ftle_per_window=self._ftle_per_window,
+                lle_gt_per_window=self._lle_gt_per_window,
                 series={
                     **logged,
                     "kl_warm_values": kl_warm_values,
@@ -1869,7 +1909,7 @@ class LearningAlgorithm:
                     drift=(
                         {
                             name: drift_arrays["val_" + name][: epoch + 1]
-                            for name in DRIFT_PLOT_NAMES
+                            for name in DRIFT_PLOT_NAMES + VARNORM_DRIFT_METRICS
                         }
                         if self._monitor_spectrum
                         else None

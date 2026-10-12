@@ -186,6 +186,7 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
         stem = Path(name).name
         if "val_criteria" in stem or stem.startswith("vis_training_val_drift"):
             is_log = stem.endswith("_log.png")
+            is_varnorm = "_varnorm" in stem
             if stem.startswith("vis_training_val_drift"):
                 key = "panels"
             elif "val_criteria_legacy" in stem:
@@ -198,6 +199,8 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
                 key = "drift"
             else:
                 key = "both"
+            if is_varnorm:
+                key = key + "_varnorm"
             if is_log:
                 key = key + "_log"
             captured[key] = {
@@ -218,6 +221,11 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
                     line.get_label()
                     for ax in self.axes
                     for line in ax.lines
+                ],
+                "bands": [
+                    coll.get_label()
+                    for ax in self.axes
+                    for coll in ax.collections
                 ],
             }
         return real_fig_save(self, fig_path, *args, **kwargs)
@@ -342,6 +350,23 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
             "val_lle_std": np.array([0.01, 0.01, 0.02, 0.02]),
         }
     )
+    lle_per_window = np.array(
+        [
+            [0.39, 0.41],
+            [0.40, 0.42],
+            [0.40, 0.44],
+            [0.42, 0.44],
+        ]
+    )
+    ftle_per_window = np.array(
+        [
+            [0.01, 0.03],
+            [0.02, 0.04],
+            [0.04, 0.06],
+            [0.03, 0.05],
+        ]
+    )
+    lle_gt_per_window = np.array([0.68, 0.70])
     window_info = {
         "starts": np.array([100, 2200]),
         "tf_observed": np.array([1.0, 0.97]),
@@ -378,6 +403,9 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
         lle_gt=0.69,
         rosenstein=True,
         ftle_fit=(1, 60),
+        lle_per_window=lle_per_window,
+        ftle_per_window=ftle_per_window,
+        lle_gt_per_window=lle_gt_per_window,
         series=drift_series,
         dataset_stats=_stats(),
     )
@@ -398,6 +426,9 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
     np.testing.assert_allclose(drift_loaded["val_lle_mean"], [0.40, 0.41, 0.42, 0.43])
     np.testing.assert_allclose(drift_loaded["val_lle_std"], [0.01, 0.01, 0.02, 0.02])
     assert drift_loaded["val_lle_gt"] == 0.69
+    np.testing.assert_allclose(drift_loaded["val_lle_per_window"], lle_per_window)
+    np.testing.assert_allclose(drift_loaded["val_ftle_per_window"], ftle_per_window)
+    np.testing.assert_allclose(drift_loaded["val_lle_gt_per_window"], lle_gt_per_window)
     assert drift_loaded["val_rosenstein"] is True
     assert drift_loaded["val_ftle_fit_start"] == 1
     assert drift_loaded["val_ftle_fit_end"] == 60
@@ -429,8 +460,19 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
     assert "auto_drift (selected)" in captured["drift"]["labels"]
     assert "finite-time exponent" in captured["drift"]["labels"]
     assert "GT LLE" in captured["drift"]["labels"]
+    assert "Rosenstein ± std" in captured["drift"]["bands"]
     assert captured["drift"]["best"] == [2.5, 2.3, 2.1, 0.05, 4.0]
     assert captured["drift_log"]["scales"] == ["symlog"] * 5
+    assert captured["drift_varnorm"]["titles"] == [
+        "MT_VRNN: recon (selected)",
+        "MT_VRNN: spectrum error",
+        "MT_VRNN: drift terms / var",
+        "MT_VRNN: Lyapunov",
+        "MT_VRNN: selection score",
+    ]
+    assert "recon_k / var" in captured["drift_varnorm"]["labels"]
+    assert captured["drift_varnorm"]["best"] == [2.5, 2.3, 1.05, 0.05, 4.0]
+    assert captured["drift_varnorm_log"]["scales"] == ["symlog"] * 5
     assert captured["panels"]["titles"] == [
         "MT_VRNN: base_error",
         "MT_VRNN: auto_drift (selected)",
@@ -439,10 +481,26 @@ def test_save_reload_and_replot(tmp_path, monkeypatch):
     ]
     assert captured["panels"]["ylims"][0] == captured["panels"]["ylims"][-1]
     assert captured["panels_log"]["scales"] == ["symlog"] * 4
-    assert (tmp_path / "drift_figs" / "vis_training_val_criteria_drift.png").is_file()
-    assert (tmp_path / "drift_figs" / "vis_training_val_criteria_drift_log.png").is_file()
-    assert (tmp_path / "drift_figs" / "vis_training_val_drift_drift.png").is_file()
-    assert (tmp_path / "drift_figs" / "vis_training_val_drift_drift_log.png").is_file()
+    assert captured["panels_varnorm"]["titles"] == [
+        "MT_VRNN: base_error / var",
+        "MT_VRNN: auto_drift / var (selected)",
+        "MT_VRNN: error_drift_cross / var",
+        "MT_VRNN: error_drift_total / var",
+    ]
+    assert captured["panels_varnorm"]["best"] == [1.0, 0.1, -0.05, 1.05]
+    assert captured["panels_varnorm_log"]["scales"] == ["symlog"] * 4
+    drift_dir = tmp_path / "drift_figs"
+    for name in (
+        "vis_training_val_criteria_drift.png",
+        "vis_training_val_criteria_drift_log.png",
+        "vis_training_val_criteria_drift_varnorm.png",
+        "vis_training_val_criteria_drift_varnorm_log.png",
+        "vis_training_val_drift_drift.png",
+        "vis_training_val_drift_drift_log.png",
+        "vis_training_val_drift_drift_varnorm.png",
+        "vis_training_val_drift_drift_varnorm_log.png",
+    ):
+        assert (drift_dir / name).is_file()
     for colors in captured["drift"]["warmup"]:
         assert "c" in colors and "r" in colors and "m" in colors
 

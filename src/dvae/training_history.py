@@ -40,7 +40,11 @@ variance of ``x_true`` (``*_varnorm``), ``val_auto_drift_k1``,
 ``val_auto_drift_k5``, and ``val_auto_drift_k``, ``val_recon_k`` (the
 autonomous MSE on those same K entries), ``val_ftle``, and when
 Rosenstein is on ``val_lle_mean`` / ``val_lle_std`` plus the scalar
-``val_lle_gt``. The chosen window starts and their teacher-forced
+``val_lle_gt``. ``val_ftle_per_window`` and ``val_lle_per_window`` keep
+one value per fixed window; ``val_lle_gt_per_window`` is that same
+ground-truth exponent per window, computed once. The plotted Rosenstein
+band is ``val_lle_std``. Drift figures are written raw and as
+``*_varnorm``. The chosen window starts and their teacher-forced
 observed fraction, longest missing run, and qualified flag are stored
 once. ``drift_monitored`` is false when the windows were not built, and
 the figure then omits those panels. Older files that still use
@@ -184,6 +188,14 @@ def _slice_1d(values, end):
     return arr[: int(end)]
 
 
+def _slice_epoch_rows(values, end):
+    """Keep epoch rows of an ``(epoch, window)`` array."""
+    arr = np.asarray(values)
+    if end is None:
+        return arr
+    return arr[: int(end)]
+
+
 def _slice_2d_epochs(values, end):
     if values is None:
         return None
@@ -244,6 +256,9 @@ def build_training_history(
     lle_gt=None,
     rosenstein=None,
     ftle_fit=None,
+    lle_per_window=None,
+    ftle_per_window=None,
+    lle_gt_per_window=None,
 ) -> dict:
     """One dict for the checkpoint ``loss_log`` and for ``loss_model.pckl``.
 
@@ -300,6 +315,14 @@ def build_training_history(
         history["val_window_seed"] = int(window_info["seed"])
     if lle_gt is not None and np.isfinite(float(lle_gt)):
         history["val_lle_gt"] = float(lle_gt)
+    if lle_per_window is not None:
+        history["val_lle_per_window"] = _slice_epoch_rows(lle_per_window, end)
+    if ftle_per_window is not None:
+        history["val_ftle_per_window"] = _slice_epoch_rows(ftle_per_window, end)
+    if lle_gt_per_window is not None:
+        history["val_lle_gt_per_window"] = np.asarray(
+            lle_gt_per_window, dtype=float
+        ).reshape(-1)
     if rosenstein is not None:
         history["val_rosenstein"] = bool(rosenstein)
     if ftle_fit is not None:
@@ -363,6 +386,27 @@ def restore_matrix(saved, shape) -> np.ndarray:
     r = min(rows, arr.shape[0])
     c = min(cols, arr.shape[1])
     out[:r, :c] = arr[:r, :c]
+    return out
+
+
+def restore_per_window(saved, epochs, n_windows) -> np.ndarray:
+    """Copy an ``(epoch, window)`` Lyapunov trace into a length-``epochs`` buffer.
+
+    The window count is fixed at training start. A different width raises.
+    Missing epochs stay NaN.
+    """
+    epochs = int(epochs)
+    n_windows = int(n_windows)
+    out = np.full((epochs, n_windows), np.nan, dtype=np.float64)
+    arr = np.asarray(saved, dtype=np.float64)
+    if arr.ndim != 2 or int(arr.shape[1]) != n_windows:
+        width = None if arr.ndim != 2 else int(arr.shape[1])
+        raise ValueError(
+            "per-window Lyapunov was saved with "
+            f"{width} windows; this resume has {n_windows}."
+        )
+    rows = min(epochs, arr.shape[0])
+    out[:rows] = arr[:rows]
     return out
 
 
@@ -483,10 +527,13 @@ def _drift_for_figure(history, n):
         return None
     if "val_base_error" not in history and "val_auto_drift" not in history:
         return None
-    from dvae.eval.utils.local_drift_analysis import DRIFT_PLOT_NAMES
+    from dvae.eval.utils.local_drift_analysis import (
+        DRIFT_PLOT_NAMES,
+        VARNORM_DRIFT_METRICS,
+    )
 
     out = {}
-    for name in DRIFT_PLOT_NAMES:
+    for name in DRIFT_PLOT_NAMES + VARNORM_DRIFT_METRICS:
         key = "val_" + name
         if key not in history:
             continue
@@ -545,7 +592,7 @@ def _spectrum_for_figure(history, criteria):
     return False, None
 
 
-def regenerate_training_figures(history, save_figures_dir, tag=None):
+def regenerate_training_figures(history, save_figures_dir, tag=None, drift_norm="both"):
     """Redraw the training figures from a history dict. No data and no model.
 
     Parameter heatmaps and the long-sequence batch figure need a model and
@@ -656,6 +703,7 @@ def regenerate_training_figures(history, save_figures_dir, tag=None):
         drift=_drift_for_figure(history, n),
         recon_k=_recon_k_for_figure(history, n),
         lyapunov=_lyapunov_for_figure(history, n),
+        drift_norm=drift_norm,
     )
     if model_name in ("VRNN", "MT_VRNN"):
         visualize_recon_loss(
@@ -811,9 +859,20 @@ def main(argv=None) -> int:
         default=None,
         help="Filename tag. Blank uses the tag stored in the history.",
     )
+    parser.add_argument(
+        "--drift-norm",
+        choices=("raw", "varnorm", "both"),
+        default="both",
+        help=(
+            "Which drift-term figures to write. both saves raw and the "
+            "variance-normalised copies. Default: both."
+        ),
+    )
     args = parser.parse_args(argv)
     history = load_training_history(args.history)
-    written = regenerate_training_figures(history, args.out_dir, tag=args.tag)
+    written = regenerate_training_figures(
+        history, args.out_dir, tag=args.tag, drift_norm=args.drift_norm
+    )
     for path in written:
         print(path)
     return 0

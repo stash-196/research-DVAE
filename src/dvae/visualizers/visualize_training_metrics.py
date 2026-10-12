@@ -102,16 +102,26 @@ def val_criteria_plot_series(
     return series
 
 
-def _drift_arrays(drift):
-    """The four Appendix B series, or None when none of them were stored."""
+def _drift_arrays(drift, normalized=False):
+    """The four Appendix B series, raw or divided by the variance of ``x_true``.
+
+    ``normalized`` reads ``<name>_varnorm``. A missing variance-normalised
+    series is left out rather than drawn as the raw values. None when no
+    requested series is present.
+    """
     if not drift:
         return None
     out = {}
     for name in _DRIFT_LINE_ORDER:
-        if name not in drift or drift[name] is None:
+        key = name + "_varnorm" if normalized else name
+        if key not in drift or drift[key] is None:
             continue
-        out[name] = np.asarray(drift[name], dtype=float).reshape(-1)
+        out[name] = np.asarray(drift[key], dtype=float).reshape(-1)
     return out or None
+
+
+def _has_varnorm(drift) -> bool:
+    return _drift_arrays(drift, normalized=True) is not None
 
 
 def _finite_limits(arrays, pad=0.05):
@@ -157,13 +167,15 @@ def _apply_symlog(ax, arrays, linthresh=None):
     )
 
 
-def _criteria_panel_title(model_name, name, selected):
+def _criteria_panel_title(model_name, name, selected, normalized=False):
     """Legend title. Selected metrics are marked; the score panel is not."""
     if name == "combined":
         return f"{model_name}: selection score"
     label = _DRIFT_PANEL_LABELS.get(name)
     if label is None:
         label = "spectrum error" if name == "spectrum" else name
+    if normalized:
+        label = f"{label} / var"
     if selected:
         return f"{model_name}: {label} (selected)"
     return f"{model_name}: {label}"
@@ -212,8 +224,10 @@ def _canon_criteria(criteria):
     return tuple(names)
 
 
-def _selected_label(name, criteria):
+def _selected_label(name, criteria, normalized=False):
     label = _DRIFT_PANEL_LABELS.get(name, name)
+    if normalized:
+        label = f"{label} / var"
     if name in _canon_criteria(criteria):
         return f"{label} (selected)"
     return label
@@ -232,7 +246,7 @@ def _draw_warmup(ax, model_name, auto_sampling_method, noise_sampling_method, kl
     )
 
 
-def _draw_drift_overlay(ax, drift, recon_k, criteria, best_epoch, title):
+def _draw_drift_overlay(ax, drift, recon_k, criteria, best_epoch, title, normalized=False):
     """Four drift terms on one axes. ``recon_k`` sits behind the total."""
     if recon_k is not None:
         ax.plot(
@@ -240,7 +254,7 @@ def _draw_drift_overlay(ax, drift, recon_k, criteria, best_epoch, title):
             color="0.75",
             linewidth=6,
             solid_capstyle="round",
-            label="recon_k",
+            label="recon_k / var" if normalized else "recon_k",
             zorder=1,
         )
     has_total = "error_drift_total" in drift
@@ -254,7 +268,7 @@ def _draw_drift_overlay(ax, drift, recon_k, criteria, best_epoch, title):
             values,
             color=_DRIFT_LINE_COLORS[name],
             linewidth=2.0 if on_top else 1.5,
-            label=_selected_label(name, criteria),
+            label=_selected_label(name, criteria, normalized=normalized),
             zorder=4 if on_top else 3,
         )
         label_this = on_top or (not has_total and not labeled_best)
@@ -262,12 +276,16 @@ def _draw_drift_overlay(ax, drift, recon_k, criteria, best_epoch, title):
         labeled_best = labeled_best or label_this
     ax.legend(fontsize=12, title=title, title_fontsize=16)
     ax.set_xlabel("epochs", fontdict={"size": 16})
-    ax.set_ylabel("drift terms", fontdict={"size": 16})
+    ax.set_ylabel("drift terms / var" if normalized else "drift terms", fontdict={"size": 16})
     ax.grid(True)
 
 
 def _draw_lyapunov(ax, lyapunov, best_epoch, title):
-    """Finite-time exponent and Rosenstein mean ± std, with the GT line."""
+    """One axes: finite-time slope, Rosenstein mean ± across-window std, GT line.
+
+    The std band is the spread of the per-window Rosenstein estimates.
+    Both curves and the ground-truth reference share this subplot.
+    """
     ftle = lyapunov.get("ftle")
     lle_mean = lyapunov.get("lle_mean")
     lle_std = lyapunov.get("lle_std")
@@ -343,6 +361,7 @@ def build_val_criteria_figure(
     recon_k=None,
     lyapunov=None,
     log_scale=False,
+    normalized=False,
 ):
     """Recon, spectrum, the four drift terms overlaid, then Lyapunov.
 
@@ -353,8 +372,10 @@ def build_val_criteria_figure(
     last, and only when more than one criterion is selected.
 
     ``log_scale`` uses a symlog y axis on every panel so a negative
-    ``error_drift_cross`` is drawn with its sign. Warm-up lines and the
-    best-epoch marker are on every panel.
+    ``error_drift_cross`` is drawn with its sign. ``normalized`` draws
+    the four drift terms and ``recon_k`` divided by the variance of
+    ``x_true``; recon, spectrum, and Lyapunov stay in their own units.
+    Warm-up lines and the best-epoch marker are on every panel.
     """
     criteria = _canon_criteria(criteria)
     series = val_criteria_plot_series(
@@ -367,7 +388,10 @@ def build_val_criteria_figure(
     combined = None
     if series and series[-1][0] == "combined":
         combined = series.pop()
-    drift_terms = _drift_arrays(drift)
+    drift_terms = _drift_arrays(drift, normalized=normalized)
+    if normalized:
+        var_total = None if drift is None else drift.get("error_drift_total_varnorm")
+        recon_k = None if var_total is None else var_total
     blocks = [("series", item) for item in series]
     if drift_terms is not None:
         insert_at = 0
@@ -416,7 +440,12 @@ def build_val_criteria_figure(
                 recon_k,
                 criteria,
                 best_epoch,
-                f"{model_name}: drift terms",
+                (
+                    f"{model_name}: drift terms / var"
+                    if normalized
+                    else f"{model_name}: drift terms"
+                ),
+                normalized=normalized,
             )
             if log_scale:
                 _apply_symlog(ax, list(payload.values()) + (
@@ -463,16 +492,17 @@ def build_drift_panels_figure(
     criteria=(),
     best_epoch=None,
     log_scale=False,
+    normalized=False,
 ):
     """One subplot per Appendix B term, with one shared y range.
 
     Order is base_error, auto_drift, error_drift_cross, error_drift_total.
     ``log_scale`` is a symlog axis with that same range, so a negative
-    cross stays on the figure. Warm-up lines and the best-epoch marker
-    are on every subplot.
+    cross stays on the figure. ``normalized`` uses the ``*_varnorm``
+    series. Warm-up lines and the best-epoch marker are on every subplot.
     """
     criteria = _canon_criteria(criteria)
-    terms = _drift_arrays(drift)
+    terms = _drift_arrays(drift, normalized=normalized)
     if terms is None:
         raise ValueError("drift panels need at least one Appendix B series.")
     names = [name for name in _DRIFT_LINE_ORDER if name in terms]
@@ -494,12 +524,17 @@ def build_drift_panels_figure(
             sequence_len_epochs,
         )
         selected = name in tuple(criteria)
+        ylabel = _DRIFT_PANEL_LABELS[name]
+        if normalized:
+            ylabel = f"{ylabel} / var"
         _style_loss_panel(
             ax,
             terms[name],
             "validation",
-            _criteria_panel_title(model_name, name, selected),
-            _DRIFT_PANEL_LABELS[name],
+            _criteria_panel_title(
+                model_name, name, selected, normalized=normalized
+            ),
+            ylabel,
             best_epoch=best_epoch,
         )
         if log_scale:
@@ -537,13 +572,17 @@ def visualize_val_criteria(
     drift=None,
     recon_k=None,
     lyapunov=None,
+    drift_norm="both",
 ):
-    """Save both validation layouts, each on a linear y axis and a symlog y axis.
+    """Save both validation layouts, each raw and variance-normalised.
 
-    The criteria figure is recon, spectrum, the overlaid drift terms, and
-    Lyapunov. The drift figure is the four terms on separate subplots that
-    share a y range. Log files use a ``_log`` suffix. A negative
-    ``error_drift_cross`` is kept by the symlog axis.
+    Each of those is saved on a linear y axis and a symlog y axis.
+    ``drift_norm`` is ``raw``, ``varnorm``, or ``both`` (the default).
+    The variance-normalised files use a ``_varnorm`` suffix, before
+    ``_log`` when both apply. Log axes are symlog, so a negative
+    ``error_drift_cross`` keeps its sign. Lyapunov is one subplot: the
+    finite-time slope, the Rosenstein mean with its across-window std,
+    and the ground-truth line.
     """
     plt.clf()
     common = dict(
@@ -564,16 +603,26 @@ def visualize_val_criteria(
         recon_k=recon_k,
         lyapunov=lyapunov,
     )
+    modes = []
+    if drift_norm in ("raw", "both"):
+        modes.append((False, ""))
+    if drift_norm in ("varnorm", "both") and _has_varnorm(drift):
+        modes.append((True, "_varnorm"))
+    if not modes:
+        modes.append((False, ""))
     fig_file = None
-    for log_scale, suffix in ((False, ""), (True, "_log")):
-        fig = build_val_criteria_figure(**common, log_scale=log_scale)
-        saved = _save_val_figure(
-            fig,
-            save_figures_dir,
-            f"vis_training_val_criteria_{tag}{suffix}.png",
-        )
-        if fig_file is None:
-            fig_file = saved
+    for normalized, norm_suffix in modes:
+        for log_scale, log_suffix in ((False, ""), (True, "_log")):
+            fig = build_val_criteria_figure(
+                **common, log_scale=log_scale, normalized=normalized
+            )
+            saved = _save_val_figure(
+                fig,
+                save_figures_dir,
+                f"vis_training_val_criteria_{tag}{norm_suffix}{log_suffix}.png",
+            )
+            if fig_file is None:
+                fig_file = saved
     if _drift_arrays(drift) is not None:
         panel_kwargs = dict(
             drift=drift,
@@ -587,13 +636,18 @@ def visualize_val_criteria(
             criteria=criteria,
             best_epoch=best_epoch,
         )
-        for log_scale, suffix in ((False, ""), (True, "_log")):
-            fig = build_drift_panels_figure(**panel_kwargs, log_scale=log_scale)
-            _save_val_figure(
-                fig,
-                save_figures_dir,
-                f"vis_training_val_drift_{tag}{suffix}.png",
-            )
+        for normalized, norm_suffix in modes:
+            if _drift_arrays(drift, normalized=normalized) is None:
+                continue
+            for log_scale, log_suffix in ((False, ""), (True, "_log")):
+                fig = build_drift_panels_figure(
+                    **panel_kwargs, log_scale=log_scale, normalized=normalized
+                )
+                _save_val_figure(
+                    fig,
+                    save_figures_dir,
+                    f"vis_training_val_drift_{tag}{norm_suffix}{log_suffix}.png",
+                )
     return fig_file
 
 
