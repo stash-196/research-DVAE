@@ -933,6 +933,9 @@ class LearningAlgorithm:
             val_recon = series_or_new(loss_log, "val_recon", epochs)
             val_kl = series_or_new(loss_log, "val_kl", epochs)
             best_val_loss = checkpoint["best_val_loss"]
+            # A finite best from before the resume means selection already
+            # ran; do not let the no-finite-spectrum fallback overwrite it.
+            self._any_selection_eligible = bool(np.isfinite(best_val_loss))
             cpt_patience = 0
             cur_best_epoch = start_epoch
             best_state_dict = self.model.state_dict()
