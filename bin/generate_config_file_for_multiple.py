@@ -517,6 +517,7 @@ if __name__ == "__main__":
             "dataset_name": dataset_name,
             "dataset_label": dataset_label,
             "mask_label": mask_label,
+            "stream_dataset_labels": ["None"],
             # XhroProper only (other datasets ignore these). None keeps
             # {data_dir}/xhro_packet_loss/grok_output/{dataset_label}_{variant}.
             # "multi" → suntory/xhro_dataset_v2/grok_output/{dataset_label}

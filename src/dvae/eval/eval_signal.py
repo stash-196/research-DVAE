@@ -79,7 +79,7 @@ from dvae.dataset.xhro_proper_dataset import (
     windowing_from_config,
 )
 from dvae.eval.window_length import apply_eval_seq_len, dataset_max_window_length
-from dvae.run_options import eval_output_dir, resolve_mask_label_override
+from dvae.run_options import eval_output_dir, resolve_cross_stream_eval
 from dvae.eval.alpha_vs_spectrum import save_alpha_vs_spectrum_figures
 from dvae.eval.maybe_alphas import alphas_to_metric_list, maybe_alphas_per_unit
 from dvae.eval.utils.delay_dim_selection import (
@@ -342,7 +342,22 @@ class Options:
                 "Override [DataFrame] mask_label for this eval so a model can "
                 "be scored on another variant. When the override differs from "
                 "the config, artifacts are written under eval_mask_<suffix>/ "
-                "and the in-domain evaluation_summary.yaml is left in place."
+                "and the in-domain evaluation_summary.yaml is left in place. "
+                "Packet-loss session folders are <recording id>_<stream>. "
+                "If the other stream has a different recording id, also pass "
+                "--dataset-label or set stream_dataset_labels."
+            ),
+        )
+        self.parser.add_argument(
+            "--dataset-label",
+            dest="dataset_label",
+            type=str,
+            default=None,
+            help=(
+                "Recording id of the stream being evaluated. Packet-loss "
+                "folders are <this id>_<mask-label>, not the training id "
+                "with the stream suffix swapped. Crop seconds and segment "
+                "start/end stay on the config. Ignored when omitted."
             ),
         )
         self.parser.add_argument(
@@ -637,15 +652,25 @@ if __name__ == "__main__":
     config_dict = {section: dict(cfg[section]) for section in cfg.sections()}
 
     config_mask_label = cfg.get("DataFrame", "mask_label", fallback=None)
-    eval_mask_label, eval_output_suffix = resolve_mask_label_override(
+    config_dataset_label = cfg.get("DataFrame", "dataset_label", fallback=None)
+    cross_stream = resolve_cross_stream_eval(
+        config_dataset_label,
         config_mask_label,
         params.get("mask_label"),
+        params.get("dataset_label"),
         params.get("eval_output_suffix"),
+        optional_config_str(cfg, "DataFrame", "stream_dataset_labels"),
+        optional_config_str(cfg, "DataFrame", "corpus"),
     )
-    if params.get("mask_label"):
+    eval_mask_label = cross_stream["mask_label"]
+    eval_output_suffix = cross_stream["eval_output_suffix"]
+    if params.get("mask_label") or params.get("dataset_label"):
         print(
             f"[Eval] mask_label override={eval_mask_label!r} "
-            f"config={config_mask_label!r} suffix={eval_output_suffix!r}"
+            f"config={config_mask_label!r} "
+            f"recording_id={cross_stream['resolved_recording_id']!r} "
+            f"config_dataset_label={config_dataset_label!r} "
+            f"suffix={eval_output_suffix!r}"
         )
 
     # Create DatasetConfig for evaluation
@@ -666,8 +691,9 @@ if __name__ == "__main__":
         # stays unset until apply_eval_seq_len.
         segment_min_len=training_initial_sequence_len(cfg),
         device=device,
-        dataset_label=cfg.get("DataFrame", "dataset_label", fallback=None),
+        dataset_label=cross_stream["dataset_label"],
         mask_label=eval_mask_label,
+        stream_dataset_labels=cross_stream["stream_dataset_labels"] or None,
         data_root=optional_config_str(cfg, "DataFrame", "data_root"),
         corpus=optional_config_str(cfg, "DataFrame", "corpus"),
         crop_start_sec=optional_config_float(cfg, "DataFrame", "crop_start_sec"),
@@ -720,6 +746,10 @@ if __name__ == "__main__":
     if params.get("mask_label"):
         metrics["mask_label_override"] = eval_mask_label
         metrics["mask_label_config"] = config_mask_label
+        metrics["eval_output_suffix"] = eval_output_suffix
+    if cross_stream["resolved_recording_id"] not in (None, "", config_dataset_label):
+        metrics["dataset_label_config"] = config_dataset_label
+        metrics["dataset_label_override"] = cross_stream["resolved_recording_id"]
         metrics["eval_output_suffix"] = eval_output_suffix
     print(
         f"[Eval] WEIGHTS_SOURCE={metrics['weights_source']} "
