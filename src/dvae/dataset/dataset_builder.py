@@ -43,6 +43,9 @@ class DatasetConfig:
     data_dir: str
     dataset_label: str | None = None
     mask_label: str | None = None
+    # Packet-loss stream -> recording id. None keeps dataset_label + variant.
+    # A str is ``realtime:<id>,retrans:<id>``. A dict is the parsed map.
+    stream_dataset_labels: str | dict | None = None
     # XhroProper session parent. Other datasets accept and ignore these.
     # None keeps XhroProper's packet-loss grok_output path.
     data_root: str | None = None

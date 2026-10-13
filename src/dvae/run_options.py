@@ -390,6 +390,62 @@ def resolve_mask_label_override(
     return override, _sanitize_suffix(str(suffix_raw))
 
 
+def resolve_cross_stream_eval(
+    config_dataset_label,
+    config_mask_label,
+    mask_override,
+    dataset_override,
+    explicit_suffix,
+    stream_dataset_labels,
+    corpus=None,
+) -> dict:
+    """Session ids for one eval, without changing crop or segment times.
+
+    ``dataset_label`` in the result is the config value. ``stream_dataset_labels``
+    is the map session lookup uses. ``--dataset-label`` writes the target
+    stream's recording id into that map. ``--mask-label`` still selects the
+    stream suffix. A changed recording id nests outputs the same way a
+    changed mask label does. The multi corpus keeps the config id.
+    """
+    from dvae.dataset.xhro_proper_dataset import (
+        _normalize_corpus,
+        _resolve_variant,
+        parse_stream_dataset_labels,
+        recording_id_for_stream,
+    )
+
+    mask_label, suffix = resolve_mask_label_override(
+        config_mask_label, mask_override, explicit_suffix
+    )
+    stream_map = parse_stream_dataset_labels(stream_dataset_labels)
+    variant = _resolve_variant(mask_label)
+    if _text(dataset_override):
+        stream_map[variant] = _text(dataset_override)
+        config_id = _text(config_dataset_label)
+        if config_id and "," not in config_id and config_id not in stream_map.values():
+            config_variant = _resolve_variant(config_mask_label)
+            stream_map.setdefault(config_variant, config_id)
+    config_id = _text(config_dataset_label)
+    anchors = [config_id] if config_id and "," not in config_id else []
+    resolved = recording_id_for_stream(
+        config_dataset_label,
+        variant,
+        stream_map,
+        corpus=_normalize_corpus(corpus),
+        anchor_ids=anchors,
+    )
+    changed = bool(stream_map) and resolved != config_id
+    if changed and suffix is None:
+        suffix = _sanitize_suffix(_text(dataset_override) or resolved)
+    return {
+        "dataset_label": config_dataset_label,
+        "mask_label": mask_label,
+        "stream_dataset_labels": stream_map,
+        "resolved_recording_id": resolved,
+        "eval_output_suffix": suffix,
+    }
+
+
 def eval_output_dir(weights_dir: str, suffix: str | None) -> str:
     """Run directory for eval artifacts. ``suffix`` nests them under ``eval_mask_``."""
     if suffix is None or _text(suffix) == "":

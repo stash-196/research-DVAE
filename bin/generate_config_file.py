@@ -242,6 +242,7 @@ if __name__ == "__main__":
             "dataset_name": dataset_name,
             "dataset_label": dataset_label,
             "mask_label": mask_label,
+            "stream_dataset_labels": ["None"],
             "s_dim": s_dim,
             "shuffle": shuffle,
             "batch_size": batch_size,

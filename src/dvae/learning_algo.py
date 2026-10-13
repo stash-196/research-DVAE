@@ -621,6 +621,9 @@ class LearningAlgorithm:
             device=self.device,
             dataset_label=self.dataset_label,
             mask_label=self.mask_label,
+            stream_dataset_labels=optional_config_str(
+                self.cfg, "DataFrame", "stream_dataset_labels"
+            ),
             data_root=optional_config_str(self.cfg, "DataFrame", "data_root"),
             corpus=optional_config_str(self.cfg, "DataFrame", "corpus"),
             crop_start_sec=optional_config_float(self.cfg, "DataFrame", "crop_start_sec"),

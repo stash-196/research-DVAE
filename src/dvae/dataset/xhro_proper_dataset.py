@@ -107,6 +107,12 @@ nor ``corpus`` is set, the path is unchanged::
 
 ``variant`` comes from ``mask_label``: ``realtime`` or ``retrans``
 (``recovered`` aliases ``retrans``). That is ``corpus="packet_loss"``.
+The realtime and retrans streams can have different recording ids, so
+the folder is not ``<training id>_<other stream>``.
+``stream_dataset_labels`` maps each stream to its id
+(``realtime:<id>,retrans:<id>``). Eval ``--dataset-label`` sets the
+target stream's id for that run. Crop seconds and segment start/end
+stay on the config.
 
 ``corpus="multi"`` is the suntory Multi tree. ``dataset_label`` **is** the
 session folder name (``xhro_01_XH015``). ``mask_label`` is ignored — do not
@@ -280,6 +286,78 @@ GROK_EXTRA_COLUMNS = {
 }
 
 GROK_EXTRA_PROCESSES = set(GROK_EXTRA_COLUMNS.keys())
+
+
+def parse_stream_dataset_labels(raw) -> dict[str, str]:
+    """Map ``realtime`` / ``retrans`` to a packet-loss recording id.
+
+    Blank is an empty map. Entries are ``variant:recording_id`` separated
+    by commas. ``recovered`` is the ``retrans`` alias. The recording id
+    is the folder stem, not ``<id>_<stream>``.
+    """
+    if _is_unset(raw):
+        return {}
+    if isinstance(raw, dict):
+        pairs = [(str(key), value) for key, value in raw.items()]
+    else:
+        pairs = []
+        for part in str(raw).split(","):
+            text = part.strip()
+            if not text:
+                continue
+            if ":" not in text:
+                raise ValueError(
+                    "stream_dataset_labels entries must be "
+                    f"variant:recording_id, got {text!r}."
+                )
+            key, value = text.split(":", 1)
+            pairs.append((key, value))
+    out: dict[str, str] = {}
+    for key, value in pairs:
+        variant_name = str(key).strip()
+        recording_id = str(value).strip()
+        if variant_name == "" or recording_id == "":
+            raise ValueError(
+                "stream_dataset_labels entries need a variant and a "
+                f"recording id, got {key!r}:{value!r}."
+            )
+        variant = _resolve_variant(variant_name)
+        if variant in out:
+            raise ValueError(
+                f"stream_dataset_labels repeats variant {variant!r}."
+            )
+        out[variant] = recording_id
+    return out
+
+
+def recording_id_for_stream(
+    recording_id,
+    variant,
+    stream_ids,
+    *,
+    corpus=None,
+    anchor_ids=(),
+) -> str:
+    """Recording id used in ``<id>_<stream>``.
+
+    With no map, or on the multi corpus, ``recording_id`` is unchanged.
+    When ``variant`` is in the map, an id that the map already names, or
+    the single configured ``dataset_label``, is replaced by that stream's
+    id. Other subjects are left alone. Segment start and end are not
+    this function's job.
+    """
+    label = "" if _is_unset(recording_id) else str(recording_id).strip()
+    if corpus == "multi" or not stream_ids or variant is None:
+        return label
+    if variant not in stream_ids:
+        return label
+    known = {str(value).strip() for value in stream_ids.values() if not _is_unset(value)}
+    anchors = [str(item).strip() for item in anchor_ids if not _is_unset(item)]
+    if len(anchors) == 1:
+        known.add(anchors[0])
+    if label not in known:
+        return label
+    return str(stream_ids[variant]).strip()
 
 
 def _resolve_variant(mask_label: str | None) -> str:
@@ -2366,6 +2444,10 @@ class XhroProper(Xhro):
         folder name (e.g. ``xhro_01_XH015``).
       - mask_label: ``realtime`` or ``retrans`` (``recovered`` aliases
         retrans) for packet-loss. Ignored when ``corpus`` is ``multi``.
+      - stream_dataset_labels: packet-loss only. Blank keeps
+        ``<dataset_label>_<stream>``. ``realtime:<id>,retrans:<id>`` uses
+        that stream's recording id. Crop seconds and segment start/end
+        stay as given.
       - corpus: ``packet_loss`` (default) or ``multi``.
       - data_root: folder that contains session directories. Overrides the
         corpus default under ``data_dir``. For ``corpus="multi"`` on the
@@ -2484,6 +2566,7 @@ class XhroProper(Xhro):
         gap_split_quantile=_WINDOW_DEFAULT,
         block_mask_file=None,
         block_mask_mode=None,
+        stream_dataset_labels=None,
         **kwargs,
     ):
         self.path_to_data = data_dir
@@ -2512,6 +2595,9 @@ class XhroProper(Xhro):
         self.crop_start_sec = crop_start_sec
         self.crop_end_sec = crop_end_sec
         self.segments = None if _is_unset(segments) else segments
+        # Packet-loss stream -> recording id. Empty leaves <dataset_label>_<variant>.
+        self.stream_dataset_labels = parse_stream_dataset_labels(stream_dataset_labels)
+        self.resolved_recording_ids = {}
         self.segment_min_len = (
             None if _is_unset(segment_min_len) else segment_min_len
         )
@@ -2593,13 +2679,7 @@ class XhroProper(Xhro):
             self._init_waveform_segments(base, _suffix)
             return
 
-        self.session_dir = _require_session_dir(
-            self.path_to_data,
-            self.dataset_label,
-            self.variant,
-            data_root=self.data_root,
-            corpus=self.corpus,
-        )
+        self.session_dir = self._require_stream_session(self.dataset_label)
 
         if base not in PARITY_PROCESSES and base not in GROK_EXTRA_PROCESSES:
             raise ValueError(
@@ -3002,13 +3082,7 @@ class XhroProper(Xhro):
         prepared = []
         self.session_dirs = []
         for label in self.dataset_labels:
-            session_dir = _require_session_dir(
-                self.path_to_data,
-                label,
-                self.variant,
-                data_root=self.data_root,
-                corpus=self.corpus,
-            )
+            session_dir = self._require_stream_session(label)
             self.session_dirs.append(session_dir)
             item = build_coarse_subject(
                 session_dir,
@@ -3082,6 +3156,36 @@ class XhroProper(Xhro):
         self.split_boundaries = split_boundaries_from_ids(self.subject_index_per_row)
         self.update_sequence_length(self.seq_len)
 
+    def _stream_anchor_ids(self) -> list[str]:
+        labels = _optional_label_list(self.dataset_label) or []
+        if len(labels) == 1:
+            return labels
+        return []
+
+    def _require_stream_session(self, recording_id: str) -> Path:
+        """Open ``<recording id>_<stream>``, using the stream map when it applies."""
+        resolved = recording_id_for_stream(
+            recording_id,
+            self.variant,
+            self.stream_dataset_labels,
+            corpus=self.corpus,
+            anchor_ids=self._stream_anchor_ids(),
+        )
+        source = "" if _is_unset(recording_id) else str(recording_id).strip()
+        if resolved != source:
+            print(
+                f"[XhroProper] stream {self.variant}: recording id "
+                f"{source} -> {resolved}"
+            )
+        self.resolved_recording_ids[source] = resolved
+        return _require_session_dir(
+            self.path_to_data,
+            resolved,
+            self.variant,
+            data_root=self.data_root,
+            corpus=self.corpus,
+        )
+
     def _init_waveform_segments(self, base: str, suffix: str | None) -> None:
         """Load each configured range on its own and split windows at the joins.
 
@@ -3121,13 +3225,7 @@ class XhroProper(Xhro):
         )
         for label in named:
             try:
-                session_dir = _require_session_dir(
-                    self.path_to_data,
-                    label,
-                    self.variant,
-                    data_root=self.data_root,
-                    corpus=self.corpus,
-                )
+                session_dir = self._require_stream_session(label)
             except FileNotFoundError as exc:
                 raise ValueError(f"unknown subject {label!r}: {exc}") from exc
             if not _resolved_inside(session_dir, session_parent):
