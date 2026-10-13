@@ -357,10 +357,10 @@ if __name__ == "__main__":
         "segB": (5070.0, 5670.0),  # row (c)
         "segC": (5670.0, 6270.0),  # row (d)
     }
-    # v2 block flags; not_good rows -> NaN / present=false. TODO: set the
-    # real v2 flags npz (keys t0, dirty, lowamp, good). A missing file
+    # v2 block flags (keys t0, dirty, lowamp, good; 643 rows, from
+    # pl_flags_v2.py); not_good rows -> NaN / present=false. A missing file
     # raises at load, so these configs cannot train unmasked by accident.
-    PKTLOSS_BLOCK_MASK_FILE = "TODO_SET_v2_block_flags_XHRO3506.npz"
+    PKTLOSS_BLOCK_MASK_FILE = "/flash/DoyaU/stash/grok_scratch/xhro_pl_windows/pl_representative_flags_v2.npz"
     row_cells = []
     if dataset_name[0] == "XhroProper":
         for _seg, (_lo, _hi) in PKTLOSS_SEGMENTS.items():
