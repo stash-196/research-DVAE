@@ -9,6 +9,7 @@ License agreement in LICENSE.txt
 """
 
 import os
+import warnings
 import sys
 import shutil
 import socket
@@ -505,9 +506,18 @@ class LearningAlgorithm:
             raw[name] = self._raw_criterion(
                 name, epoch, val_loss, val_spectrum, drift_arrays
             )
+        # Every spectrum segment skipped: this epoch is not eligible for
+        # best-model selection and does not reset patience.
+        spectrum_missing = "spectrum" in raw and not np.isfinite(raw["spectrum"])
+        self._selection_skipped = bool(spectrum_missing)
+        if spectrum_missing:
+            self.logger.warning(
+                "Epoch {}: selection skipped: spectrum NaN".format(epoch)
+            )
+        else:
+            self._any_selection_eligible = True
         if len(self._val_criteria) == 1:
             return raw[self._val_criteria[0]], raw, {}
-        spectrum_missing = "spectrum" in raw and not np.isfinite(raw["spectrum"])
         if self._val_reference is None and not spectrum_missing:
             self._val_reference = dict(raw)
             self.logger.info(
@@ -516,25 +526,11 @@ class LearningAlgorithm:
                 )
             )
         if spectrum_missing:
-            # Every spectrum segment was skipped. Select on recon alone this
-            # epoch; the reference waits for the first finite spectrum.
-            if self._val_reference is not None:
-                recon_ref = float(self._val_reference["recon"])
-            else:
-                if self._recon_only_reference is None:
-                    self._recon_only_reference = float(raw["recon"])
-                recon_ref = self._recon_only_reference
-            score = normalised_criterion_sum(
-                {"recon": raw["recon"]}, {"recon": recon_ref}
-            )
-            self.logger.warning(
-                "Val spectrum is NaN (all segments skipped); selecting on "
-                "recon only at epoch {}.".format(epoch)
-            )
-            val_criteria_score[epoch] = score
+            # No score this epoch. The reference waits for the first epoch
+            # with a finite spectrum.
+            val_criteria_score[epoch] = float("nan")
             norm = {name: float("nan") for name in self._val_criteria}
-            norm["recon"] = score
-            return score, raw, norm
+            return float("nan"), raw, norm
         score = normalised_criterion_sum(raw, self._val_reference)
         val_criteria_score[epoch] = score
         norm = {
@@ -692,7 +688,8 @@ class LearningAlgorithm:
         # flip, and val_drift_horizon are fixed here and are not resized.
         self._val_criteria = resolve_val_criteria(self.cfg)
         self._val_reference = None
-        self._recon_only_reference = None
+        self._selection_skipped = False
+        self._any_selection_eligible = False
         self._val_spectrum_skipped = None
         self._metric_reference = None
         self._monitor_spectrum = spectrum_monitoring_enabled(
@@ -1967,7 +1964,8 @@ class LearningAlgorithm:
 
             # Save the best model
             new_best = False
-            if warm_up_happened:
+            selection_skipped = bool(self._selection_skipped)
+            if warm_up_happened and not selection_skipped:
                 logger.info("Warm-up happened, saving the best model")
                 warm_up_happened = False
                 if self._val_criteria == ("recon",):
@@ -1981,7 +1979,9 @@ class LearningAlgorithm:
 
             # identify the delta between current val_loss and best_val_loss
             # recon keeps the historical comparison exactly.
-            if self._val_criteria == ("recon",):
+            if selection_skipped:
+                delta = float("nan")
+            elif self._val_criteria == ("recon",):
                 delta = val_loss[epoch] - best_val_loss
             else:
                 delta = selection_value - best_val_loss
@@ -1995,7 +1995,8 @@ class LearningAlgorithm:
                 delta_rolling_average = np.mean(delta_per_epoch)
 
             # Save the best model, update patience and best_val_loss
-            improved = delta < -delta_threshold
+            # A skipped epoch is never an improvement: patience still counts it.
+            improved = (not selection_skipped) and delta < -delta_threshold
             if improved:
                 cpt_patience = 0
                 if self._val_criteria == ("recon",):
@@ -2901,6 +2902,20 @@ class LearningAlgorithm:
 
         if ran_epoch and not stopped_early:
             logger.info(format_epoch_budget_line(epoch))
+
+        if ran_epoch and not self._any_selection_eligible:
+            # No epoch ever had a finite spectrum, so nothing was eligible
+            # for selection. Keep the last weights instead.
+            message = (
+                "NO EPOCH HAD A FINITE SPECTRUM SCORE: model selection never "
+                "ran. Falling back to the last checkpoint (epoch {}) as the "
+                "final model.".format(epoch)
+            )
+            logger.error(message)
+            print("[Learning Algo] WARNING: " + message)
+            warnings.warn(message, RuntimeWarning, stacklevel=1)
+            best_state_dict = self.model.state_dict()
+            cur_best_epoch = epoch
 
         # Save the final weights of network with the best validation loss
         save_file = os.path.join(

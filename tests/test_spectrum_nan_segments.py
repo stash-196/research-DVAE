@@ -107,7 +107,8 @@ def _selector(criteria):
     obj._spectrum_windows = None
     obj._metric_reference = None
     obj._val_reference = None
-    obj._recon_only_reference = None
+    obj._selection_skipped = False
+    obj._any_selection_eligible = False
     obj._val_spectrum_skipped = None
     obj._val_criteria = tuple(criteria)
     obj._lle_gt = None
@@ -117,27 +118,66 @@ def _selector(criteria):
     return obj
 
 
-def test_recon_spectrum_selection_falls_back_to_recon_when_spectrum_nan():
+def test_spectrum_nan_epoch_is_skipped_not_scored():
     sel = _selector(("recon", "spectrum"))
-    val_loss = np.array([2.0, 1.0, 1.5, 0.5])
+    logged = []
+    sel.logger.warning = lambda msg, *a, **k: logged.append(msg)
+    val_loss = np.array([2.0, 1.0, 0.1, 0.5])
     val_spec = np.array([np.nan, 4.0, np.nan, 2.0])
     score_arr = np.zeros(4)
-    # Epoch 0: spectrum NaN before any reference exists -> recon only.
-    s0, raw0, norm0 = sel.select(0, val_loss, val_spec, score_arr, {})
-    assert s0 == pytest.approx(1.0)
-    assert np.isnan(norm0["spectrum"])
+    # Epoch 0: spectrum NaN before any reference -> skipped, no reference.
+    s0, _raw0, norm0 = sel.select(0, val_loss, val_spec, score_arr, {})
+    assert np.isnan(s0) and np.isnan(score_arr[0])
+    assert all(np.isnan(v) for v in norm0.values())
+    assert sel._selection_skipped is True
+    assert sel._any_selection_eligible is False
     assert sel._val_reference is None
+    assert any("selection skipped: spectrum NaN" in m for m in logged)
     # Epoch 1: first finite spectrum sets the full reference.
     s1, _, _ = sel.select(1, val_loss, val_spec, score_arr, {})
+    assert sel._selection_skipped is False
+    assert sel._any_selection_eligible is True
     assert sel._val_reference == {"recon": 1.0, "spectrum": 4.0}
     assert s1 == pytest.approx(2.0)
-    # Epoch 2: NaN again -> recon / recon_ref only.
+    # Epoch 2: very low recon, but spectrum NaN -> still skipped (no recon fallback).
     s2, _, _ = sel.select(2, val_loss, val_spec, score_arr, {})
-    assert s2 == pytest.approx(1.5)
+    assert np.isnan(s2) and sel._selection_skipped is True
     # Epoch 3: normal sum.
     s3, _, _ = sel.select(3, val_loss, val_spec, score_arr, {})
     assert s3 == pytest.approx(0.5 + 0.5)
-    assert np.all(np.isfinite(score_arr))
+
+
+def test_single_spectrum_criterion_nan_is_skipped():
+    sel = _selector(("spectrum",))
+    s0, _, _ = sel.select(0, np.array([1.0]), np.array([np.nan]), np.zeros(1), {})
+    assert np.isnan(s0) and sel._selection_skipped is True
+
+
+def test_recon_only_never_skipped():
+    sel = _selector(("recon",))
+    s0, _, _ = sel.select(0, np.array([1.0]), np.array([np.nan]), np.zeros(1), {})
+    assert s0 == 1.0 and sel._selection_skipped is False
+
+
+def _train_loop_source():
+    import inspect
+
+    from dvae.learning_algo import LearningAlgorithm
+
+    return inspect.getsource(LearningAlgorithm.train)
+
+
+def test_train_loop_skipped_epoch_cannot_be_best_or_reset_patience():
+    src = _train_loop_source()
+    assert "selection_skipped = bool(self._selection_skipped)" in src
+    assert "if warm_up_happened and not selection_skipped:" in src
+    assert "improved = (not selection_skipped) and delta < -delta_threshold" in src
+
+
+def test_train_loop_warns_when_no_epoch_eligible():
+    src = _train_loop_source()
+    assert "if ran_epoch and not self._any_selection_eligible:" in src
+    assert "NO EPOCH HAD A FINITE SPECTRUM SCORE" in src
 
 
 def test_recon_spectrum_selection_unchanged_without_nan():
