@@ -506,9 +506,11 @@ def score_fixed_validation_windows(
     metrics["lle_std"] = lle_std
     metrics["lle_per_window"] = lle_per_window
     with WallClock(device) as spectrum_clock:
-        metrics["spectrum"] = float(
-            free_run_spectrum_error(autonomous, truths, int(tf_steps))
+        spectrum, spectrum_skipped = free_run_spectrum_error(
+            autonomous, truths, int(tf_steps), return_skipped=True
         )
+        metrics["spectrum"] = float(spectrum)
+        metrics["spectrum_skipped"] = int(spectrum_skipped)
     metrics["time_val_forward"] = float(forward_clock.elapsed)
     metrics["time_drift"] = float(drift_clock.elapsed)
     metrics["time_rosenstein"] = float(rosenstein_clock.elapsed)

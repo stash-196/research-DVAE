@@ -26,6 +26,11 @@ _SPLIT_SEED = 1234567890
 VAL_WINDOW_SEED = _SPLIT_SEED
 DEFAULT_TF_MIN_OBSERVED = 0.95
 DEFAULT_TF_MAX_GAP_FRAC = 0.01
+# A free-run segment (one window, one channel) enters the spectrum only when
+# at least this many samples are finite and they are at least this fraction
+# of the segment. Anything less is skipped, never filled or resampled.
+MIN_FINITE_SAMPLES = 2
+MIN_FINITE_FRAC = 0.5
 
 
 def _seq_array(dataset) -> np.ndarray:
@@ -331,12 +336,37 @@ def averaged_hann_spectrum(segments: list[np.ndarray]) -> np.ndarray:
     return np.mean(np.stack(spectra, axis=0), axis=0)
 
 
+def segment_has_enough_finite(
+    segment,
+    min_finite: int = MIN_FINITE_SAMPLES,
+    min_frac: float = MIN_FINITE_FRAC,
+) -> bool:
+    """True when ``segment`` has enough finite samples for a periodogram."""
+    x = np.asarray(segment, dtype=np.float64).reshape(-1)
+    if x.size == 0:
+        return False
+    n_finite = int(np.isfinite(x).sum())
+    return n_finite >= int(min_finite) and n_finite >= float(min_frac) * x.size
+
+
 def free_run_spectrum_error(
     predicted: list[np.ndarray],
     ground_truth: list[np.ndarray],
     tf_steps: int,
-) -> float:
-    """Hellinger spectrum error on the free-run half, mean over channels."""
+    return_skipped: bool = False,
+    min_finite: int = MIN_FINITE_SAMPLES,
+    min_frac: float = MIN_FINITE_FRAC,
+):
+    """Hellinger spectrum error on the free-run half, mean over channels.
+
+    A (window, channel) pair is skipped when either its ground-truth or its
+    predicted free-run tail is all NaN or has too few finite samples (see
+    ``segment_has_enough_finite``). Skipped pairs leave both averages, so
+    the two spectra stay paired. A channel with every pair skipped leaves
+    the channel mean. When every channel is skipped the error is NaN.
+    Nothing is filled or resampled. ``return_skipped`` true returns
+    ``(error, n_skipped_pairs)``.
+    """
     if len(predicted) != len(ground_truth) or not predicted:
         raise ValueError("Predicted and ground-truth window lists must match.")
     tf_steps = int(tf_steps)
@@ -350,6 +380,7 @@ def free_run_spectrum_error(
         )
     n_channels = int(gt0.shape[1])
     errors = []
+    n_skipped = 0
     for channel in range(n_channels):
         gt_tail = []
         pred_tail = []
@@ -360,15 +391,36 @@ def free_run_spectrum_error(
                 gt_arr = gt_arr.reshape(-1, 1)
             if pred_arr.ndim == 1:
                 pred_arr = pred_arr.reshape(-1, 1)
-            gt_tail.append(gt_arr[tf_steps:, channel])
-            pred_tail.append(pred_arr[tf_steps:, channel])
+            gt_seg = gt_arr[tf_steps:, channel]
+            pred_seg = pred_arr[tf_steps:, channel]
+            if not (
+                segment_has_enough_finite(gt_seg, min_finite, min_frac)
+                and segment_has_enough_finite(pred_seg, min_finite, min_frac)
+            ):
+                n_skipped += 1
+                continue
+            gt_tail.append(gt_seg)
+            pred_tail.append(pred_seg)
+        if not gt_tail:
+            continue
         gt_ps = averaged_hann_spectrum(gt_tail)
         pred_ps = averaged_hann_spectrum(pred_tail)
         err = power_spectrum_error(
             pred_ps.reshape(1, -1), gt_ps.reshape(1, -1), filter_std=3
         )
         errors.append(float(err))
-    return float(np.mean(errors))
+    if n_skipped:
+        warnings.warn(
+            f"Spectrum validation skipped {n_skipped} of "
+            f"{len(ground_truth) * n_channels} (window, channel) free-run "
+            "segments with too few finite samples.",
+            UserWarning,
+            stacklevel=2,
+        )
+    error = float(np.mean(errors)) if errors else float("nan")
+    if return_skipped:
+        return error, int(n_skipped)
+    return error
 
 
 def score_spectrum_windows(

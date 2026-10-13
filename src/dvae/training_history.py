@@ -333,6 +333,11 @@ def build_training_history(
     # (older tests, older checkpoints) keep working. A training run
     # passes the scale and the effective weight every epoch, and sets
     # the enabled flags so a redraw can hide a term that was off.
+    # Count of free-run spectrum segments skipped for too few finite samples.
+    if "val_spectrum_skipped" in series:
+        history["val_spectrum_skipped"] = _slice_1d(
+            series["val_spectrum_skipped"], end
+        )
     for key in OPTIONAL_HISTORY_KEYS:
         if key in series:
             history[key] = _slice_1d(series[key], end)

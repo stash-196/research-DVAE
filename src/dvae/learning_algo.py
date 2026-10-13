@@ -402,6 +402,14 @@ class LearningAlgorithm:
         if self._spectrum_windows is not None:
             scored = self._score_fixed_validation()
             val_spectrum[epoch] = float(scored["spectrum"])
+            skipped = int(scored.get("spectrum_skipped", 0))
+            if self._val_spectrum_skipped is not None:
+                self._val_spectrum_skipped[epoch] = skipped
+            if skipped:
+                self.logger.warning(
+                    "Val spectrum skipped {} (window, channel) segment(s) "
+                    "with too few finite samples.".format(skipped)
+                )
             for name in DRIFT_METRIC_NAMES:
                 drift_arrays["val_" + name][epoch] = float(scored[name])
             if self._lle_per_window is not None:
@@ -499,13 +507,34 @@ class LearningAlgorithm:
             )
         if len(self._val_criteria) == 1:
             return raw[self._val_criteria[0]], raw, {}
-        if self._val_reference is None:
+        spectrum_missing = "spectrum" in raw and not np.isfinite(raw["spectrum"])
+        if self._val_reference is None and not spectrum_missing:
             self._val_reference = dict(raw)
             self.logger.info(
                 "Val criteria reference (first validation epoch {}): {}".format(
                     epoch, self._val_reference
                 )
             )
+        if spectrum_missing:
+            # Every spectrum segment was skipped. Select on recon alone this
+            # epoch; the reference waits for the first finite spectrum.
+            if self._val_reference is not None:
+                recon_ref = float(self._val_reference["recon"])
+            else:
+                if self._recon_only_reference is None:
+                    self._recon_only_reference = float(raw["recon"])
+                recon_ref = self._recon_only_reference
+            score = normalised_criterion_sum(
+                {"recon": raw["recon"]}, {"recon": recon_ref}
+            )
+            self.logger.warning(
+                "Val spectrum is NaN (all segments skipped); selecting on "
+                "recon only at epoch {}.".format(epoch)
+            )
+            val_criteria_score[epoch] = score
+            norm = {name: float("nan") for name in self._val_criteria}
+            norm["recon"] = score
+            return score, raw, norm
         score = normalised_criterion_sum(raw, self._val_reference)
         val_criteria_score[epoch] = score
         norm = {
@@ -663,6 +692,8 @@ class LearningAlgorithm:
         # flip, and val_drift_horizon are fixed here and are not resized.
         self._val_criteria = resolve_val_criteria(self.cfg)
         self._val_reference = None
+        self._recon_only_reference = None
+        self._val_spectrum_skipped = None
         self._metric_reference = None
         self._monitor_spectrum = spectrum_monitoring_enabled(
             self._val_criteria,
@@ -990,6 +1021,9 @@ class LearningAlgorithm:
         warm_up_happened = False
         val_spectrum = series_or_new(loss_log, "val_spectrum", epochs)
         val_criteria_score = series_or_new(loss_log, "val_criteria_score", epochs)
+        self._val_spectrum_skipped = series_or_new(
+            loss_log, "val_spectrum_skipped", epochs
+        )
         time_train = series_or_new(loss_log, "time_train", epochs)
         time_val = series_or_new(loss_log, "time_val", epochs)
         time_val_forward = series_or_new(loss_log, "time_val_forward", epochs)
@@ -1191,6 +1225,7 @@ class LearningAlgorithm:
             }
             if self._monitor_spectrum:
                 logged.update(drift_arrays)
+                logged["val_spectrum_skipped"] = self._val_spectrum_skipped
             return build_training_history(
                 end=end,
                 model_name=self.model_name,
