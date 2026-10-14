@@ -434,6 +434,26 @@ def drift_metrics_from_series(
     }
 
 
+def fixed_window_recon(truths, teacher) -> float:
+    """Teacher-forced MSE over every finite truth entry of all windows."""
+    total = 0.0
+    count = 0
+    for truth, recon in zip(truths, teacher):
+        t = np.asarray(truth, dtype=np.float64)
+        r = np.asarray(recon, dtype=np.float64)
+        if t.ndim == 1:
+            t = t.reshape(-1, 1)
+        if r.ndim == 1:
+            r = r.reshape(-1, 1)
+        width = min(t.shape[1], r.shape[1])
+        t = t[:, :width]
+        r = r[: t.shape[0], :width]
+        ok = np.isfinite(t) & np.isfinite(r)
+        total += float(np.sum((r[ok] - t[ok]) ** 2))
+        count += int(ok.sum())
+    return total / count if count else float("nan")
+
+
 def score_fixed_validation_windows(
     model,
     windows,
@@ -447,8 +467,16 @@ def score_fixed_validation_windows(
     rosenstein=False,
     embed_dim=3,
     embed_tau=5,
+    strict_spectrum=False,
 ) -> dict:
     """Spectrum error plus the Appendix B drift metrics on one window set.
+
+    Also returns ``recon_fixed``: the mean squared error of the fully
+    teacher-forced (``all_0``) reconstruction over every finite truth entry
+    (window, step, channel) of the whole window. Missing truth entries are
+    left out, never filled. ``strict_spectrum`` true makes the spectrum NaN
+    instead of averaging over a subset when any (window, channel) free-run
+    segment has too few finite samples, so every metric uses the same set.
 
     The autonomous pass is the spectrum free-run (teacher-forced until
     ``tf_steps``). The teacher-forced pass is the extra full ``all_0``
@@ -502,12 +530,17 @@ def score_fixed_validation_windows(
         else:
             lle_mean, lle_std = float("nan"), float("nan")
             lle_per_window = np.full(len(autonomous), np.nan, dtype=np.float64)
+    metrics["recon_fixed"] = fixed_window_recon(truths, teacher)
     metrics["lle_mean"] = lle_mean
     metrics["lle_std"] = lle_std
     metrics["lle_per_window"] = lle_per_window
     with WallClock(device) as spectrum_clock:
         spectrum, spectrum_skipped = free_run_spectrum_error(
-            autonomous, truths, int(tf_steps), return_skipped=True
+            autonomous,
+            truths,
+            int(tf_steps),
+            return_skipped=True,
+            strict=bool(strict_spectrum),
         )
         metrics["spectrum"] = float(spectrum)
         metrics["spectrum_skipped"] = int(spectrum_skipped)

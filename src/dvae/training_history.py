@@ -334,6 +334,8 @@ def build_training_history(
     # passes the scale and the effective weight every epoch, and sets
     # the enabled flags so a redraw can hide a term that was off.
     # Count of free-run spectrum segments skipped for too few finite samples.
+    if "val_fixed_recon" in series:
+        history["val_fixed_recon"] = _slice_1d(series["val_fixed_recon"], end)
     if "val_spectrum_skipped" in series:
         history["val_spectrum_skipped"] = _slice_1d(
             series["val_spectrum_skipped"], end
@@ -374,6 +376,29 @@ def build_training_history(
         history["val_window_tf_min_observed"] = float(window_info["min_observed"])
         history["val_window_tf_max_gap_frac"] = float(window_info["max_gap_frac"])
         history["val_window_seed"] = int(window_info["seed"])
+        if window_info.get("mode") == "contiguous":
+            # Contiguous validation stretch: every val metric (fixed-window
+            # recon, spectrum, drift, Lyapunov) uses exactly these windows.
+            history["val_window_mode"] = "contiguous"
+            history["val_window_segment_ids"] = np.asarray(
+                window_info["segment_ids"], dtype=np.int64
+            )
+            history["val_window_n_used"] = int(window_info["n_used"])
+            history["val_window_n_requested"] = int(window_info["n_requested"])
+            history["val_window_n_candidates"] = int(window_info["n_candidates"])
+            history["val_window_n_passing"] = int(window_info["n_passing"])
+            history["val_window_len"] = int(window_info["window_len"])
+            history["val_window_stride"] = int(window_info["stride"])
+            history["val_window_max_gap_steps"] = float(window_info["max_gap_steps"])
+            history["val_window_fr_observed"] = np.asarray(
+                window_info["fr_observed"], dtype=float
+            )
+            history["val_window_fr_max_gap"] = np.asarray(
+                window_info["fr_max_gap"], dtype=np.int64
+            )
+            history["val_stretches"] = np.asarray(
+                window_info["stretches"], dtype=np.int64
+            ).reshape(-1, 3)
     if lle_gt is not None and np.isfinite(float(lle_gt)):
         history["val_lle_gt"] = float(lle_gt)
     if lle_per_window is not None:

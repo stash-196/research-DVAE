@@ -2484,9 +2484,15 @@ class XhroProper(Xhro):
         gap_split_quantile=_WINDOW_DEFAULT,
         block_mask_file=None,
         block_mask_mode=None,
+        contiguous_val_split=False,
         **kwargs,
     ):
         self.path_to_data = data_dir
+        self.contiguous_val_split = _optional_bool(
+            contiguous_val_split, "contiguous_val_split", default=False
+        )
+        self.val_stretches = None
+        self._val_region_id = None
         self.dataset_label = dataset_label
         self.mask_label = mask_label
         # None from config means the historical packet-loss tree.
@@ -2731,6 +2737,7 @@ class XhroProper(Xhro):
             self.split_boundaries = split_boundaries_from_ids(
                 self.segment_index_per_row
             )
+        self._setup_contiguous_val_split()
         self.update_sequence_length(self.seq_len)
 
     def _apply_keep_positions(self, sequence: pd.DataFrame) -> np.ndarray:
@@ -3339,6 +3346,7 @@ class XhroProper(Xhro):
         self.missing_run_spans = self._missing_run_spans(self.full_sequence, len(self.seq))
         if self.segment_index_per_row is not None:
             self.split_boundaries = split_boundaries_from_ids(self.segment_index_per_row)
+        self._setup_contiguous_val_split()
         self.update_sequence_length(self.seq_len)
 
     def _waveform_segment_min_len(self) -> int | None:
@@ -3439,6 +3447,91 @@ class XhroProper(Xhro):
                 f"n_samples={row['n_samples']} missing_rate={rate_s} "
                 f"windows={windows}{extra}"
             )
+
+    def _segment_row_ranges(self) -> list[tuple[int, int, int]]:
+        """``(row_lo, row_hi, segment_id)`` of each loaded segment on ``seq``.
+
+        Configured ``segments`` use the per-range rows. A crop load is one
+        segment covering every row.
+        """
+        n = int(self.seq.shape[0])
+        table = getattr(self, "waveform_segments", None)
+        if table:
+            ranges = []
+            for sid, row in enumerate(table):
+                lo, hi = row.get("row_lo"), row.get("row_hi")
+                if lo is None or hi is None:
+                    continue
+                ranges.append((int(lo), int(hi), int(sid)))
+            if ranges:
+                return ranges
+        return [(0, n, 0)]
+
+    def _setup_contiguous_val_split(self) -> None:
+        """Contiguous validation stretch: the last 20% of each segment head.
+
+        ``seq`` on the train and valid splits is each segment's first 80%
+        of rows (the test tail is already cut off). With
+        ``contiguous_val_split`` on, rows ``[h - h // 5, h)`` of every head
+        of ``h`` rows are validation and rows before that are training,
+        i.e. 0.64n..0.8n and 0..0.64n of the segment. The cut is added to
+        ``split_boundaries`` so no window crosses it, and ``split_dataset``
+        assigns starts by position instead of the shuffled ``val_indices``
+        draw. The test split is untouched.
+        """
+        self.val_stretches = None
+        self._val_region_id = None
+        if not self.contiguous_val_split or self.split == "test":
+            return
+        if getattr(self, "coarse_mode", False):
+            raise ValueError(
+                "contiguous_val_split is only implemented for XhroProper "
+                "waveform (crop or segments) loads, not coarse modes."
+            )
+        n = int(self.seq.shape[0])
+        region = np.full(n, -1, dtype=np.int64)
+        stretches = []
+        cuts = []
+        for lo, hi, sid in self._segment_row_ranges():
+            h = int(hi) - int(lo)
+            cut = int(lo) + h - h // 5
+            # Region ids: 2*sid is that segment's training part, 2*sid+1
+            # its validation stretch. A window must sit inside one region.
+            region[lo:cut] = 2 * sid
+            region[cut:hi] = 2 * sid + 1
+            stretches.append((cut, int(hi), int(sid)))
+            cuts.extend([int(lo), cut, int(hi)])
+        self._val_region_id = region
+        self.val_stretches = stretches
+        existing = getattr(self, "split_boundaries", None)
+        merged = set(int(c) for c in cuts if 0 < int(c) < n)
+        if existing is not None:
+            merged.update(int(c) for c in np.asarray(existing).reshape(-1))
+        self.split_boundaries = np.asarray(sorted(merged), dtype=np.int64)
+        print(
+            "[XhroProper] contiguous_val_split: validation rows "
+            + ", ".join(f"seg{sid} [{a}, {b})" for a, b, sid in stretches)
+            + f" of {n}; training uses the rows before each stretch."
+        )
+
+    def split_dataset(self, indices, val_ratio):
+        """Shuffled ``val_indices`` draw, or the contiguous stretch when on.
+
+        With ``contiguous_val_split`` a start goes to validation when its
+        whole window lies in a validation stretch, and to training when it
+        lies in a training part. A window spanning both is dropped.
+        """
+        region = getattr(self, "_val_region_id", None)
+        if region is None:
+            return super().split_dataset(indices, val_ratio)
+        idx = np.asarray(indices, dtype=np.int64).reshape(-1)
+        if idx.size == 0:
+            return idx, idx
+        length = int(self.seq_len) if self.seq_len is not None else 1
+        last = np.minimum(idx + max(length, 1) - 1, region.size - 1)
+        same = region[idx] == region[last]
+        is_val = (region[idx] % 2) == 1
+        return idx[same & ~is_val], idx[same & is_val]
 
     def window_subject_id(self, index: int) -> str:
         """Session folder name for the window at ``data_idx[index]``."""

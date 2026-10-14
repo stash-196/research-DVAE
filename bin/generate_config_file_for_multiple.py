@@ -373,6 +373,14 @@ if __name__ == "__main__":
                         "crop_end_sec": _hi,
                         "block_mask_file": PKTLOSS_BLOCK_MASK_FILE,
                         "block_mask_mode": "not_good",
+                        # Contiguous validation stretch (0.64n..0.8n) and
+                        # 1000-step fixed val windows (500 TF + 500 free run)
+                        # at stride 500, both halves finite-checked.
+                        "contiguous_val_split": "true",
+                        "val_spectrum_window_len": 1000,
+                        "val_spectrum_tf_steps": 500,
+                        "val_window_stride": 500,
+                        "val_window_max_gap_steps": 10,
                         "_tag_suffix": f"{_stream}_{_seg}",
                     }
                 )
