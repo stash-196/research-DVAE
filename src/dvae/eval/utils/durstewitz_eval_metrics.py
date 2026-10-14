@@ -21,7 +21,10 @@ def normalize_and_smooth_power_spectrum(PS, filter_std):
 
 
 def hellinger_distance(p, q):
-    return np.sqrt(1 - np.sum(np.sqrt(p * q), axis=1))
+    # The 1e-10 floor in normalize_and_smooth_power_spectrum can push the
+    # Bhattacharyya sum just above 1 for near-identical spectra; clip so the
+    # distance is 0 there instead of NaN.
+    return np.sqrt(np.maximum(1 - np.sum(np.sqrt(p * q), axis=1), 0.0))
 
 
 def n_step_prediction_error(model, X, n, mode_selector=None):

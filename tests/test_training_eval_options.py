@@ -270,8 +270,9 @@ def test_spectrum_score_ignores_teacher_forced_half():
         _ReplaceTail(tf_steps), windows, tf_steps, None, "cpu"
     )
     # Identical free-run halves score the same. Hellinger on a perfect match
-    # is NaN in power_spectrum_error (the +1e-10 sits outside the normalizer).
-    assert np.isnan(same) and np.isnan(head)
+    # is 0: the +1e-10 outside the normalizer used to make it NaN, and
+    # hellinger_distance now clips the inner value at 0.
+    assert same == pytest.approx(0.0, abs=1e-6) and head == pytest.approx(0.0, abs=1e-6)
     assert np.isfinite(tail) and tail > 0.02
 
 

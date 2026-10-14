@@ -205,8 +205,9 @@ def test_fixed_windows_score_drift_with_the_same_flip():
     assert scored["auto_drift_k1"] == pytest.approx(scored["auto_drift"])
     assert scored["auto_drift_k"] == pytest.approx(scored["auto_drift"])
     # A constant shift is removed before the periodogram, so the free-run
-    # spectrum matches and Hellinger is the known NaN. Drift still sees it.
-    assert np.isnan(scored["spectrum"])
+    # spectrum matches and Hellinger is 0 (clipped, no longer NaN). Drift
+    # still sees it.
+    assert scored["spectrum"] == pytest.approx(0.0, abs=1e-6)
     for key in (
         "time_val_forward",
         "time_spectrum",
