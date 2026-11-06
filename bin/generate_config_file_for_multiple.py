@@ -118,6 +118,7 @@ if __name__ == "__main__":
             "Generate INI configs for one Planned trainings row group. "
             "Default bcd is the packet-loss XHRO3506 rerun. "
             "k/g use XhroProper (packet-loss or multi). "
+            "i/i.2 use XhroProper coarse multi-corpus. "
             "m/n/o use the old Xhro loader and XHRO_02_XH070."
         )
     )
@@ -132,6 +133,8 @@ if __name__ == "__main__":
             "g",
             "g.2",
             "g.3",
+            "i",
+            "i.2",
             "m",
             "n",
             "o",
@@ -144,6 +147,8 @@ if __name__ == "__main__":
             "g: XH032 10-min crop, MT-RNN 9 alphas, 4 INIs. "
             "g.2: XH032 five 2-min segments, 4 INIs. "
             "g.3: four subjects pooled, 9 and 200 alphas, 8 INIs. "
+            "i: XH032 coarse EEG inputs x 4 ss x L 128/256/512, 36 INIs. "
+            "i.2: five subjects pooled, same 3x4x3 grid, 36 INIs. "
             "m: heart/brain block split, 8 INIs. "
             "n: EEG subband loss, 8 INIs. "
             "o: decorrelation hidden+output, 16 INIs."
@@ -206,6 +211,18 @@ if __name__ == "__main__":
             "MTRNN9-200d_clip10_raw_all_4d_hdim200_eStop500_valcrit-recon"
         ),
     }
+    _I_NAMES = {
+        "i": (
+            "20261106-"
+            "XHROproper_XH032_rowI_coarse_eeg-acc-tod_ep20000_ss0-7_"
+            "MTRNN9d_clip10_L128-256-512_hdim200_eStop500_valcrit-recon"
+        ),
+        "i.2": (
+            "20261106-"
+            "XHROproper_5subj_rowI2_coarse_eeg-acc-tod_ep20000_ss0-7_"
+            "MTRNN9d_clip10_L128-256-512_hdim200_eStop500_valcrit-recon"
+        ),
+    }
     if PLAN_ROWS == "bcd":
         experiment_name = _BCD_NAME
         dataset_name = [
@@ -219,6 +236,11 @@ if __name__ == "__main__":
         ]
     elif PLAN_ROWS in _KG_NAMES:
         experiment_name = _KG_NAMES[PLAN_ROWS]
+        dataset_name = [
+            "XhroProper",
+        ]
+    elif PLAN_ROWS in _I_NAMES:
+        experiment_name = _I_NAMES[PLAN_ROWS]
         dataset_name = [
             "XhroProper",
         ]
@@ -743,6 +765,44 @@ if __name__ == "__main__":
             "g3",
             (_variant_mtrnn9(), _variant_mtrnn_max()),
         )
+    # Rows (i)/(i.2): XhroProper coarse 30 s epochs, shuffled val windows.
+    # contiguous_val_split is not implemented for coarse (Stash 2026-11-06),
+    # so it stays unset. sequence_len is a grid sweep {128, 256, 512} so
+    # run names include it. 9-alpha MT-RNN only (optimize_alphas=True)
+    # times 4 scheduled-sampling ratios. Missing values stay NaN.
+    # Training on Deigo needs this absolute grok_output parent: device_paths
+    # data_dir is research-DVAE/data, which has no suntory/ tree.
+    _I_DATA_ROOT = (
+        "/bucket/DoyaU/stash/suntory/xhro_dataset_v2/grok_output"
+    )
+    _I_OBS = (
+        ("coarse_eeg", 4),
+        ("coarse_eeg_acc", 5),
+        ("coarse_eeg_acc_tod", 7),
+    )
+    _I_SUBJECTS = {
+        "i": "xhro_01_XH032",
+        "i.2": (
+            "xhro_01_XH032,xhro_04_XH058,xhro_01_XH048,"
+            "xhro_01_XH006,xhro_02_XH039"
+        ),
+    }
+    if PLAN_ROWS in ("i", "i.2"):
+        _prefix = "i" if PLAN_ROWS == "i" else "i2"
+        row_cells = []
+        for _obs, _xdim in _I_OBS:
+            row_cells.append(
+                {
+                    "dataset_label": _I_SUBJECTS[PLAN_ROWS],
+                    "mask_label": "None",
+                    "corpus": "multi",
+                    "data_root": _I_DATA_ROOT,
+                    "observation_process": _obs,
+                    "x_dim": _xdim,
+                    "dense_x": _xdim,
+                    "_tag_suffix": f"{_prefix}_{_obs}",
+                }
+            )
     # Coarse XhroProper only (other datasets ignore these). Single values so
     # the existing grid does not grow. See xhro_proper_coarse_example().
     # Waveform multi-range runs are also off this grid. See
@@ -762,6 +822,8 @@ if __name__ == "__main__":
     sequence_len = [1000]
     if dataset_name[0] == "PhysioNet2012":
         sequence_len = [48]
+    if PLAN_ROWS in ("i", "i.2"):
+        sequence_len = [128, 256, 512]
     val_indices = [0.2]
 
     if dataset_name[0] in ("Xhro", "XhroPacketLoss"):
