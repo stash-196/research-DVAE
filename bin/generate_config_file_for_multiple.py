@@ -1,4 +1,5 @@
 from collections import defaultdict
+import argparse
 import itertools
 import os
 import json
@@ -112,26 +113,60 @@ def xhro_proper_waveform_segments_example():
 
 if __name__ == "__main__":
 
+    parser = argparse.ArgumentParser(
+        description=(
+            "Generate INI configs for one Planned trainings row group. "
+            "Default bcd is the packet-loss XHRO3506 rerun. "
+            "m/n/o use the old Xhro loader and XHRO_02_XH070."
+        )
+    )
+    parser.add_argument(
+        "--rows",
+        default="bcd",
+        choices=("bcd", "m", "n", "o"),
+        help=(
+            "bcd: rows (b)-(d), 24 INIs. "
+            "m: heart/brain block split, 12 INIs. "
+            "n: EEG subband loss, 12 INIs. "
+            "o: decorrelation hidden+output, 24 INIs."
+        ),
+    )
+    args = parser.parse_args()
+    PLAN_ROWS = args.rows
+
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
-    experiment_name = (
+    _BCD_NAME = (
         "20261106-"
         + "XHROproper_pktloss_rowsBCD_segABC_rt-rx_ep20000_ss0-7_MTRNN9d_clip10_raw_all_4d_hdim200_eStop500_valcrit-recon"
         # + "20260930-Lorenz_ep20000_auto0-0.8_miss0.1-0.7_shPLRNN_hdim40_L80_clip10_eStop200_otf"
         # + "20260921-Lorenz_..._indicate"  # prior indicate twin
         # + "XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_raw_ch1-4_1d_sep_hdim200_eStop500"
     )
+    _MNO_NAMES = {
+        "m": "20261106-XHRO070_rowM_blocksplit_ss0-7_3models_raw_all_4d_eStop500_valcrit-recon",
+        "n": "20261106-XHRO070_rowN_subband_ss0-7_3models_raw_all_4d_eStop500_valcrit-recon",
+        "o": "20261106-XHRO070_rowO_decorr_ss0-7_3models_2modes_raw_all_4d_eStop500_valcrit-recon",
+    }
+    if PLAN_ROWS == "bcd":
+        experiment_name = _BCD_NAME
+        dataset_name = [
+            # "Xhro",
+            # "XhroPacketLoss",
+            "XhroProper",  # rows (b)-(d): packet-loss XHRO3506, see row_cells below
+            # "PhysioNet2012",
+            # "Lorenz63",
+            # "SHO",
+            # "DampedSHO"
+        ]
+    else:
+        experiment_name = _MNO_NAMES[PLAN_ROWS]
+        dataset_name = [
+            "Xhro",  # old default loader; XHRO_02_XH070 10-min slice is built in
+        ]
+    print("Plan rows:", PLAN_ROWS)
     print("Experiment name:", experiment_name)
     #  <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< data name >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-    dataset_name = [
-        # "Xhro",
-        # "XhroPacketLoss",
-        "XhroProper",  # rows (b)-(d): packet-loss XHRO3506, see row_cells below
-        # "PhysioNet2012",
-        # "Lorenz63",
-        # "SHO",
-        # "DampedSHO"
-    ]
 
     models = [
         # "RNN",
@@ -384,6 +419,118 @@ if __name__ == "__main__":
                         "_tag_suffix": f"{_stream}_{_seg}",
                     }
                 )
+
+    # Rows (m)/(n)/(o): old Xhro loader, XHRO_02_XH070, built-in 10-min
+    # slice 2023-10-29 22:12-22:22 JST (150,001 rows at 250 Hz). Three
+    # model variants x ss in {0.0, 0.3, 0.5, 0.7}. Do not set
+    # contiguous_val_split: that flag is implemented only for XhroProper.
+    _NINE_ALPHAS = [0.1] * 9
+    _MAX_ALPHAS = [0.1] * 200
+    _HEART9 = "0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1"
+    # subband_loss_weight 0.2 and decorr_loss_weight 0.1 match the
+    # values used in tests/test_hidden_block_regularizers.py.
+    # subband_low_hz 4.0 is above a physiological heart-rate fundamental
+    # (~0.7-3.3 Hz, 42-200 bpm) so the band starts past HR and its
+    # lowest harmonics. Confirm both weights and the cutoff before
+    # submitting. subband_high_hz blank = Nyquist (125 Hz at 250 Hz).
+    _SUBBAND_WEIGHT = 0.2
+    _DECORR_WEIGHT = 0.1
+    _SUBBAND_LOW_HZ = 4.0
+
+    def _variant_mtrnn9():
+        return {
+            "name": "MT_RNN",
+            "type_rnn": "RNN",
+            "dim_rnn": 200,
+            "hidden_sh_size": 80,
+            "alphas": list(_NINE_ALPHAS),
+            "optimize_alphas": True,
+            "lr": 0.001,
+            "gradient_clip": 10.0,
+            "batch_size": 128,
+            "sequence_len": 1000,
+            "_variant": "mtrnn9",
+        }
+
+    def _variant_shplrnn():
+        # 20260930 grid recipe cited in the training table (Lorenz and
+        # the generated XHRO hdim40 configs): type_rnn=shPLRNN, dim_rnn
+        # 40, L 80, clip 10, lr 1e-3, batch 128, seq_len 1000. name=RNN
+        # so unused MT-RNN alpha fields stay blank.
+        return {
+            "name": "RNN",
+            "type_rnn": "shPLRNN",
+            "dim_rnn": 40,
+            "hidden_sh_size": 80,
+            "alphas": "",
+            "optimize_alphas": "",
+            "lr": 0.001,
+            "gradient_clip": 10.0,
+            "batch_size": 128,
+            "sequence_len": 1000,
+            "_variant": "shplrnn",
+        }
+
+    def _variant_mtrnn_max():
+        cell = _variant_mtrnn9()
+        cell["alphas"] = list(_MAX_ALPHAS)
+        cell["_variant"] = "mtrnn_max"
+        return cell
+
+    if PLAN_ROWS in ("m", "n", "o"):
+        row_cells = []
+        for _var in (_variant_mtrnn9(), _variant_shplrnn(), _variant_mtrnn_max()):
+            if PLAN_ROWS == "m":
+                cell = {
+                    **_var,
+                    "hidden_block_split": "half",
+                    "ecg_channels": "0,1",
+                    "eeg_channels": "2,3",
+                    "_tag_suffix": f"m_{_var['_variant']}",
+                }
+                if _var["_variant"] == "mtrnn9":
+                    # 9+9 per-block initial values tiled onto the shared sigmas.
+                    cell["heart_alphas"] = _HEART9
+                    cell["brain_alphas"] = _HEART9
+                # mtrnn_max: heart/brain_alphas blank so each 100-unit
+                # half keeps its slice of the 200 shared alphas.
+                row_cells.append(cell)
+            elif PLAN_ROWS == "n":
+                row_cells.append(
+                    {
+                        **_var,
+                        "subband_loss_weight": _SUBBAND_WEIGHT,
+                        "subband_loss_warmup": "true",
+                        "subband_channels": "2,3",
+                        "subband_fs": 250,
+                        "subband_low_hz": _SUBBAND_LOW_HZ,
+                        "_tag_suffix": f"n_{_var['_variant']}",
+                    }
+                )
+            else:
+                # hidden mode needs the heart/brain split.
+                row_cells.append(
+                    {
+                        **_var,
+                        "hidden_block_split": "half",
+                        "ecg_channels": "0,1",
+                        "eeg_channels": "2,3",
+                        "decorr_loss_weight": _DECORR_WEIGHT,
+                        "decorr_loss_warmup": "true",
+                        "decorr_mode": "hidden",
+                        "_tag_suffix": f"o_{_var['_variant']}_hidden",
+                    }
+                )
+                row_cells.append(
+                    {
+                        **_var,
+                        "decorr_loss_weight": _DECORR_WEIGHT,
+                        "decorr_loss_warmup": "true",
+                        "decorr_mode": "output",
+                        "decorr_groups": "0,1|2,3",
+                        "_tag_suffix": f"o_{_var['_variant']}_output",
+                    }
+                )
     # Coarse XhroProper only (other datasets ignore these). Single values so
     # the existing grid does not grow. See xhro_proper_coarse_example().
     # Waveform multi-range runs are also off this grid. See
@@ -533,6 +680,13 @@ if __name__ == "__main__":
         x_dim = [dim * 2 for dim in x_dim]
         dense_x = x_dim
 
+    # Rows (m)/(n)/(o) train on the four raw waveforms together so the
+    # heart block can decode ECG (ch1, ch2) and the brain block EEG (ch3, ch4).
+    if PLAN_ROWS in ("m", "n", "o"):
+        observation_process = ["raw_all"]
+        x_dim = [4]
+        dense_x = [4]
+
     model_params = {
         "RNN": {
             # User
@@ -668,6 +822,7 @@ if __name__ == "__main__":
             for config in configs:
                 for cell in row_cells:
                     merged = {**config, **cell}
+                    merged.pop("_variant", None)
                     merged["tag"] = f"{config['tag']}_{merged.pop('_tag_suffix')}"
                     _expanded[model_name].append(merged)
         all_configs = _expanded
