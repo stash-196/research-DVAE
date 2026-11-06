@@ -27,7 +27,9 @@ from dvae.dataset.xhro_proper_dataset import (  # noqa: E402
     COARSE_MAD_TO_SIGMA,
     COARSE_OBS_COLUMNS,
     COARSE_SAMPLING_FREQ,
+    COARSE_WINDOW_RNG_SEED,
     XhroProper,
+    assign_shuffled_coarse_split,
     _apply_coarse_suffix,
     _provisional_nontest_mask,
     apply_rel_alpha_eeg_mask,
@@ -997,6 +999,228 @@ def test_coarse_config_keys_reach_dataloader(tmp_path, _torch_required):
         "coarse_include_hr",
     ):
         assert key in text
+
+
+def _legacy_global_split(starts, val_indices, shuffle, split):
+    chosen = np.array(list(starts), copy=True)
+    if shuffle and chosen.size:
+        rng = np.random.RandomState(COARSE_WINDOW_RNG_SEED)
+        rng.shuffle(chosen)
+    split_point = int(len(chosen) * (1.0 - float(val_indices)))
+    if split == "train":
+        return [int(i) for i in chosen[:split_point]]
+    return [int(i) for i in chosen[split_point:]]
+
+
+def _window_starts(tmp_path, label, seq_len=8, val_indices=0.2, shuffle=True, **overrides):
+    epochs, hrv = None, None  # callers write sessions first
+    del epochs, hrv
+    train = _load(
+        tmp_path,
+        label,
+        "coarse_eeg",
+        seq_len=seq_len,
+        overlap=False,
+        shuffle=False,
+        val_indices=0.0,
+        **overrides,
+    )
+    return list(train.data_idx), train
+
+
+def test_assign_shuffled_coarse_split_default_matches_global_slice():
+    starts = np.arange(20)
+    subjects = np.array([f"s{i}" for i in starts])
+    for split in ("train", "valid"):
+        got = assign_shuffled_coarse_split(
+            starts, subjects, 0.2, split, val_split_per_subject=False
+        )
+        split_point = int(20 * 0.8)
+        expected = starts[:split_point] if split == "train" else starts[split_point:]
+        assert np.array_equal(got, expected)
+
+
+def test_assign_shuffled_coarse_split_gives_each_subject_a_val_window():
+    # Ten already-shuffled starts. Subject A has two windows at the front,
+    # which a global 80/20 cut (split_point=8) would keep entirely in train.
+    starts = np.array([0, 1, 10, 11, 12, 13, 14, 15, 16, 17])
+    subject_per_row = np.empty(18, dtype=object)
+    subject_per_row[0:2] = "A"
+    subject_per_row[10:18] = "B"
+    train = assign_shuffled_coarse_split(
+        starts, subject_per_row, 0.2, "train", val_split_per_subject=True
+    )
+    valid = assign_shuffled_coarse_split(
+        starts, subject_per_row, 0.2, "valid", val_split_per_subject=True
+    )
+    label = {int(i): str(subject_per_row[int(i)]) for i in starts}
+    assert sorted(int(i) for i in train) + sorted(int(i) for i in valid)
+    assert set(int(i) for i in train).isdisjoint(set(int(i) for i in valid))
+    assert set(int(i) for i in train) | set(int(i) for i in valid) == set(int(i) for i in starts)
+    for subj in ("A", "B"):
+        n = sum(1 for i in starts if label[int(i)] == subj)
+        n_val = sum(1 for i in valid if label[int(i)] == subj)
+        n_train = sum(1 for i in train if label[int(i)] == subj)
+        assert n_train + n_val == n
+        if n >= 2:
+            assert n_val >= 1
+
+
+def test_assign_shuffled_coarse_split_forces_one_val_when_ratio_would_take_none():
+    starts = np.array([0, 1])
+    subject_per_row = np.array(["A", "A"])
+    valid = assign_shuffled_coarse_split(
+        starts, subject_per_row, 0.0, "valid", val_split_per_subject=True
+    )
+    train = assign_shuffled_coarse_split(
+        starts, subject_per_row, 0.0, "train", val_split_per_subject=True
+    )
+    assert list(valid) == [1]
+    assert list(train) == [0]
+
+
+def test_existing_configs_keep_assignment_when_flag_unset(tmp_path, _torch_required):
+    """A bcd-style waveform INI and a single-subject coarse config.
+
+    With val_split_per_subject unset or false, train/val window assignment
+    matches the historical global shuffle-then-slice (coarse) or the
+    unchanged waveform path (bcd).
+    """
+    from dvae.dataset.xhro_proper_dataset import optional_config_bool
+    import subprocess
+    import sys
+    import configparser
+
+    root = Path(__file__).resolve().parents[1]
+    gen = root / "bin" / "generate_config_file_for_multiple.py"
+    out = tmp_path / "bcd_inis"
+    out.mkdir()
+    subprocess.run(
+        [sys.executable, str(gen), "--rows", "bcd", "--output-dir", str(out)],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    bcd_files = sorted(out.glob("cfg_*.ini"))
+    assert bcd_files
+    bcd = configparser.ConfigParser()
+    bcd.read(bcd_files[0])
+    assert optional_config_bool(bcd, "DataFrame", "val_split_per_subject", False) is False
+    assert bcd["DataFrame"].get("val_split_per_subject", "").strip() == ""
+
+    # Packet-loss waveform session, same split knobs a bcd INI uses except
+    # a short synthetic seq_len the fixture can support.
+    from tests.test_xhro_proper import _fake_session
+
+    wave_root = tmp_path / "bcd_wave"
+    wave_root.mkdir()
+    _fake_session(wave_root)
+    wave_kwargs = dict(
+        data_dir=str(wave_root),
+        dataset_label="REC1",
+        mask_label="realtime",
+        seq_len=8,
+        x_dim=1,
+        sample_rate=1,
+        skip_rate=1,
+        val_indices=float(bcd["DataFrame"]["val_indices"]),
+        observation_process="raw_ch1",
+        device="cpu",
+        overlap=False,
+        shuffle=True,
+        contiguous_val_split=optional_config_bool(
+            bcd, "DataFrame", "contiguous_val_split", False
+        ),
+    )
+    for split in ("train", "valid"):
+        omitted = XhroProper(split=split, **wave_kwargs)
+        explicit = XhroProper(split=split, val_split_per_subject=False, **wave_kwargs)
+        assert omitted.data_idx == explicit.data_idx
+
+    # Single-subject coarse config: omitted == False == legacy formula.
+    epochs, hrv = make_frames(80, "subj_a", seed=11)
+    write_session(tmp_path, "subj_a", epochs, hrv)
+    starts, _base = _window_starts(tmp_path, "subj_a", seq_len=8, val_indices=0.2, shuffle=True)
+    assert starts
+    for split in ("train", "valid"):
+        omitted = _load(
+            tmp_path,
+            "subj_a",
+            "coarse_eeg",
+            split=split,
+            seq_len=8,
+            overlap=False,
+            shuffle=True,
+            val_indices=0.2,
+        )
+        explicit = _load(
+            tmp_path,
+            "subj_a",
+            "coarse_eeg",
+            split=split,
+            seq_len=8,
+            overlap=False,
+            shuffle=True,
+            val_indices=0.2,
+            val_split_per_subject=False,
+        )
+        legacy = _legacy_global_split(starts, 0.2, True, split)
+        assert omitted.data_idx == explicit.data_idx == legacy
+
+
+def test_val_split_per_subject_covers_every_subject(tmp_path, _torch_required):
+    labels = ["subj_a", "subj_b", "subj_c", "subj_d", "subj_e"]
+    for i, label in enumerate(labels):
+        epochs, hrv = make_frames(50, label, seed=20 + i)
+        write_session(tmp_path, label, epochs, hrv)
+    joined = ",".join(labels)
+    train = _load(
+        tmp_path,
+        joined,
+        "coarse_eeg",
+        split="train",
+        seq_len=8,
+        overlap=False,
+        shuffle=True,
+        val_indices=0.2,
+        val_split_per_subject=True,
+    )
+    valid = _load(
+        tmp_path,
+        joined,
+        "coarse_eeg",
+        split="valid",
+        seq_len=8,
+        overlap=False,
+        shuffle=True,
+        val_indices=0.2,
+        val_split_per_subject=True,
+    )
+    off_train = _load(
+        tmp_path,
+        joined,
+        "coarse_eeg",
+        split="train",
+        seq_len=8,
+        overlap=False,
+        shuffle=True,
+        val_indices=0.2,
+        val_split_per_subject=False,
+    )
+    assert set(train.data_idx).isdisjoint(valid.data_idx)
+    pooled, _ = _window_starts(tmp_path, joined, seq_len=8)
+    assert set(train.data_idx) | set(valid.data_idx) == set(pooled)
+    for label in labels:
+        n = sum(1 for s in train.window_subject if s == label) + sum(
+            1 for s in valid.window_subject if s == label
+        )
+        n_val = sum(1 for s in valid.window_subject if s == label)
+        assert n >= 2
+        assert n_val >= 1
+    # Enabling the flag changes the pooled assignment (otherwise the
+    # i.2 gap would not need a new option).
+    assert train.data_idx != off_train.data_idx
 
 
 def test_config_generator_coarse_example_is_separate():
