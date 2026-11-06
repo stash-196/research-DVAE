@@ -63,6 +63,10 @@ for experiment in "${experiments[@]}"; do
         # Compute the container-internal path for the config file
         CONFIG_CONTAINER_PATH=${CONFIG_FILE/#$PROJECT_PATH/\/workspace\/project}
 
+        # Default 96 hours (Stash 2026-11-06: 10 of the prior b-d runs hit the 72h cap).
+        # Override per submit with SLURM_TIME_LIMIT=3-00:00:00 if needed.
+        SLURM_TIME_LIMIT="${SLURM_TIME_LIMIT:-4-00:00:00}"
+
         # Create a temporary SLURM script for this configuration
         cat > "$TEMP_DIR/run_training_$CONFIG_BASENAME.slurm" <<EOL
 #!/bin/bash
@@ -71,7 +75,7 @@ for experiment in "${experiments[@]}"; do
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --time=3-00:00:00
+#SBATCH --time=${SLURM_TIME_LIMIT}
 #SBATCH --output=${LOG_DIR}/%j_training_${CONFIG_BASENAME}.log
 #SBATCH --error=${LOG_DIR}/%j_training_${CONFIG_BASENAME}.err
 #SBATCH --partition=compute
