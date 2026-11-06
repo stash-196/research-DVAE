@@ -126,9 +126,9 @@ if __name__ == "__main__":
         choices=("bcd", "m", "n", "o"),
         help=(
             "bcd: rows (b)-(d), 24 INIs. "
-            "m: heart/brain block split, 12 INIs. "
-            "n: EEG subband loss, 12 INIs. "
-            "o: decorrelation hidden+output, 24 INIs."
+            "m: heart/brain block split, 8 INIs. "
+            "n: EEG subband loss, 8 INIs. "
+            "o: decorrelation hidden+output, 16 INIs."
         ),
     )
     args = parser.parse_args()
@@ -144,9 +144,9 @@ if __name__ == "__main__":
         # + "XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_raw_ch1-4_1d_sep_hdim200_eStop500"
     )
     _MNO_NAMES = {
-        "m": "20261106-XHRO070_rowM_blocksplit_ss0-7_3models_raw_all_4d_eStop500_valcrit-recon",
-        "n": "20261106-XHRO070_rowN_subband_ss0-7_3models_raw_all_4d_eStop500_valcrit-recon",
-        "o": "20261106-XHRO070_rowO_decorr_ss0-7_3models_2modes_raw_all_4d_eStop500_valcrit-recon",
+        "m": "20261106-XHRO070_rowM_blocksplit_ss0-7_2models_raw_all_4d_eStop500_valcrit-recon",
+        "n": "20261106-XHRO070_rowN_subband_ss0-7_2models_raw_all_4d_eStop500_valcrit-recon",
+        "o": "20261106-XHRO070_rowO_decorr_ss0-7_2models_2modes_raw_all_4d_eStop500_valcrit-recon",
     }
     if PLAN_ROWS == "bcd":
         experiment_name = _BCD_NAME
@@ -421,9 +421,12 @@ if __name__ == "__main__":
                 )
 
     # Rows (m)/(n)/(o): old Xhro loader, XHRO_02_XH070, built-in 10-min
-    # slice 2023-10-29 22:12-22:22 JST (150,001 rows at 250 Hz). Three
-    # model variants x ss in {0.0, 0.3, 0.5, 0.7}. Do not set
-    # contiguous_val_split: that flag is implemented only for XhroProper.
+    # slice 2023-10-29 22:12-22:22 JST (150,001 rows at 250 Hz). Two
+    # model variants (MT-RNN 9 alphas and MT-RNN max alphas) x ss in
+    # {0.0, 0.3, 0.5, 0.7}. One seed per run (no seed sweep). shPLRNN
+    # is parked (Stash 2026-11-06) after the 20260930 XHRO NaN losses.
+    # Do not set contiguous_val_split: that flag is implemented only
+    # for XhroProper.
     _NINE_ALPHAS = [0.1] * 9
     _MAX_ALPHAS = [0.1] * 200
     _HEART9 = "0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1"
@@ -452,25 +455,6 @@ if __name__ == "__main__":
             "_variant": "mtrnn9",
         }
 
-    def _variant_shplrnn():
-        # 20260930 grid recipe cited in the training table (Lorenz and
-        # the generated XHRO hdim40 configs): type_rnn=shPLRNN, dim_rnn
-        # 40, L 80, clip 10, lr 1e-3, batch 128, seq_len 1000. name=RNN
-        # so unused MT-RNN alpha fields stay blank.
-        return {
-            "name": "RNN",
-            "type_rnn": "shPLRNN",
-            "dim_rnn": 40,
-            "hidden_sh_size": 80,
-            "alphas": "",
-            "optimize_alphas": "",
-            "lr": 0.001,
-            "gradient_clip": 10.0,
-            "batch_size": 128,
-            "sequence_len": 1000,
-            "_variant": "shplrnn",
-        }
-
     def _variant_mtrnn_max():
         cell = _variant_mtrnn9()
         cell["alphas"] = list(_MAX_ALPHAS)
@@ -479,7 +463,7 @@ if __name__ == "__main__":
 
     if PLAN_ROWS in ("m", "n", "o"):
         row_cells = []
-        for _var in (_variant_mtrnn9(), _variant_shplrnn(), _variant_mtrnn_max()):
+        for _var in (_variant_mtrnn9(), _variant_mtrnn_max()):
             if PLAN_ROWS == "m":
                 cell = {
                     **_var,
