@@ -9,6 +9,7 @@ License agreement in LICENSE.txt
 """
 
 import os
+import warnings
 import sys
 import shutil
 import socket
@@ -46,6 +47,7 @@ from dvae.visualizers import (
 from dvae.dataset.dataset_builder import build_dataloader, DatasetConfig
 from dvae.dataset.xhro_proper_dataset import (
     coarse_dataframe_kwargs,
+    optional_config_bool,
     optional_config_float,
     optional_config_str,
     training_initial_sequence_len,
@@ -62,7 +64,10 @@ from dvae.eval.utils.local_drift_analysis import (
     x_true_variance,
 )
 from dvae.eval.utils.delay_params import _get_delay_params
-from dvae.eval.utils.spectrum_validation import capture_fixed_spectrum_windows
+from dvae.eval.utils.spectrum_validation import (
+    capture_contiguous_val_windows,
+    capture_fixed_spectrum_windows,
+)
 from dvae.eval.window_length import cap_eval_seq_len
 from dvae.epoch_log import (
     format_bump_line,
@@ -125,6 +130,19 @@ from dvae.timescale_history import (
     update_A_sigmas_history,
 )
 import subprocess
+
+
+def selection_recon_value(algo, epoch, val_loss) -> float:
+    """Recon used for selection and early stopping.
+
+    The fixed-window recon (teacher-forced MSE on the fixed validation
+    windows) when the contiguous validation stretch is on, else the
+    loader ``val_loss`` as before.
+    """
+    fixed = getattr(algo, "_val_fixed_recon", None)
+    if getattr(algo, "_contiguous_val", False) and fixed is not None:
+        return float(fixed[epoch])
+    return float(val_loss[epoch])
 
 
 class LearningAlgorithm:
@@ -356,10 +374,15 @@ class LearningAlgorithm:
                     rosenstein=self._score_rosenstein,
                     embed_dim=self._embed_dim,
                     embed_tau=self._embed_tau,
+                    strict_spectrum=bool(getattr(self, "_contiguous_val", False)),
                 )
         finally:
             if was_training:
                 self.model.train()
+
+    def _selection_recon(self, epoch, val_loss) -> float:
+        """See ``selection_recon_value``."""
+        return selection_recon_value(self, epoch, val_loss)
 
     def _raw_criterion(self, name, epoch, val_loss, val_spectrum, drift_arrays):
         """Selection value for one criterion. Lower is better.
@@ -369,7 +392,7 @@ class LearningAlgorithm:
         are ``|estimate - GT LLE|``. The stored series stay signed.
         """
         if name == "recon":
-            raw = float(val_loss[epoch])
+            raw = selection_recon_value(self, epoch, val_loss)
         elif name == "spectrum":
             raw = float(val_spectrum[epoch])
         else:
@@ -402,6 +425,26 @@ class LearningAlgorithm:
         if self._spectrum_windows is not None:
             scored = self._score_fixed_validation()
             val_spectrum[epoch] = float(scored["spectrum"])
+            if getattr(self, "_val_fixed_recon", None) is not None:
+                self._val_fixed_recon[epoch] = float(scored["recon_fixed"])
+                self.logger.info(
+                    "Val fixed-window recon (teacher-forced, {} window(s)): "
+                    "{:.6f}".format(len(self._spectrum_windows), self._val_fixed_recon[epoch])
+                )
+            skipped = int(scored.get("spectrum_skipped", 0))
+            if self._val_spectrum_skipped is not None:
+                self._val_spectrum_skipped[epoch] = skipped
+            if skipped and getattr(self, "_contiguous_val", False):
+                self.logger.warning(
+                    "Val spectrum: {} (window, channel) free-run segment(s) "
+                    "have too few finite samples. Spectrum is NaN this epoch "
+                    "(no subset average).".format(skipped)
+                )
+            elif skipped:
+                self.logger.warning(
+                    "Val spectrum skipped {} (window, channel) segment(s) "
+                    "with too few finite samples.".format(skipped)
+                )
             for name in DRIFT_METRIC_NAMES:
                 drift_arrays["val_" + name][epoch] = float(scored[name])
             if self._lle_per_window is not None:
@@ -481,7 +524,7 @@ class LearningAlgorithm:
             ):
                 self._epoch_metric_times[key] = float(scored.get(key, 0.0))
         if self._metric_reference is None:
-            reference = {"recon": float(val_loss[epoch])}
+            reference = {"recon": selection_recon_value(self, epoch, val_loss)}
             if self._spectrum_windows is not None:
                 reference["spectrum"] = float(val_spectrum[epoch])
                 for name in RAW_DRIFT_METRICS:
@@ -497,15 +540,31 @@ class LearningAlgorithm:
             raw[name] = self._raw_criterion(
                 name, epoch, val_loss, val_spectrum, drift_arrays
             )
+        # Every spectrum segment skipped: this epoch is not eligible for
+        # best-model selection and does not reset patience.
+        spectrum_missing = "spectrum" in raw and not np.isfinite(raw["spectrum"])
+        self._selection_skipped = bool(spectrum_missing)
+        if spectrum_missing:
+            self.logger.warning(
+                "Epoch {}: selection skipped: spectrum NaN".format(epoch)
+            )
+        else:
+            self._any_selection_eligible = True
         if len(self._val_criteria) == 1:
             return raw[self._val_criteria[0]], raw, {}
-        if self._val_reference is None:
+        if self._val_reference is None and not spectrum_missing:
             self._val_reference = dict(raw)
             self.logger.info(
                 "Val criteria reference (first validation epoch {}): {}".format(
                     epoch, self._val_reference
                 )
             )
+        if spectrum_missing:
+            # No score this epoch. The reference waits for the first epoch
+            # with a finite spectrum.
+            val_criteria_score[epoch] = float("nan")
+            norm = {name: float("nan") for name in self._val_criteria}
+            return float("nan"), raw, norm
         score = normalised_criterion_sum(raw, self._val_reference)
         val_criteria_score[epoch] = score
         norm = {
@@ -639,6 +698,9 @@ class LearningAlgorithm:
             block_mask_mode=optional_config_str(
                 self.cfg, "DataFrame", "block_mask_mode"
             ),
+            contiguous_val_split=optional_config_bool(
+                self.cfg, "DataFrame", "contiguous_val_split", default=False
+            ),
             **coarse_dataframe_kwargs(self.cfg),
         )
 
@@ -663,6 +725,13 @@ class LearningAlgorithm:
         # flip, and val_drift_horizon are fixed here and are not resized.
         self._val_criteria = resolve_val_criteria(self.cfg)
         self._val_reference = None
+        self._selection_skipped = False
+        self._any_selection_eligible = False
+        self._val_spectrum_skipped = None
+        self._val_fixed_recon = None
+        self._contiguous_val = bool(
+            getattr(val_dataloader.dataset, "val_stretches", None)
+        )
         self._metric_reference = None
         self._monitor_spectrum = spectrum_monitoring_enabled(
             self._val_criteria,
@@ -744,15 +813,64 @@ class LearningAlgorithm:
             self._needs_gt_lle = self._score_rosenstein or (
                 "ftle" in self._val_criteria
             )
-            self._spectrum_windows, self._window_info = capture_fixed_spectrum_windows(
-                val_dataloader.dataset,
-                n_windows=n_windows,
-                window_len=window_len,
-                tf_steps=tf_steps,
-                min_observed=min_observed,
-                max_gap_frac=max_gap_frac,
-                return_info=True,
-            )
+            if self._contiguous_val:
+                max_gap_steps = parse_optional_int(
+                    self.cfg.get("Training", "val_window_max_gap_steps", fallback=None),
+                    10,
+                    "val_window_max_gap_steps",
+                )
+                stride = parse_optional_int(
+                    self.cfg.get("Training", "val_window_stride", fallback=None),
+                    max(1, window_len // 2),
+                    "val_window_stride",
+                )
+                if tf_steps < 1:
+                    raise ValueError(
+                        "contiguous_val_split needs val_spectrum_tf_steps >= 1."
+                    )
+                self._spectrum_windows, self._window_info = (
+                    capture_contiguous_val_windows(
+                        val_dataloader.dataset,
+                        n_windows=n_windows,
+                        window_len=window_len,
+                        tf_steps=tf_steps,
+                        min_observed=min_observed,
+                        max_gap_steps=max_gap_steps,
+                        stride=stride,
+                    )
+                )
+                cinfo = self._window_info
+                logger.info(
+                    "Contiguous validation windows: {} of {} requested, from {} "
+                    "candidate(s) at stride {} ({} pass both halves); stretches "
+                    "{}; segment ids {}. Fixed-window recon, spectrum, drift and "
+                    "Lyapunov all use this set every epoch; recon selection uses "
+                    "the fixed-window recon.".format(
+                        cinfo["n_used"],
+                        cinfo["n_requested"],
+                        cinfo["n_candidates"],
+                        cinfo["stride"],
+                        cinfo["n_passing"],
+                        cinfo["stretches"],
+                        cinfo["segment_ids"].tolist(),
+                    )
+                )
+                if cinfo["n_used"] < n_windows:
+                    logger.warning(
+                        "Only {} validation window(s) pass both halves "
+                        "(asked for {}). Using all of them; no failing window "
+                        "is used.".format(cinfo["n_used"], n_windows)
+                    )
+            else:
+                self._spectrum_windows, self._window_info = capture_fixed_spectrum_windows(
+                    val_dataloader.dataset,
+                    n_windows=n_windows,
+                    window_len=window_len,
+                    tf_steps=tf_steps,
+                    min_observed=min_observed,
+                    max_gap_frac=max_gap_frac,
+                    return_info=True,
+                )
             for window in self._spectrum_windows:
                 enforce_drift_span(
                     np.asarray(window).shape[0], tf_steps, self._drift_horizon
@@ -905,6 +1023,9 @@ class LearningAlgorithm:
             val_recon = series_or_new(loss_log, "val_recon", epochs)
             val_kl = series_or_new(loss_log, "val_kl", epochs)
             best_val_loss = checkpoint["best_val_loss"]
+            # A finite best from before the resume means selection already
+            # ran; do not let the no-finite-spectrum fallback overwrite it.
+            self._any_selection_eligible = bool(np.isfinite(best_val_loss))
             cpt_patience = 0
             cur_best_epoch = start_epoch
             best_state_dict = self.model.state_dict()
@@ -990,6 +1111,11 @@ class LearningAlgorithm:
         warm_up_happened = False
         val_spectrum = series_or_new(loss_log, "val_spectrum", epochs)
         val_criteria_score = series_or_new(loss_log, "val_criteria_score", epochs)
+        self._val_spectrum_skipped = series_or_new(
+            loss_log, "val_spectrum_skipped", epochs
+        )
+        if self._contiguous_val and self._spectrum_windows is not None:
+            self._val_fixed_recon = series_or_new(loss_log, "val_fixed_recon", epochs)
         time_train = series_or_new(loss_log, "time_train", epochs)
         time_val = series_or_new(loss_log, "time_val", epochs)
         time_val_forward = series_or_new(loss_log, "time_val_forward", epochs)
@@ -1191,6 +1317,9 @@ class LearningAlgorithm:
             }
             if self._monitor_spectrum:
                 logged.update(drift_arrays)
+                logged["val_spectrum_skipped"] = self._val_spectrum_skipped
+                if self._val_fixed_recon is not None:
+                    logged["val_fixed_recon"] = self._val_fixed_recon
             return build_training_history(
                 end=end,
                 model_name=self.model_name,
@@ -1932,11 +2061,12 @@ class LearningAlgorithm:
 
             # Save the best model
             new_best = False
-            if warm_up_happened:
+            selection_skipped = bool(self._selection_skipped)
+            if warm_up_happened and not selection_skipped:
                 logger.info("Warm-up happened, saving the best model")
                 warm_up_happened = False
                 if self._val_criteria == ("recon",):
-                    best_val_loss = val_loss[epoch]
+                    best_val_loss = selection_recon_value(self, epoch, val_loss)
                 else:
                     best_val_loss = selection_value
                 best_state_dict = self.model.state_dict()
@@ -1946,8 +2076,10 @@ class LearningAlgorithm:
 
             # identify the delta between current val_loss and best_val_loss
             # recon keeps the historical comparison exactly.
-            if self._val_criteria == ("recon",):
-                delta = val_loss[epoch] - best_val_loss
+            if selection_skipped:
+                delta = float("nan")
+            elif self._val_criteria == ("recon",):
+                delta = selection_recon_value(self, epoch, val_loss) - best_val_loss
             else:
                 delta = selection_value - best_val_loss
             delta_per_epoch[epoch] = delta
@@ -1960,11 +2092,12 @@ class LearningAlgorithm:
                 delta_rolling_average = np.mean(delta_per_epoch)
 
             # Save the best model, update patience and best_val_loss
-            improved = delta < -delta_threshold
+            # A skipped epoch is never an improvement: patience still counts it.
+            improved = (not selection_skipped) and delta < -delta_threshold
             if improved:
                 cpt_patience = 0
                 if self._val_criteria == ("recon",):
-                    best_val_loss = val_loss[epoch]
+                    best_val_loss = selection_recon_value(self, epoch, val_loss)
                 else:
                     best_val_loss = selection_value
                 best_state_dict = self.model.state_dict()
@@ -2866,6 +2999,20 @@ class LearningAlgorithm:
 
         if ran_epoch and not stopped_early:
             logger.info(format_epoch_budget_line(epoch))
+
+        if ran_epoch and not self._any_selection_eligible:
+            # No epoch ever had a finite spectrum, so nothing was eligible
+            # for selection. Keep the last weights instead.
+            message = (
+                "NO EPOCH HAD A FINITE SPECTRUM SCORE: model selection never "
+                "ran. Falling back to the last checkpoint (epoch {}) as the "
+                "final model.".format(epoch)
+            )
+            logger.error(message)
+            print("[Learning Algo] WARNING: " + message)
+            warnings.warn(message, RuntimeWarning, stacklevel=1)
+            best_state_dict = self.model.state_dict()
+            cur_best_epoch = epoch
 
         # Save the final weights of network with the best validation loss
         save_file = os.path.join(

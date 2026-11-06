@@ -88,6 +88,7 @@ class DatasetConfig:
     # Waveform block mask. None file means no masking. Mode None is not_good.
     block_mask_file: str | None = None
     block_mask_mode: str | None = None
+    contiguous_val_split: bool = False
 
     def __post_init__(self):
         # ``legacy_defaults`` and ``legacy_windowing`` are one switch.

@@ -26,6 +26,11 @@ _SPLIT_SEED = 1234567890
 VAL_WINDOW_SEED = _SPLIT_SEED
 DEFAULT_TF_MIN_OBSERVED = 0.95
 DEFAULT_TF_MAX_GAP_FRAC = 0.01
+# A free-run segment (one window, one channel) enters the spectrum only when
+# at least this many samples are finite and they are at least this fraction
+# of the segment. Anything less is skipped, never filled or resampled.
+MIN_FINITE_SAMPLES = 2
+MIN_FINITE_FRAC = 0.5
 
 
 def _seq_array(dataset) -> np.ndarray:
@@ -311,6 +316,154 @@ def capture_fixed_spectrum_windows(
     return windows
 
 
+def _half_passes(half, min_observed: float, gap_limit: float) -> tuple[bool, float, int]:
+    """Finite check on one half: observed fraction and longest missing run."""
+    frac, gap, _ = window_tf_stats(half, len(half))
+    ok = bool(frac + 1e-12 >= float(min_observed) and gap <= float(gap_limit) + 1e-9)
+    return ok, float(frac), int(gap)
+
+
+def select_contiguous_val_windows(
+    series,
+    stretches,
+    n_windows: int,
+    window_len: int,
+    tf_steps: int,
+    min_observed: float = DEFAULT_TF_MIN_OBSERVED,
+    max_gap_steps: float = 10.0,
+    stride: int | None = None,
+    seed: int = VAL_WINDOW_SEED,
+) -> tuple[list[dict], dict]:
+    """Fixed validation windows from the contiguous validation stretches.
+
+    Candidates start every ``stride`` steps (default ``window_len // 2``)
+    and lie entirely inside one stretch ``(row_lo, row_hi, segment_id)``.
+    A candidate passes when it starts on an observed sample and BOTH the
+    teacher-forced half ``[0, tf_steps)`` and the free-run half
+    ``[tf_steps, window_len)`` have observed fraction >= ``min_observed``
+    and no missing run longer than ``max_gap_steps``. Candidates are walked
+    in one ``RandomState(seed)`` permutation and passing ones are taken
+    until ``n_windows`` are chosen, so a failing candidate is replaced by
+    the next passing one. A failing window is never used. When fewer than
+    ``n_windows`` pass, all passing windows are used and a warning says so.
+    Raises when none pass. The chosen records are sorted by start.
+    """
+    n_windows = int(n_windows)
+    window_len = int(window_len)
+    tf_steps = int(tf_steps)
+    if stride is None:
+        stride = max(1, window_len // 2)
+    stride = int(stride)
+    if stride < 1:
+        raise ValueError(f"val_window_stride must be >= 1, got {stride}.")
+    if not 0 < tf_steps < window_len:
+        raise ValueError(
+            "contiguous validation windows need 0 < tf_steps < window_len, "
+            f"got tf_steps={tf_steps}, window_len={window_len}."
+        )
+    candidates = []
+    for lo, hi, sid in stretches:
+        for start in range(int(lo), int(hi) - window_len + 1, stride):
+            window = series[start : start + window_len]
+            arr = np.asarray(window, dtype=np.float64)
+            if arr.ndim == 1:
+                arr = arr.reshape(-1, 1)
+            start_observed = bool(np.isfinite(arr[0]).all())
+            ok_tf, frac_tf, gap_tf = _half_passes(arr[:tf_steps], min_observed, max_gap_steps)
+            ok_fr, frac_fr, gap_fr = _half_passes(arr[tf_steps:], min_observed, max_gap_steps)
+            candidates.append(
+                {
+                    "start": int(start),
+                    "segment_id": int(sid),
+                    "observed_frac": frac_tf,
+                    "max_gap": gap_tf,
+                    "fr_observed_frac": frac_fr,
+                    "fr_max_gap": gap_fr,
+                    "qualified": bool(start_observed and ok_tf and ok_fr),
+                }
+            )
+    n_passing = sum(1 for c in candidates if c["qualified"])
+    counts = {
+        "n_candidates": len(candidates),
+        "n_passing": int(n_passing),
+        "n_requested": n_windows,
+        "stride": stride,
+        "max_gap_steps": float(max_gap_steps),
+    }
+    if n_passing == 0:
+        raise ValueError(
+            f"No validation window of length {window_len} in the contiguous "
+            f"validation stretches passes the finite check on both halves "
+            f"({len(candidates)} candidate(s), stride {stride}, observed >= "
+            f"{float(min_observed)}, max gap {float(max_gap_steps)} steps)."
+        )
+    order = np.random.RandomState(int(seed)).permutation(len(candidates))
+    chosen = []
+    for i in order:
+        if len(chosen) >= n_windows:
+            break
+        if candidates[int(i)]["qualified"]:
+            chosen.append(candidates[int(i)])
+    if len(chosen) < n_windows:
+        warnings.warn(
+            f"Validation windows: asked for {n_windows}, only {len(chosen)} of "
+            f"{len(candidates)} candidate window(s) in the validation stretch "
+            "pass the finite check on both halves. Using those "
+            f"{len(chosen)}; failing windows are never used.",
+            UserWarning,
+            stacklevel=2,
+        )
+    chosen.sort(key=lambda record: record["start"])
+    return chosen, counts
+
+
+def capture_contiguous_val_windows(
+    dataset,
+    n_windows: int = 10,
+    window_len: int = 1000,
+    tf_steps: int = 500,
+    min_observed: float = DEFAULT_TF_MIN_OBSERVED,
+    max_gap_steps: float = 10.0,
+    stride: int | None = None,
+    seed: int = VAL_WINDOW_SEED,
+):
+    """Copy the fixed windows from ``dataset.val_stretches``. Returns ``(windows, info)``."""
+    stretches = getattr(dataset, "val_stretches", None)
+    if not stretches:
+        raise ValueError("capture_contiguous_val_windows needs dataset.val_stretches.")
+    series = _seq_array(dataset)
+    records, counts = select_contiguous_val_windows(
+        series,
+        stretches,
+        n_windows,
+        window_len,
+        tf_steps,
+        min_observed=min_observed,
+        max_gap_steps=max_gap_steps,
+        stride=stride,
+        seed=seed,
+    )
+    windows = [
+        np.array(series[r["start"] : r["start"] + int(window_len)], copy=True)
+        for r in records
+    ]
+    max_gap_frac = float(max_gap_steps) / float(tf_steps)
+    info = _window_info(records, False, min_observed, max_gap_frac, seed, int(tf_steps))
+    info.update(
+        {
+            "mode": "contiguous",
+            "segment_ids": np.asarray([r["segment_id"] for r in records], dtype=np.int64),
+            "fr_observed": np.asarray([r["fr_observed_frac"] for r in records], dtype=np.float64),
+            "fr_max_gap": np.asarray([r["fr_max_gap"] for r in records], dtype=np.int64),
+            "n_used": len(records),
+            "window_len": int(window_len),
+            "stretches": [tuple(int(v) for v in st) for st in stretches],
+            **counts,
+        }
+    )
+    return windows, info
+
+
 def _hann_periodogram(segment: np.ndarray) -> np.ndarray:
     x = np.asarray(segment, dtype=np.float64).reshape(-1)
     finite = np.isfinite(x)
@@ -331,12 +484,39 @@ def averaged_hann_spectrum(segments: list[np.ndarray]) -> np.ndarray:
     return np.mean(np.stack(spectra, axis=0), axis=0)
 
 
+def segment_has_enough_finite(
+    segment,
+    min_finite: int = MIN_FINITE_SAMPLES,
+    min_frac: float = MIN_FINITE_FRAC,
+) -> bool:
+    """True when ``segment`` has enough finite samples for a periodogram."""
+    x = np.asarray(segment, dtype=np.float64).reshape(-1)
+    if x.size == 0:
+        return False
+    n_finite = int(np.isfinite(x).sum())
+    return n_finite >= int(min_finite) and n_finite >= float(min_frac) * x.size
+
+
 def free_run_spectrum_error(
     predicted: list[np.ndarray],
     ground_truth: list[np.ndarray],
     tf_steps: int,
-) -> float:
-    """Hellinger spectrum error on the free-run half, mean over channels."""
+    return_skipped: bool = False,
+    min_finite: int = MIN_FINITE_SAMPLES,
+    min_frac: float = MIN_FINITE_FRAC,
+    strict: bool = False,
+):
+    """Hellinger spectrum error on the free-run half, mean over channels.
+
+    A (window, channel) pair is skipped when either its ground-truth or its
+    predicted free-run tail is all NaN or has too few finite samples (see
+    ``segment_has_enough_finite``). Skipped pairs leave both averages, so
+    the two spectra stay paired. A channel with every pair skipped leaves
+    the channel mean. When every channel is skipped the error is NaN.
+    Nothing is filled or resampled. ``return_skipped`` true returns
+    ``(error, n_skipped_pairs)``. ``strict`` true does not average over a
+    subset: any skipped pair makes the error NaN.
+    """
     if len(predicted) != len(ground_truth) or not predicted:
         raise ValueError("Predicted and ground-truth window lists must match.")
     tf_steps = int(tf_steps)
@@ -350,6 +530,7 @@ def free_run_spectrum_error(
         )
     n_channels = int(gt0.shape[1])
     errors = []
+    n_skipped = 0
     for channel in range(n_channels):
         gt_tail = []
         pred_tail = []
@@ -360,15 +541,40 @@ def free_run_spectrum_error(
                 gt_arr = gt_arr.reshape(-1, 1)
             if pred_arr.ndim == 1:
                 pred_arr = pred_arr.reshape(-1, 1)
-            gt_tail.append(gt_arr[tf_steps:, channel])
-            pred_tail.append(pred_arr[tf_steps:, channel])
+            gt_seg = gt_arr[tf_steps:, channel]
+            pred_seg = pred_arr[tf_steps:, channel]
+            if not (
+                segment_has_enough_finite(gt_seg, min_finite, min_frac)
+                and segment_has_enough_finite(pred_seg, min_finite, min_frac)
+            ):
+                n_skipped += 1
+                continue
+            gt_tail.append(gt_seg)
+            pred_tail.append(pred_seg)
+        if not gt_tail:
+            continue
         gt_ps = averaged_hann_spectrum(gt_tail)
         pred_ps = averaged_hann_spectrum(pred_tail)
         err = power_spectrum_error(
             pred_ps.reshape(1, -1), gt_ps.reshape(1, -1), filter_std=3
         )
         errors.append(float(err))
-    return float(np.mean(errors))
+    if n_skipped:
+        warnings.warn(
+            f"Spectrum validation skipped {n_skipped} of "
+            f"{len(ground_truth) * n_channels} (window, channel) free-run "
+            "segments with too few finite samples.",
+            UserWarning,
+            stacklevel=2,
+        )
+    error = float(np.mean(errors)) if errors else float("nan")
+    if strict and n_skipped:
+        # Strict: every metric uses the identical window set, so a
+        # spectrum over a subset is not reported. The epoch gets NaN.
+        error = float("nan")
+    if return_skipped:
+        return error, int(n_skipped)
+    return error
 
 
 def score_spectrum_windows(
