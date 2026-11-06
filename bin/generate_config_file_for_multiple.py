@@ -529,14 +529,17 @@ if __name__ == "__main__":
     _NINE_ALPHAS = [0.1] * 9
     _MAX_ALPHAS = [0.1] * 200
     _HEART9 = "0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1"
-    # subband_loss_weight 0.2 and decorr_loss_weight 0.1 match the
-    # values used in tests/test_hidden_block_regularizers.py.
+    # Calibrated 2026-11-06 on Studio (30-epoch 9-alpha XH070 tests):
+    # choose each weight so weight x raw term is about 20% of recon
+    # (range 10-30%). subband 170, hidden decorr 0.9, output decorr 1.2
+    # replace the provisional 0.2 / 0.1. Unit tests in
+    # tests/test_hidden_block_regularizers.py keep their own fixtures.
     # subband_low_hz 4.0 is above a physiological heart-rate fundamental
     # (~0.7-3.3 Hz, 42-200 bpm) so the band starts past HR and its
-    # lowest harmonics. Confirm both weights and the cutoff before
-    # submitting. subband_high_hz blank = Nyquist (125 Hz at 250 Hz).
-    _SUBBAND_WEIGHT = 0.2
-    _DECORR_WEIGHT = 0.1
+    # lowest harmonics. subband_high_hz blank = Nyquist (125 Hz at 250 Hz).
+    _SUBBAND_WEIGHT = 170
+    _DECORR_WEIGHT_HIDDEN = 0.9
+    _DECORR_WEIGHT_OUTPUT = 1.2
     _SUBBAND_LOW_HZ = 4.0
 
     def _variant_mtrnn9():
@@ -598,7 +601,7 @@ if __name__ == "__main__":
                         "hidden_block_split": "half",
                         "ecg_channels": "0,1",
                         "eeg_channels": "2,3",
-                        "decorr_loss_weight": _DECORR_WEIGHT,
+                        "decorr_loss_weight": _DECORR_WEIGHT_HIDDEN,
                         "decorr_loss_warmup": "true",
                         "decorr_mode": "hidden",
                         "_tag_suffix": f"o_{_var['_variant']}_hidden",
@@ -607,7 +610,7 @@ if __name__ == "__main__":
                 row_cells.append(
                     {
                         **_var,
-                        "decorr_loss_weight": _DECORR_WEIGHT,
+                        "decorr_loss_weight": _DECORR_WEIGHT_OUTPUT,
                         "decorr_loss_warmup": "true",
                         "decorr_mode": "output",
                         "decorr_groups": "0,1|2,3",
