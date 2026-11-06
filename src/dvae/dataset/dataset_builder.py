@@ -89,6 +89,9 @@ class DatasetConfig:
     block_mask_file: str | None = None
     block_mask_mode: str | None = None
     contiguous_val_split: bool = False
+    # Coarse shuffled val: split each subject's windows separately.
+    # False keeps the historical one-cut-over-all-windows behavior.
+    val_split_per_subject: bool = False
 
     def __post_init__(self):
         # ``legacy_defaults`` and ``legacy_windowing`` are one switch.

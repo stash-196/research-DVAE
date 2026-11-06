@@ -89,6 +89,11 @@ def _assert_shared(cfg: configparser.ConfigParser, prefix: str) -> None:
         "1",
         "yes",
     }
+    assert frame["val_split_per_subject"].lower() == "true"
+    seq = int(frame["sequence_len"])
+    assert train["val_spectrum_window_len"] == str(seq)
+    assert train["val_spectrum_tf_steps"] == str(seq // 2)
+    assert seq - seq // 2 >= 60
     assert frame.get("segments", "") == ""
     assert frame.get("crop_start_sec", "") == ""
     assert frame.get("crop_end_sec", "") == ""
@@ -168,3 +173,8 @@ def test_bcd_still_emits_twenty_four_without_shplrnn(tmp_path):
     assert cfg["DataFrame"]["dataset_name"] == "XhroProper"
     assert cfg["Training"]["val_criteria"] == "recon"
     assert cfg["DataFrame"]["contiguous_val_split"] == "true"
+    assert cfg["DataFrame"].get("val_split_per_subject", "").lower() not in {
+        "true",
+        "1",
+        "yes",
+    }

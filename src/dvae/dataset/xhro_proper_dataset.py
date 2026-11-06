@@ -836,6 +836,52 @@ COARSE_STD_EPS = 1e-8
 COARSE_SAMPLING_FREQ = 1.0 / 30.0
 # Fixed local RNG for the train/valid window shuffle. Never np.random.seed.
 COARSE_WINDOW_RNG_SEED = 1234567890
+
+
+def assign_shuffled_coarse_split(
+    shuffled_starts,
+    subject_per_row,
+    val_indices,
+    split: str,
+    *,
+    val_split_per_subject: bool = False,
+):
+    """Cut already-shuffled window starts into the train or valid split.
+
+    The default (``val_split_per_subject=False``) is the historical global
+    cut: ``split_point = int(n * (1 - val_indices))``. When the flag is
+    on, each subject's windows are cut with that same formula, in the
+    order they appear after the shared shuffle, and a subject with two or
+    more windows always keeps at least one validation window.
+    """
+    chosen = np.asarray(shuffled_starts)
+    if not val_split_per_subject:
+        split_point = int(len(chosen) * (1.0 - float(val_indices)))
+        if split == "train":
+            return chosen[:split_point]
+        return chosen[split_point:]
+    if chosen.size == 0:
+        return chosen
+    labels = [str(subject_per_row[int(i)]) for i in chosen]
+    n_by = {}
+    for lab in labels:
+        n_by[lab] = n_by.get(lab, 0) + 1
+    train_quota = {}
+    for lab, n in n_by.items():
+        split_point = int(n * (1.0 - float(val_indices)))
+        if n >= 2 and split_point >= n:
+            split_point = n - 1
+        train_quota[lab] = split_point
+    seen = {}
+    selected = []
+    for start, lab in zip(chosen, labels):
+        seen[lab] = seen.get(lab, 0) + 1
+        is_train = seen[lab] <= train_quota[lab]
+        if (split == "train") == is_train:
+            selected.append(start)
+    return np.asarray(selected, dtype=chosen.dtype)
+
+
 _COARSE_TEST_SPLITS = ("usable_tail", "last20_rows")
 
 
@@ -1105,6 +1151,9 @@ def coarse_dataframe_kwargs(cfg) -> dict:
         ),
         "coarse_include_hr": optional_config_bool(
             cfg, "DataFrame", "coarse_include_hr", False
+        ),
+        "val_split_per_subject": optional_config_bool(
+            cfg, "DataFrame", "val_split_per_subject", False
         ),
     }
 
@@ -2485,11 +2534,15 @@ class XhroProper(Xhro):
         block_mask_file=None,
         block_mask_mode=None,
         contiguous_val_split=False,
+        val_split_per_subject=False,
         **kwargs,
     ):
         self.path_to_data = data_dir
         self.contiguous_val_split = _optional_bool(
             contiguous_val_split, "contiguous_val_split", default=False
+        )
+        self.val_split_per_subject = _optional_bool(
+            val_split_per_subject, "val_split_per_subject", default=False
         )
         self.val_stretches = None
         self._val_region_id = None
@@ -3627,11 +3680,20 @@ class XhroProper(Xhro):
             if self.shuffle and chosen.size:
                 rng = np.random.RandomState(COARSE_WINDOW_RNG_SEED)
                 rng.shuffle(chosen)
-            split_point = int(len(chosen) * (1.0 - float(self.val_indices)))
-            if self.split == "train":
-                chosen = chosen[:split_point]
+            if self.val_split_per_subject:
+                chosen = assign_shuffled_coarse_split(
+                    chosen,
+                    self.subject_per_row,
+                    self.val_indices,
+                    self.split,
+                    val_split_per_subject=True,
+                )
             else:
-                chosen = chosen[split_point:]
+                split_point = int(len(chosen) * (1.0 - float(self.val_indices)))
+                if self.split == "train":
+                    chosen = chosen[:split_point]
+                else:
+                    chosen = chosen[split_point:]
         self.data_idx = [int(i) for i in np.asarray(chosen).tolist()]
         self.window_subject = [str(self.subject_per_row[i]) for i in self.data_idx]
         log_window_recut(self)

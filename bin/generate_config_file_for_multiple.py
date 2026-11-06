@@ -43,6 +43,20 @@ def generate_config_file(
     return output_file
 
 
+def _insert_dataframe_option(path, key, value):
+    """Insert a [DataFrame] key without rewriting or restyling the INI."""
+    with open(path, "r") as handle:
+        contents = handle.read()
+    if f"{key} =" in contents:
+        return
+    marker = "\n[Evaluation]\n"
+    if marker not in contents:
+        raise RuntimeError(f"{path} has no [Evaluation] section to insert {key}")
+    assignment = f"{key} = {value}"
+    with open(path, "w") as handle:
+        handle.write(contents.replace(marker, f"\n{assignment}\n{marker}", 1))
+
+
 def get_configurations_for_model(params):
     param_names = list(params.keys())
     combinations = list(itertools.product(*params.values()))
@@ -765,9 +779,11 @@ if __name__ == "__main__":
             "g3",
             (_variant_mtrnn9(), _variant_mtrnn_max()),
         )
-    # Rows (i)/(i.2): XhroProper coarse 30 s epochs, shuffled val windows.
-    # contiguous_val_split is not implemented for coarse (Stash 2026-11-06),
-    # so it stays unset. sequence_len is a grid sweep {128, 256, 512} so
+    # Rows (i)/(i.2): XhroProper coarse 30 s epochs, shuffled val windows
+    # stratified per subject (val_split_per_subject=true) so each subject
+    # keeps an ~80/20 train/val cut. contiguous_val_split is not
+    # implemented for coarse (Stash 2026-11-06), so it stays unset.
+    # sequence_len is a grid sweep {128, 256, 512} so
     # run names include it. 9-alpha MT-RNN only (optimize_alphas=True)
     # times 4 scheduled-sampling ratios. Missing values stay NaN.
     # Training on Deigo needs this absolute grok_output parent: device_paths
@@ -800,6 +816,7 @@ if __name__ == "__main__":
                     "observation_process": _obs,
                     "x_dim": _xdim,
                     "dense_x": _xdim,
+                    "val_split_per_subject": "true",
                     "_tag_suffix": f"{_prefix}_{_obs}",
                 }
             )
@@ -1103,12 +1120,30 @@ if __name__ == "__main__":
                     _expanded[model_name].append(merged)
         all_configs = _expanded
 
+    # Couple the fixed val-spectrum windows to each run's sequence_len.
+    # Do not put these lengths on the cartesian grid: that would cross
+    # with sequence_len and emit 9 length pairs. tf_steps = L // 2 keeps
+    # the same ratio as the waveform 2000/1000 defaults and leaves a
+    # free-run tail of at least 60 steps at L=128.
+    if PLAN_ROWS in ("i", "i.2"):
+        for configs in all_configs.values():
+            for config in configs:
+                seq = int(config["sequence_len"])
+                config["val_spectrum_window_len"] = seq
+                config["val_spectrum_tf_steps"] = seq // 2
+
     for model_name, configs in all_configs.items():
         print(f"Number of configurations for {model_name}: {len(configs)}")
         for config in configs:
-            generate_config_file(
+            output_file = generate_config_file(
                 base_template, output_dir, experiment_name, keys_being_compared, config
             )
+            # Keep this key out of the shared template so bcd/m/n/o INIs
+            # stay byte-identical to master.
+            if PLAN_ROWS in ("i", "i.2"):
+                _insert_dataframe_option(
+                    output_file, "val_split_per_subject", "true"
+                )
 
     # Save parameters in JSON format
     json_params = []
