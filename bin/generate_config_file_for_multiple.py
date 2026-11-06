@@ -115,8 +115,8 @@ if __name__ == "__main__":
     # experiment_name = "ep20000_8alphas_esp50_nanBers_ptf_MT-RNN_SampRatios"
     # experiment_name = "20250902_" + "XHRO-01-11_coarse_all_power_alpha3d_ptf_seqlen1000_vary_MT-MTV"
     experiment_name = (
-        "20261013-"
-        + "XHROproper_pktloss_rowsBCD_segABC_rt-rx_ep20000_ss0-7_MTRNN9d_clip10_raw_all_4d_hdim200_eStop500"
+        "20261106-"
+        + "XHROproper_pktloss_rowsBCD_segABC_rt-rx_ep20000_ss0-7_MTRNN9d_clip10_raw_all_4d_hdim200_eStop500_valcrit-recon"
         # + "20260930-Lorenz_ep20000_auto0-0.8_miss0.1-0.7_shPLRNN_hdim40_L80_clip10_eStop200_otf"
         # + "20260921-Lorenz_..._indicate"  # prior indicate twin
         # + "XHRO_ep20000_ptf0-7_MTRNN9d_clip10_Subj70_raw_ch1-4_1d_sep_hdim200_eStop500"
@@ -338,7 +338,7 @@ if __name__ == "__main__":
     crop_end_sec = [""]
     block_mask_file = [""]
     block_mask_mode = [""]
-    val_criteria = ["recon,spectrum"]
+    val_criteria = ["recon"]  # rows (b)-(d) rerun: recon-only selection, patience, and bumps
     warmup_order = ["window_first"]
     warmup_patience_start_frac = [0.2]
     warmup_patience_start = [""]
