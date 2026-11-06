@@ -117,18 +117,44 @@ if __name__ == "__main__":
         description=(
             "Generate INI configs for one Planned trainings row group. "
             "Default bcd is the packet-loss XHRO3506 rerun. "
+            "k/g use XhroProper (packet-loss or multi). "
             "m/n/o use the old Xhro loader and XHRO_02_XH070."
         )
     )
     parser.add_argument(
         "--rows",
         default="bcd",
-        choices=("bcd", "m", "n", "o"),
+        choices=(
+            "bcd",
+            "k.1",
+            "k.2a",
+            "k.2b",
+            "g",
+            "g.2",
+            "g.3",
+            "m",
+            "n",
+            "o",
+        ),
         help=(
             "bcd: rows (b)-(d), 24 INIs. "
+            "k.1: packet-loss retrans seg B, 3 EEG inputs x 2 models, 24 INIs. "
+            "k.2a: XH070 thesis slice, same 3x2 grid, 24 INIs. "
+            "k.2b: XH070 clean 10 min, same 3x2 grid, 24 INIs. "
+            "g: XH032 10-min crop, MT-RNN 9 alphas, 4 INIs. "
+            "g.2: XH032 five 2-min segments, 4 INIs. "
+            "g.3: four subjects pooled, 9 and 200 alphas, 8 INIs. "
             "m: heart/brain block split, 8 INIs. "
             "n: EEG subband loss, 8 INIs. "
             "o: decorrelation hidden+output, 16 INIs."
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help=(
+            "Directory for the generated INIs. Default is "
+            "config/general_signal/generated/<experiment_name>."
         ),
     )
     args = parser.parse_args()
@@ -148,6 +174,38 @@ if __name__ == "__main__":
         "n": "20261106-XHRO070_rowN_subband_ss0-7_2models_raw_all_4d_eStop500_valcrit-recon",
         "o": "20261106-XHRO070_rowO_decorr_ss0-7_2models_2modes_raw_all_4d_eStop500_valcrit-recon",
     }
+    _KG_NAMES = {
+        "k.1": (
+            "20261106-"
+            "XHROproper_pktloss_rowK1_retrans_segB_ep20000_ss0-7_"
+            "MTRNN9-200d_clip10_eeg1d_hdim200_eStop500_valcrit-recon"
+        ),
+        "k.2a": (
+            "20261106-"
+            "XHROproper_XH070_rowK2a_crop30909-31509_ep20000_ss0-7_"
+            "MTRNN9-200d_clip10_eeg1d_hdim200_eStop500_valcrit-recon"
+        ),
+        "k.2b": (
+            "20261106-"
+            "XHROproper_XH070_rowK2b_crop33660-34260_ep20000_ss0-7_"
+            "MTRNN9-200d_clip10_eeg1d_hdim200_eStop500_valcrit-recon"
+        ),
+        "g": (
+            "20261106-"
+            "XHROproper_XH032_rowG_crop53458-54058_ep20000_ss0-7_"
+            "MTRNN9d_clip10_raw_all_4d_hdim200_eStop500_valcrit-recon"
+        ),
+        "g.2": (
+            "20261106-"
+            "XHROproper_XH032_rowG2_5seg_ep20000_ss0-7_"
+            "MTRNN9d_clip10_raw_all_4d_hdim200_eStop500_valcrit-recon"
+        ),
+        "g.3": (
+            "20261106-"
+            "XHROproper_4subj_rowG3_pooled_ep20000_ss0-7_"
+            "MTRNN9-200d_clip10_raw_all_4d_hdim200_eStop500_valcrit-recon"
+        ),
+    }
     if PLAN_ROWS == "bcd":
         experiment_name = _BCD_NAME
         dataset_name = [
@@ -158,6 +216,11 @@ if __name__ == "__main__":
             # "Lorenz63",
             # "SHO",
             # "DampedSHO"
+        ]
+    elif PLAN_ROWS in _KG_NAMES:
+        experiment_name = _KG_NAMES[PLAN_ROWS]
+        dataset_name = [
+            "XhroProper",
         ]
     else:
         experiment_name = _MNO_NAMES[PLAN_ROWS]
@@ -397,7 +460,7 @@ if __name__ == "__main__":
     # raises at load, so these configs cannot train unmasked by accident.
     PKTLOSS_BLOCK_MASK_FILE = "/flash/DoyaU/stash/grok_scratch/xhro_pl_windows/pl_representative_flags_v2.npz"
     row_cells = []
-    if dataset_name[0] == "XhroProper":
+    if PLAN_ROWS == "bcd":
         for _seg, (_lo, _hi) in PKTLOSS_SEGMENTS.items():
             for _stream, _rec in XHRO_PKTLOSS_SESSIONS.items():
                 row_cells.append(
@@ -515,6 +578,171 @@ if __name__ == "__main__":
                         "_tag_suffix": f"o_{_var['_variant']}_output",
                     }
                 )
+
+    # Shared validation-window keys. Same 1000-step fixed windows as (b)-(d):
+    # 500 teacher-forced plus 500 autonomous, stride 500.
+    _CONTIGUOUS_VAL = {
+        "contiguous_val_split": "true",
+        "val_spectrum_window_len": 1000,
+        "val_spectrum_tf_steps": 500,
+        "val_window_stride": 500,
+        "val_window_max_gap_steps": 10,
+    }
+    # Observation-process names (column names in parentheses):
+    # bipolar_eeg (eeg), ecg_removed_eeg_scale (eeg_clean_scale),
+    # ecg_removed_eeg (eeg_clean_template). Each is 1-D.
+    _K_OBS = (
+        "bipolar_eeg",
+        "ecg_removed_eeg_scale",
+        "ecg_removed_eeg",
+    )
+    # Multi-corpus parent. Training runs on Deigo at this absolute path.
+    # device_paths data_dir is research-DVAE/data, which has no suntory/
+    # tree, so leaving data_root unset would miss the files on both
+    # machines. On the Studio the same bucket path is
+    # /Users/stashtomonaga/mounts/bucket/DoyaU/stash/suntory/xhro_dataset_v2/grok_output.
+    _MULTI_DATA_ROOT = (
+        "/bucket/DoyaU/stash/suntory/xhro_dataset_v2/grok_output"
+    )
+    # Waveform segments times are inclusive seconds from each subject's
+    # first timestamp (not row indices). Do not set crop_* together
+    # with segments.
+    _G2_SEGMENTS = (
+        "xhro_01_XH032:46080-46200,65460-65580,123450-123570,"
+        "180000-180120,213360-213480"
+    )
+    _G3_SEGMENTS = (
+        "xhro_01_XH032:180180-180300; "
+        "xhro_04_XH058:57810-57930; "
+        "xhro_01_XH048:204150-204270; "
+        "xhro_02_XH039:112560-112680"
+    )
+    _G3_LABEL = (
+        "xhro_01_XH032,xhro_04_XH058,xhro_01_XH048,xhro_02_XH039"
+    )
+
+    def _k_obs_cells(base, tag_prefix, variants):
+        cells = []
+        for _var in variants:
+            for _obs in _K_OBS:
+                cell = {
+                    **base,
+                    **_var,
+                    **_CONTIGUOUS_VAL,
+                    "observation_process": _obs,
+                    "x_dim": 1,
+                    "dense_x": 1,
+                    "_tag_suffix": f"{tag_prefix}_{_var['_variant']}_{_obs}",
+                }
+                cells.append(cell)
+        return cells
+
+    def _g_model_cells(base, tag_prefix, variants):
+        cells = []
+        for _var in variants:
+            cell = {
+                **base,
+                **_var,
+                **_CONTIGUOUS_VAL,
+                "observation_process": "raw_all",
+                "x_dim": 4,
+                "dense_x": 4,
+                "_tag_suffix": f"{tag_prefix}_{_var['_variant']}",
+            }
+            cells.append(cell)
+        return cells
+
+    if PLAN_ROWS == "k.1":
+        # Packet-loss retrans only, seg B (5070-5670 s), not_good mask.
+        row_cells = _k_obs_cells(
+            {
+                "dataset_label": XHRO_PKTLOSS_SESSIONS["retrans"],
+                "mask_label": "retrans",
+                "crop_start_sec": 5070.0,
+                "crop_end_sec": 5670.0,
+                "block_mask_file": PKTLOSS_BLOCK_MASK_FILE,
+                "block_mask_mode": "not_good",
+            },
+            "k1",
+            (_variant_mtrnn9(), _variant_mtrnn_max()),
+        )
+    elif PLAN_ROWS == "k.2a":
+        row_cells = _k_obs_cells(
+            {
+                "dataset_label": "xhro_02_XH070",
+                "mask_label": "None",
+                "corpus": "multi",
+                "data_root": _MULTI_DATA_ROOT,
+                "crop_start_sec": 30909.713,
+                "crop_end_sec": 31509.713,
+                "block_mask_file": "",
+                "block_mask_mode": "",
+            },
+            "k2a",
+            (_variant_mtrnn9(), _variant_mtrnn_max()),
+        )
+    elif PLAN_ROWS == "k.2b":
+        row_cells = _k_obs_cells(
+            {
+                "dataset_label": "xhro_02_XH070",
+                "mask_label": "None",
+                "corpus": "multi",
+                "data_root": _MULTI_DATA_ROOT,
+                "crop_start_sec": 33660.0,
+                "crop_end_sec": 34260.0,
+                "block_mask_file": "",
+                "block_mask_mode": "",
+            },
+            "k2b",
+            (_variant_mtrnn9(), _variant_mtrnn_max()),
+        )
+    elif PLAN_ROWS == "g":
+        row_cells = _g_model_cells(
+            {
+                "dataset_label": "xhro_01_XH032",
+                "mask_label": "None",
+                "corpus": "multi",
+                "data_root": _MULTI_DATA_ROOT,
+                "crop_start_sec": 53458.0,
+                "crop_end_sec": 54058.0,
+                "block_mask_file": "",
+                "block_mask_mode": "",
+            },
+            "g",
+            (_variant_mtrnn9(),),
+        )
+    elif PLAN_ROWS == "g.2":
+        row_cells = _g_model_cells(
+            {
+                "dataset_label": "xhro_01_XH032",
+                "mask_label": "None",
+                "corpus": "multi",
+                "data_root": _MULTI_DATA_ROOT,
+                "segments": _G2_SEGMENTS,
+                "crop_start_sec": "",
+                "crop_end_sec": "",
+                "block_mask_file": "",
+                "block_mask_mode": "",
+            },
+            "g2",
+            (_variant_mtrnn9(),),
+        )
+    elif PLAN_ROWS == "g.3":
+        row_cells = _g_model_cells(
+            {
+                "dataset_label": _G3_LABEL,
+                "mask_label": "None",
+                "corpus": "multi",
+                "data_root": _MULTI_DATA_ROOT,
+                "segments": _G3_SEGMENTS,
+                "crop_start_sec": "",
+                "crop_end_sec": "",
+                "block_mask_file": "",
+                "block_mask_mode": "",
+            },
+            "g3",
+            (_variant_mtrnn9(), _variant_mtrnn_max()),
+        )
     # Coarse XhroProper only (other datasets ignore these). Single values so
     # the existing grid does not grow. See xhro_proper_coarse_example().
     # Waveform multi-range runs are also off this grid. See
@@ -793,7 +1021,9 @@ if __name__ == "__main__":
     model_params = {key: value for key, value in model_params.items() if key in models}
 
     base_template = "config/general_signal/cfg_base_template.ini"
-    output_dir = os.path.join("config/general_signal/generated/", experiment_name)
+    output_dir = args.output_dir or os.path.join(
+        "config/general_signal/generated/", experiment_name
+    )
 
     all_configs = {
         model_name: get_configurations_for_model(params)
