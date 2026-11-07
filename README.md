@@ -250,3 +250,17 @@ More results can be found in **Chapter 13 Experiments** of our article.
 
 For any further questions, you can drop me an email via xiaoyu[dot]bie[at]inria[dot]fr
 
+## Professor Forcing baseline (Lorenz63)
+
+Opt-in, separate from the OTF trainer (`bin/train_model.py` is unchanged). Paper faithfulness and every Lorenz deviation are in `src/dvae/baselines/professor_forcing/FORMULATION.md`.
+
+`variant = professor_forcing` is Lamb et al. (NeurIPS 2016). `variant = hidden_match` is an ablation, not part of that paper: the same teacher-forced and free-running passes, with a stop-gradient hidden-state penalty instead of the discriminator.
+
+```sh
+python bin/train_professor_forcing.py --cfg config/lorenz63/cfg_professor_forcing.ini
+python bin/generate_professor_forcing_configs.py
+bash scripts/slurm/baselines/run_professor_forcing.sh professor_forcing_lorenz63
+```
+
+The generator writes gitignored configs under `config/lorenz63/generated_professor_forcing/`. The Slurm script is the CPU partition used by the other Deigo train launchers. Validation `mse_tf` / `mse_auto`, spectrum error, and delay-embedding GMM KL use the existing eval helpers and the `half_half` schedule. Details: `src/dvae/baselines/professor_forcing/README.md`.
+
