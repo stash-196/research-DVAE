@@ -65,6 +65,44 @@ Eval / aggregate after a pull: `scripts/slurm/evaluation/run_eval_multiple.sh`, 
 
 Paths for this machine vs Deigo live in `config/device_paths.yaml`. Studio `~/mounts/bucket/...` is a local cache, not a live cluster mount.
 
+## Filtering baselines (Kalman EM, Tresp, Lorenz oracle)
+
+These are comparison methods for OTF on masked series. They do not register a model and they do not go through `train_model.py` / `eval_signal.py`. Formulation, including what is and is not in Tresp & Hofmann (1998), is in `src/dvae/baselines/filtering/FORMULATION.md`.
+
+Scores use the same helpers as signal eval: masked MSE (`mse_tf`, `mse_auto`; missing positions excluded), Hellinger spectrum error, and delay-embedding GMM KLD. One-step causal predictions fill the teacher-forced slot. Open-loop rollout after the flip fills the autonomous slot. Filtered and RTS-smoothed imputations are extra (`mse_impute_filtered`, `mse_impute_smoothed`). The Lorenz EKF/UKF is labeled `role=oracle` and is not a fair competitor.
+
+A no-data smoke test:
+
+```sh
+python3 bin/fit_eval_filtering_baselines.py --dataset demo --method kalman --no-geometry \
+  --out-dir outputs/filtering_baselines/demo
+```
+
+On Deigo, after `git pull` (do not edit `bin/generate_config_file_for_multiple.py`):
+
+```sh
+ml singularity
+singularity exec /bucket/DoyaU/stash/containers/generic_ml_container.sif \
+  python3 bin/generate_filtering_baseline_configs.py --experiment lorenz_filtering_baselines
+bash scripts/slurm/baselines/run_filtering_baselines.sh lorenz_filtering_baselines
+```
+
+Configs are JSON under `config/filtering_baselines/generated/` (gitignored). Jobs are CPU `sbatch`s. Outputs land in `/flash/DoyaU/stash/research-DVAE/saved_model/<date>/deigo_cluster/filtering_<experiment>/<config>/` (`metrics.json`, `window0_traces.png`). The container venv is activated inside the job; no new required package (Kalman and the UKF are implemented here).
+
+Lorenz masks and slices follow `Lorenz63` (`only_x`, `only_xy`, `only_xz`, `all_xyz`). The series is the native sampling rate, not the `x_dim>1` delay window the RNN sometimes trains on. Oracle `(sigma, rho, beta, dt)` are parsed from `--dataset-label`.
+
+PhysioNet 2012, once `bin/prepare_physionet2012.py` has written the parquet (that loader is owned by another branch; this code only imports it):
+
+```sh
+python3 bin/fit_eval_filtering_baselines.py \
+  --dataset PhysioNet2012 --data-dir /data \
+  --observation-process raw_vitals --method kalman \
+  --metrics-seq-len 48 --state-dim 5 \
+  --out-dir outputs/filtering_baselines/physionet_kalman
+```
+
+Stays are fit separately so a transition does not cross patients. Use `raw_hr` or `raw_vitals`, not the interpolate/indicate variants (those fill NaNs before the baseline sees them). `mse_impute_*` needs held-out ground truth; ICU hours that were never recorded stay NaN, so that extra score is empty there, while `mse_tf` / `mse_auto` still match the OTF helpers on the finite samples.
+
 ## XhroProper session paths
 
 `XhroProper` reads `grok_output/<session>/intermediates/*.npz`. With neither `corpus` nor `data_root` set, the path stays the packet-loss tree:
