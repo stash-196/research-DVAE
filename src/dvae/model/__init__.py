@@ -12,4 +12,5 @@ from .dsae import build_DSAE
 from .rnn import build_RNN
 from .mt_rnn import build_MT_RNN
 from .mt_vrnn import build_MT_VRNN
+from .gru_d import build_GRU_D
 from .base_rnn import BaseRNN
