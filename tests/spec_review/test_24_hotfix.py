@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import ast
 import configparser
+import io
 import os
 import pickle
-import subprocess
 import sys
 from dataclasses import fields
 from pathlib import Path
@@ -306,7 +306,7 @@ def test_eval_child_is_sys_executable():
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        if not isinstance(func, ast.Attribute) or func.attr != "run":
+        if not isinstance(func, ast.Attribute) or func.attr != "Popen":
             continue
         owner = func.value
         if isinstance(owner, ast.Name) and owner.id == "subprocess":
@@ -346,11 +346,19 @@ def _run_train(tmp_path: Path, kind: str, monkeypatch) -> tuple[Path, list]:
 
     launches = []
 
-    def _record(argv, *args, **kwargs):
-        launches.append(list(argv))
-        return subprocess.CompletedProcess(argv, 0)
+    class _ImmediateProcess:
+        def __init__(self):
+            self.stdout = io.StringIO("")
+            self.stderr = io.StringIO("")
 
-    monkeypatch.setattr("dvae.learning_algo.subprocess.run", _record)
+        def wait(self):
+            return 0
+
+    def _popen(argv, *args, **kwargs):
+        launches.append(list(argv))
+        return _ImmediateProcess()
+
+    monkeypatch.setattr("dvae.learning_algo.subprocess.Popen", _popen)
     data_root = tmp_path / "data"
     saved_root = tmp_path / "saved"
     if kind == "xhro":

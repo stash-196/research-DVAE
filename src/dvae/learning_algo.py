@@ -11,10 +11,13 @@ License agreement in LICENSE.txt
 import os
 import warnings
 import sys
+import json
 import shutil
 import socket
 import datetime
+import threading
 import time
+from collections import deque
 import numpy as np
 from typing import Optional
 import torch
@@ -129,6 +132,15 @@ from dvae.timescale_history import (
     save_plrnn_timescale_figures,
     update_A_sigmas_history,
 )
+from dvae.checkpoint_state import (
+    LATEST_FORMAT_VERSION,
+    capture_rng_state,
+    clone_module_state_dict,
+    clone_optimizer_state_dict,
+    curriculum_state_at_best_epoch,
+    restore_rng_state,
+)
+from dvae.visualizers.spectrum_comparison import dataset_sampling_freq_hz
 import subprocess
 
 
@@ -143,6 +155,112 @@ def selection_recon_value(algo, epoch, val_loss) -> float:
     if getattr(algo, "_contiguous_val", False) and fixed is not None:
         return float(fixed[epoch])
     return float(val_loss[epoch])
+
+
+def overlay_nan_autonomous(batch_data, selector):
+    """Force autonomous steps where the batch is NaN.
+
+    The selector this returns is the one that must be plotted and the
+    one that must gate the noise mix. Overlaying a different selector
+    leaves the drawn mode without the NaN fill.
+    """
+    return torch.where(
+        batch_data.isnan().detach(),
+        torch.ones((), device=selector.device, dtype=selector.dtype),
+        selector,
+    )
+
+
+def run_post_training_eval(eval_file, save_file, save_dir, logger):
+    """Run the end-of-training eval. A failure is logged and does not raise.
+
+    Stdout and stderr are streamed to the console while the child runs.
+    A full pipe on either side must not deadlock: stderr is read on a
+    thread while stdout is read here. Only the last 40 stderr lines are
+    kept. On a non-zero exit, or if the process cannot be started, the
+    training log gets the return code and that tail, and
+    ``save_dir/eval_status.json`` records ``eval_failed``. Success writes
+    ``eval_failed: false``.
+    """
+    status_path = os.path.join(save_dir, "eval_status.json")
+
+    def _write(payload):
+        with open(status_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+            handle.write("\n")
+        return payload
+
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, eval_file, "--saved_dict", save_file],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+    except Exception as exc:
+        reason = "Failed to launch end-of-training eval: {}".format(exc)
+        if logger is not None:
+            logger.error(reason)
+        return _write(
+            {"eval_failed": True, "return_code": None, "reason": reason}
+        )
+
+    stderr_tail = deque(maxlen=40)
+
+    def _drain_stderr():
+        try:
+            for line in proc.stderr:
+                stderr_tail.append(line)
+                sys.stderr.write(line)
+                sys.stderr.flush()
+        except Exception:
+            return
+
+    drain = threading.Thread(target=_drain_stderr, name="eval-stderr")
+    drain.start()
+    try:
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+    finally:
+        return_code = proc.wait()
+        drain.join()
+    tail = "\n".join(line.rstrip("\r\n") for line in stderr_tail)
+    if return_code != 0:
+        reason = "End-of-training eval failed with return code {}.".format(
+            return_code
+        )
+        if logger is not None:
+            logger.error(reason + ("\n" + tail if tail else ""))
+        return _write(
+            {
+                "eval_failed": True,
+                "return_code": int(return_code),
+                "reason": reason,
+                "stderr_tail": tail,
+            }
+        )
+    return _write(
+        {"eval_failed": False, "return_code": 0, "reason": ""}
+    )
+
+
+def _dataloader_replacing(loader, *, batch_size, shuffle):
+    """Rebuild a loader without forcing pinned memory on.
+
+    ``pin_memory``, ``num_workers``, and ``drop_last`` come from the
+    loader being replaced. The training flag is what ``build_dataloader``
+    set for this device, which is off on CPU and MPS.
+    """
+    return torch.utils.data.DataLoader(
+        loader.dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=int(loader.num_workers),
+        pin_memory=bool(loader.pin_memory),
+        drop_last=bool(loader.drop_last),
+    )
 
 
 class LearningAlgorithm:
@@ -975,6 +1093,14 @@ class LearningAlgorithm:
         epochs = self.cfg.getint("Training", "epochs")
         early_stop_patience = self.cfg.getint("Training", "early_stop_patience")
         save_frequency = self.cfg.getint("Training", "save_frequency")
+        # Spectrum comparison plots alongside waveform figures. Default ON
+        # for new runs; existing INIs without the key keep the new behavior.
+        save_spectrum_comparison = self.cfg.getboolean(
+            "Training", "save_spectrum_comparison", fallback=True
+        )
+        # DataFrame sample_rate is a downsampling factor, not Hz.
+        # Spectrum axes use the dataset sampling frequency when it has one.
+        spectrum_sample_rate = dataset_sampling_freq_hz(train_dataloader.dataset)
         beta = self.cfg.getfloat("Training", "beta")
 
         # Create python list for loss
@@ -988,50 +1114,168 @@ class LearningAlgorithm:
             history[:, 0] = current
             return history
 
+        resume_rng = None
+        pending_curriculum = None
+
+        def _load_pt(path):
+            try:
+                return torch.load(path, weights_only=False)
+            except TypeError:
+                return torch.load(path)
+
         if not self.params["reload"]:
-            train_loss = np.zeros((epochs,))
-            val_loss = np.zeros((epochs,))
-            train_recon = np.zeros((epochs,))
-            train_kl = np.zeros((epochs,))
-            val_recon = np.zeros((epochs,))
-            val_kl = np.zeros((epochs,))
             best_val_loss = np.inf
             cpt_patience = 0
             cur_best_epoch = epochs
-            best_state_dict = self.model.state_dict()
-            best_optim_dict = optimizer.state_dict()
+            # Copies, not live views. Later steps must not rewrite the best.
+            best_state_dict = clone_module_state_dict(self.model.state_dict())
+            best_optim_dict = clone_optimizer_state_dict(optimizer.state_dict())
             start_epoch = -1
-            if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
-                sigmas_history = new_sigmas_history()
         else:
-            cp_file = os.path.join(save_dir, "{}_checkpoint.pt".format(self.model_name))
-            try:
-                checkpoint = torch.load(cp_file, weights_only=False)
-            except TypeError:
-                checkpoint = torch.load(cp_file)
-            self.model.load_state_dict(checkpoint["model_state_dict"])
-            optimizer.load_state_dict(checkpoint["optim_state_dict"])
-            start_epoch = checkpoint["epoch"]
-            loss_log = checkpoint["loss_log"]
-            if not isinstance(loss_log, dict):
-                loss_log = {}
-            logger.info("Resuming trainning: epoch: {}".format(start_epoch))
-            train_loss = series_or_new(loss_log, "train_loss", epochs)
-            val_loss = series_or_new(loss_log, "val_loss", epochs)
-            train_recon = series_or_new(loss_log, "train_recon", epochs)
-            train_kl = series_or_new(loss_log, "train_kl", epochs)
-            val_recon = series_or_new(loss_log, "val_recon", epochs)
-            val_kl = series_or_new(loss_log, "val_kl", epochs)
-            best_val_loss = checkpoint["best_val_loss"]
-            # A finite best from before the resume means selection already
-            # ran; do not let the no-finite-spectrum fallback overwrite it.
-            self._any_selection_eligible = bool(np.isfinite(best_val_loss))
-            cpt_patience = 0
-            cur_best_epoch = start_epoch
-            best_state_dict = self.model.state_dict()
-            best_optim_dict = optimizer.state_dict()
-            if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
-                sigmas_history = new_sigmas_history()
+            latest_path = os.path.join(
+                save_dir, "{}_latest.pt".format(self.model_name)
+            )
+            cp_file = os.path.join(
+                save_dir, "{}_checkpoint.pt".format(self.model_name)
+            )
+            latest_ckpt = None
+            if os.path.isfile(latest_path):
+                try:
+                    loaded = _load_pt(latest_path)
+                    if isinstance(loaded, dict) and (
+                        "format_version" in loaded or "rng_state" in loaded
+                    ):
+                        latest_ckpt = loaded
+                    else:
+                        logger.error(
+                            "Latest checkpoint {} has no format version; "
+                            "falling back to the best-epoch checkpoint.".format(
+                                latest_path
+                            )
+                        )
+                except Exception as exc:
+                    logger.error(
+                        "Could not read latest checkpoint {}: {}. "
+                        "Falling back to the best-epoch checkpoint.".format(
+                            latest_path, exc
+                        )
+                    )
+            if latest_ckpt is not None:
+                try:
+                    checkpoint = latest_ckpt
+                    self.model.load_state_dict(checkpoint["model_state_dict"])
+                    optimizer.load_state_dict(checkpoint["optim_state_dict"])
+                    start_epoch = int(checkpoint["epoch"])
+                    loss_log = checkpoint.get("loss_log")
+                    if not isinstance(loss_log, dict):
+                        loss_log = {}
+                    best_val_loss = float(checkpoint["best_val_loss"])
+                    # A finite best from before the resume means selection
+                    # already ran; do not let the no-finite-spectrum
+                    # fallback overwrite it.
+                    self._any_selection_eligible = bool(
+                        checkpoint.get(
+                            "_any_selection_eligible",
+                            np.isfinite(best_val_loss),
+                        )
+                    )
+                    cpt_patience = int(checkpoint.get("cpt_patience", 0))
+                    cur_best_epoch = int(
+                        checkpoint.get("cur_best_epoch", start_epoch)
+                    )
+                    best_state_dict = clone_module_state_dict(
+                        checkpoint["best_state_dict"]
+                    )
+                    best_optim_dict = clone_optimizer_state_dict(
+                        checkpoint["best_optim_dict"]
+                    )
+                    resume_rng = checkpoint.get("rng_state")
+                    pending_curriculum = {
+                        "source": "latest",
+                        "current_auto_warm": float(
+                            checkpoint["current_auto_warm"]
+                        ),
+                        "current_kl_warm": float(checkpoint["current_kl_warm"]),
+                        "current_noise_warm": float(
+                            checkpoint["current_noise_warm"]
+                        ),
+                        "current_sequence_len": int(
+                            checkpoint["current_sequence_len"]
+                        ),
+                        "auto_kl_done": int(checkpoint.get("auto_kl_done", 0)),
+                        "warm_up_happened": bool(
+                            checkpoint.get("warm_up_happened", False)
+                        ),
+                        "cpt_patience": cpt_patience,
+                    }
+                    logger.info(
+                        "Resuming from latest checkpoint: completed epoch "
+                        "{}, continuing at epoch {}.".format(
+                            start_epoch, start_epoch + 1
+                        )
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "Latest checkpoint {} could not be restored ({}). "
+                        "Falling back to the best-epoch checkpoint.".format(
+                            latest_path, exc
+                        )
+                    )
+                    latest_ckpt = None
+                    resume_rng = None
+                    pending_curriculum = None
+            if latest_ckpt is None:
+                checkpoint = _load_pt(cp_file)
+                self.model.load_state_dict(checkpoint["model_state_dict"])
+                optimizer.load_state_dict(checkpoint["optim_state_dict"])
+                start_epoch = int(checkpoint["epoch"])
+                loss_log = checkpoint["loss_log"]
+                if not isinstance(loss_log, dict):
+                    loss_log = {}
+                logger.warning(
+                    "No latest checkpoint at {}. Resuming from the "
+                    "best-epoch checkpoint (epoch {}). RNG state cannot "
+                    "be restored. Older checkpoints may hold aliased "
+                    "stopping-epoch weights rather than the weights from "
+                    "the best epoch.".format(latest_path, start_epoch)
+                )
+                best_val_loss = float(checkpoint["best_val_loss"])
+                self._any_selection_eligible = bool(np.isfinite(best_val_loss))
+                cpt_patience = 0
+                cur_best_epoch = start_epoch
+                best_state_dict = clone_module_state_dict(
+                    checkpoint["model_state_dict"]
+                )
+                best_optim_dict = clone_optimizer_state_dict(
+                    checkpoint["optim_state_dict"]
+                )
+                n_logged = 0
+                if "train_loss" in loss_log:
+                    n_logged = int(
+                        np.asarray(loss_log["train_loss"]).reshape(-1).size
+                    )
+                best_ep = int(cur_best_epoch)
+                if n_logged and (best_ep < 0 or best_ep >= n_logged):
+                    logger.info(
+                        "Best-epoch index {} is outside the saved loss "
+                        "series ({} epochs); rebuilding the warm-up at "
+                        "epoch {}.".format(
+                            cur_best_epoch, n_logged, n_logged - 1
+                        )
+                    )
+                    best_ep = n_logged - 1
+                pending_curriculum = {
+                    "source": "legacy",
+                    "best_epoch": int(best_ep),
+                }
+        if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
+            sigmas_history = new_sigmas_history()
+        train_loss = series_or_new(loss_log, "train_loss", epochs)
+        val_loss = series_or_new(loss_log, "val_loss", epochs)
+        train_recon = series_or_new(loss_log, "train_recon", epochs)
+        train_kl = series_or_new(loss_log, "train_kl", epochs)
+        val_recon = series_or_new(loss_log, "val_recon", epochs)
+        val_kl = series_or_new(loss_log, "val_kl", epochs)
 
         # PLRNN / shPLRNN diagonal A. Independent of MT mixing sigmas.
         a_sigmas_history = init_A_sigmas_history(self.model, epochs)
@@ -1143,6 +1387,32 @@ class LearningAlgorithm:
         bump_events = []
         if isinstance(loss_log, dict) and isinstance(loss_log.get("bump_events"), list):
             bump_events = [dict(row) for row in loss_log["bump_events"]]
+        # Legacy resume retrains every epoch after the best one. Bump rows
+        # from that tail would be appended again and counted twice the next
+        # time the curriculum is rebuilt. Series past the best epoch are
+        # left in place and overwritten as those epochs run.
+        if (
+            pending_curriculum is not None
+            and pending_curriculum.get("source") == "legacy"
+        ):
+            best_ep_for_bumps = int(pending_curriculum["best_epoch"])
+            kept_bumps = []
+            for row in bump_events:
+                try:
+                    row_epoch = int(row.get("epoch", -1))
+                except (TypeError, ValueError):
+                    kept_bumps.append(row)
+                    continue
+                if row_epoch > best_ep_for_bumps:
+                    continue
+                kept_bumps.append(row)
+            dropped_bumps = len(bump_events) - len(kept_bumps)
+            bump_events = kept_bumps
+            if dropped_bumps:
+                logger.info(
+                    "Dropped {} bump row(s) after best epoch {} on legacy "
+                    "resume.".format(dropped_bumps, best_ep_for_bumps)
+                )
         drift_source = drift_series_source(loss_log)
         drift_arrays = {
             "val_" + name: series_or_new(drift_source, "val_" + name, epochs)
@@ -1297,6 +1567,84 @@ class LearningAlgorithm:
             )
         )
         auto_kl_done = 0
+        if pending_curriculum is not None:
+            if pending_curriculum["source"] == "latest":
+                current_auto_warm = pending_curriculum["current_auto_warm"]
+                current_kl_warm = pending_curriculum["current_kl_warm"]
+                current_noise_warm = pending_curriculum["current_noise_warm"]
+                current_sequence_len = int(
+                    pending_curriculum["current_sequence_len"]
+                )
+                auto_kl_done = int(pending_curriculum["auto_kl_done"])
+                warm_up_happened = bool(pending_curriculum["warm_up_happened"])
+                cpt_patience = int(pending_curriculum["cpt_patience"])
+                logger.info(
+                    "Restored warm-up from the latest checkpoint: "
+                    "autonomous {:.4f}, KL {:.4f}, noise {:.4f}, "
+                    "sequence_len {}, patience {}, auto_kl_done {}.".format(
+                        current_auto_warm,
+                        current_kl_warm,
+                        current_noise_warm,
+                        current_sequence_len,
+                        cpt_patience,
+                        auto_kl_done,
+                    )
+                )
+            else:
+                rebuilt = curriculum_state_at_best_epoch(
+                    loss_log,
+                    pending_curriculum["best_epoch"],
+                    {
+                        "auto": current_auto_warm,
+                        "kl": current_kl_warm,
+                        "noise": current_noise_warm,
+                        "sequence_len": current_sequence_len,
+                        "cpt_patience": 0,
+                    },
+                )
+                current_auto_warm = rebuilt["current_auto_warm"]
+                current_kl_warm = rebuilt["current_kl_warm"]
+                current_noise_warm = rebuilt["current_noise_warm"]
+                current_sequence_len = int(rebuilt["current_sequence_len"])
+                cpt_patience = int(rebuilt["cpt_patience"])
+                auto_kl_done = int(rebuilt["auto_kl_done"])
+                warm_up_happened = bool(rebuilt["warm_up_happened"])
+                logger.info(
+                    "Rebuilt warm-up curriculum at best epoch {} from the "
+                    "loss log (autonomous {:.4f}, KL {:.4f}, noise {:.4f}, "
+                    "sequence_len {}, patience {}, auto_kl_done {}). "
+                    "RNG state cannot be restored.".format(
+                        pending_curriculum["best_epoch"],
+                        current_auto_warm,
+                        current_kl_warm,
+                        current_noise_warm,
+                        current_sequence_len,
+                        cpt_patience,
+                        auto_kl_done,
+                    )
+                )
+            if int(current_sequence_len) != int(initial_sequence_len):
+                # train_num stays at the original count. The loss is still
+                # divided by that, matching a run that was not interrupted.
+                train_dataloader.dataset.update_sequence_length(
+                    current_sequence_len
+                )
+                val_dataloader.dataset.update_sequence_length(
+                    current_sequence_len
+                )
+                train_dataloader = _dataloader_replacing(
+                    train_dataloader,
+                    batch_size=self.batch_size,
+                    shuffle=self.shuffle,
+                )
+                val_dataloader = _dataloader_replacing(
+                    val_dataloader,
+                    batch_size=self.batch_size,
+                    shuffle=self.shuffle,
+                )
+                logger.info(
+                    "Restored sequence length {}.".format(current_sequence_len)
+                )
         self._regularizers = parse_regularizer_settings(
             self.cfg,
             y_dim=int(self.model.y_dim),
@@ -1412,6 +1760,82 @@ class LearningAlgorithm:
             )
 
         self.model.to(self.device)
+        latest_file = os.path.join(
+            save_dir, "{}_latest.pt".format(self.model_name)
+        )
+        # After dataset construction and any sequence-length update, which
+        # can draw from NumPy. The next epoch then sees the saved RNG.
+        # A CUDA device-count mismatch must not discard the weights that
+        # were already loaded from the latest file.
+        if resume_rng is not None:
+            try:
+                restore_rng_state(resume_rng)
+                logger.info("Restored RNG state from the latest checkpoint.")
+            except Exception as exc:
+                logger.error(
+                    "Could not restore RNG state from the latest checkpoint "
+                    "({}). Continuing with the weights already loaded.".format(
+                        exc
+                    )
+                )
+        elif self.params["reload"]:
+            logger.info(
+                "RNG state was not in the checkpoint and cannot be restored."
+            )
+
+        def write_epoch_checkpoint(epoch_index):
+            # Full prefix through this epoch, not only up to the best
+            # epoch, so the file matches the figure just drawn and a
+            # reload can restore every series.
+            logged = history_at(epoch_index + 1)
+            history_path = os.path.join(save_dir, "loss_model.pckl")
+            checkpoint_path = os.path.join(
+                save_dir, self.model_name + "_checkpoint.pt"
+            )
+            save_training_history(history_path, logged)
+            torch.save(
+                {
+                    "epoch": cur_best_epoch,
+                    "best_val_loss": best_val_loss,
+                    "cpt_patience": cpt_patience,
+                    "model_state_dict": best_state_dict,
+                    "optim_state_dict": best_optim_dict,
+                    "loss_log": logged,
+                },
+                checkpoint_path,
+            )
+            # Current epoch, not the best epoch, so a resume continues
+            # at the next epoch. Best weights are the copies taken when
+            # that epoch was selected.
+            torch.save(
+                {
+                    "format_version": LATEST_FORMAT_VERSION,
+                    "epoch": int(epoch_index),
+                    "model_state_dict": clone_module_state_dict(
+                        self.model.state_dict()
+                    ),
+                    "optim_state_dict": clone_optimizer_state_dict(
+                        optimizer.state_dict()
+                    ),
+                    "best_state_dict": best_state_dict,
+                    "best_optim_dict": best_optim_dict,
+                    "cur_best_epoch": int(cur_best_epoch),
+                    "best_val_loss": float(best_val_loss),
+                    "cpt_patience": int(cpt_patience),
+                    "current_auto_warm": float(current_auto_warm),
+                    "current_kl_warm": float(current_kl_warm),
+                    "current_noise_warm": float(current_noise_warm),
+                    "current_sequence_len": int(current_sequence_len),
+                    "auto_kl_done": int(auto_kl_done),
+                    "warm_up_happened": bool(warm_up_happened),
+                    "_any_selection_eligible": bool(
+                        self._any_selection_eligible
+                    ),
+                    "loss_log": logged,
+                    "rng_state": capture_rng_state(),
+                },
+                latest_file,
+            )
 
         # Train with mini-batch SGD
         ran_epoch = False
@@ -2069,8 +2493,8 @@ class LearningAlgorithm:
                     best_val_loss = selection_recon_value(self, epoch, val_loss)
                 else:
                     best_val_loss = selection_value
-                best_state_dict = self.model.state_dict()
-                best_optim_dict = optimizer.state_dict()
+                best_state_dict = clone_module_state_dict(self.model.state_dict())
+                best_optim_dict = clone_optimizer_state_dict(optimizer.state_dict())
                 cur_best_epoch = epoch
                 new_best = True
 
@@ -2100,8 +2524,8 @@ class LearningAlgorithm:
                     best_val_loss = selection_recon_value(self, epoch, val_loss)
                 else:
                     best_val_loss = selection_value
-                best_state_dict = self.model.state_dict()
-                best_optim_dict = optimizer.state_dict()
+                best_state_dict = clone_module_state_dict(self.model.state_dict())
+                best_optim_dict = clone_optimizer_state_dict(optimizer.state_dict())
                 cur_best_epoch = epoch
                 new_best = True
             else:
@@ -2228,19 +2652,15 @@ class LearningAlgorithm:
                     val_dataloader.dataset.update_sequence_length(
                         current_sequence_len
                     )
-                    train_dataloader = torch.utils.data.DataLoader(
-                        train_dataloader.dataset,
+                    train_dataloader = _dataloader_replacing(
+                        train_dataloader,
                         batch_size=train_dataloader.batch_size,
                         shuffle=self.shuffle,
-                        num_workers=train_dataloader.num_workers,
-                        pin_memory=True,
                     )
-                    val_dataloader = torch.utils.data.DataLoader(
-                        val_dataloader.dataset,
+                    val_dataloader = _dataloader_replacing(
+                        val_dataloader,
                         batch_size=val_dataloader.batch_size,
                         shuffle=self.shuffle,
-                        num_workers=val_dataloader.num_workers,
-                        pin_memory=True,
                     )
                     logger.info(
                         "Sequence length increased to: {}".format(
@@ -2329,31 +2749,11 @@ class LearningAlgorithm:
 
             # Save model parameters regularly
             if epoch % save_frequency == 0:
-                # Full prefix through this epoch, not only up to the best
-                # epoch, so the file matches the figure just drawn and a
-                # reload can restore every series. The first write is
-                # before the figures, so a crash while plotting still
-                # leaves the weights. The second write, after the plot
-                # timer, puts this epoch's time_plot into the checkpoint.
-                history_path = os.path.join(save_dir, "loss_model.pckl")
-                save_file = os.path.join(save_dir, self.model_name + "_checkpoint.pt")
-
-                def write_epoch_checkpoint():
-                    loss_log = history_at(epoch + 1)
-                    save_training_history(history_path, loss_log)
-                    torch.save(
-                        {
-                            "epoch": cur_best_epoch,
-                            "best_val_loss": best_val_loss,
-                            "cpt_patience": cpt_patience,
-                            "model_state_dict": best_state_dict,
-                            "optim_state_dict": best_optim_dict,
-                            "loss_log": loss_log,
-                        },
-                        save_file,
-                    )
-
-                write_epoch_checkpoint()
+                # The first write is before the figures, so a crash while
+                # plotting still leaves the weights. The second write,
+                # after the plot timer, puts this epoch's time_plot into
+                # the checkpoint.
+                write_epoch_checkpoint(epoch)
                 logger.info(
                     "Epoch: {} ===> checkpoint stored with current best epoch: {}".format(
                         epoch, cur_best_epoch
@@ -2807,11 +3207,9 @@ class LearningAlgorithm:
                         x_dim=dataset_config.x_dim,
                         device=self.device,
                     )
-                    # replace where nan is present with 1 to fill with autonomous mode
-                    model_mode_selector = torch.where(
-                        temp_batch_data.isnan().detach(),
-                        torch.tensor(1.0, device=self.device),
-                        model_mode_selector,
+                    # NaNs on the selector that this figure actually draws.
+                    model_mode_selector = overlay_nan_autonomous(
+                        temp_batch_data, model_mode_selector
                     )
                     # END: Compute autonomous mode selector for visualization #################
 
@@ -2850,6 +3248,10 @@ class LearningAlgorithm:
                                 getattr(dataset_config, "observation_process", None)
                             )
                         ),
+                        spectrum_compare=save_spectrum_comparison,
+                        sample_rate=spectrum_sample_rate,
+                        epoch=epoch,
+                        spectrum_mode_name="training_mode",
                     )
 
                     # START: Compute autonomous mode selector for Even Bursts visualization #################
@@ -2861,10 +3263,8 @@ class LearningAlgorithm:
                         batch_size=temp_batch_data.size(1),
                         x_dim=dataset_config.x_dim,
                     )
-                    model_mode_selector = torch.where(
-                        temp_batch_data.isnan().detach(),
-                        torch.tensor(1.0, device=self.device),
-                        model_mode_selector,
+                    model_mode_selector_flip_test = overlay_nan_autonomous(
+                        temp_batch_data, model_mode_selector_flip_test
                     )
                     # END: Compute autonomous mode selector for Even Bursts visualization #################
                     # START: Compute noise-mixing #####################
@@ -2880,9 +3280,9 @@ class LearningAlgorithm:
                             device=self.device,
                         )
                         if self.noise_target == "tf_only":
-                            noise_selector *= 1 - model_mode_selector
+                            noise_selector *= 1 - model_mode_selector_flip_test
                         elif self.noise_target in ["ar_only", "hybrid_ar"]:
-                            noise_selector *= model_mode_selector
+                            noise_selector *= model_mode_selector_flip_test
                     # END: Compute noise-mixing #####################
 
                     visualize_teacherforcing_2_autonomous(
@@ -2901,6 +3301,10 @@ class LearningAlgorithm:
                                 getattr(dataset_config, "observation_process", None)
                             )
                         ),
+                        spectrum_compare=save_spectrum_comparison,
+                        sample_rate=spectrum_sample_rate,
+                        epoch=epoch,
+                        spectrum_mode_name="even_bursts",
                     )
 
                     # START: Compute autonomous mode selector for Half-Half visualization #################
@@ -2911,10 +3315,8 @@ class LearningAlgorithm:
                         batch_size=temp_batch_data.size(1),
                         x_dim=dataset_config.x_dim,
                     )
-                    model_mode_selector = torch.where(
-                        temp_batch_data.isnan().detach(),
-                        torch.tensor(1.0, device=self.device),
-                        model_mode_selector,
+                    model_mode_selector_flip_test = overlay_nan_autonomous(
+                        temp_batch_data, model_mode_selector_flip_test
                     )
                     # END: Compute autonomous mode selector for Half-Half visualization #################
                     # START: Compute noise-mixing #####################
@@ -2930,9 +3332,9 @@ class LearningAlgorithm:
                             device=self.device,
                         )
                         if self.noise_target == "tf_only":
-                            noise_selector *= 1 - model_mode_selector
+                            noise_selector *= 1 - model_mode_selector_flip_test
                         elif self.noise_target in ["ar_only", "hybrid_ar"]:
-                            noise_selector *= model_mode_selector
+                            noise_selector *= model_mode_selector_flip_test
                     # END: Compute noise-mixing #####################
 
                     visualize_teacherforcing_2_autonomous(
@@ -2951,6 +3353,10 @@ class LearningAlgorithm:
                                 getattr(dataset_config, "observation_process", None)
                             )
                         ),
+                        spectrum_compare=save_spectrum_comparison,
+                        sample_rate=spectrum_sample_rate,
+                        epoch=epoch,
+                        spectrum_mode_name="half_half",
                     )
 
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":
@@ -2966,7 +3372,7 @@ class LearningAlgorithm:
                 )
                 sync_cuda(self.device)
                 time_plot[epoch] = time.perf_counter() - plot_t0
-                write_epoch_checkpoint()
+                write_epoch_checkpoint(epoch)
                 logger.info(
                     "Epoch: {} ===> checkpoint loss_log updated with plot wall time {:.4f}".format(
                         epoch, time_plot[epoch]
@@ -3011,8 +3417,17 @@ class LearningAlgorithm:
             logger.error(message)
             print("[Learning Algo] WARNING: " + message)
             warnings.warn(message, RuntimeWarning, stacklevel=1)
-            best_state_dict = self.model.state_dict()
+            best_state_dict = clone_module_state_dict(self.model.state_dict())
+            best_optim_dict = clone_optimizer_state_dict(optimizer.state_dict())
             cur_best_epoch = epoch
+            # The files written inside the loop still hold the initial
+            # snapshot and the budget as the best epoch. Rewrite them so
+            # a checkpoint or latest resume matches the final file.
+            write_epoch_checkpoint(epoch)
+            logger.info(
+                "No finite spectrum score: rewrote checkpoint and latest "
+                "file at epoch {}.".format(epoch)
+            )
 
         # Save the final weights of network with the best validation loss
         save_file = os.path.join(
@@ -3053,7 +3468,7 @@ class LearningAlgorithm:
         eval_file = os.path.join(project_root, "src", "dvae", "eval", "eval_signal.py")
         sync_cuda(self.device)
         eval_t0 = time.perf_counter()
-        subprocess.run([sys.executable, eval_file, "--saved_dict", save_file])
+        run_post_training_eval(eval_file, save_file, save_dir, logger)
         sync_cuda(self.device)
         if ran_epoch:
             time_eval[epoch] = time.perf_counter() - eval_t0
