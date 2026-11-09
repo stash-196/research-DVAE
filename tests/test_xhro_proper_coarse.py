@@ -1403,7 +1403,7 @@ def test_rebuild_tod_export_fallback_without_t0():
     assert info["n_fit_rows"] < 2
     assert np.allclose(sin_n, sin, equal_nan=True)
     assert np.allclose(cos_n, cos, equal_nan=True)
-    assert info["n_rows_changed"] == 1
+    assert info["n_rows_changed"] == 0
     assert "t0_offset_rad" not in info
     assert "fit_minus_t0_rad" not in info
 

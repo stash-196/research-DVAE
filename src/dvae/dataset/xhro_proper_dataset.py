@@ -2329,7 +2329,8 @@ def rebuild_tod_from_clock(
         cos_out = np.cos(phase_new)
 
     dev = np.full(n, np.nan, dtype=np.float64)
-    changed = ~finite
+    # The export fallback returns the input untouched, so nothing changed.
+    changed = np.zeros(n, dtype=bool) if source == "export" else ~finite
     if finite.any():
         dev[finite] = np.abs(_wrap_to_pi(phase_new[finite] - phase[finite]))
         changed[finite] = dev[finite] > tol
