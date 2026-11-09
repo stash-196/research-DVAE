@@ -975,6 +975,17 @@ class LearningAlgorithm:
         epochs = self.cfg.getint("Training", "epochs")
         early_stop_patience = self.cfg.getint("Training", "early_stop_patience")
         save_frequency = self.cfg.getint("Training", "save_frequency")
+        # Spectrum comparison plots alongside waveform figures. Default ON
+        # for new runs; existing INIs without the key keep the new behavior.
+        save_spectrum_comparison = self.cfg.getboolean(
+            "Training", "save_spectrum_comparison", fallback=True
+        )
+        try:
+            spectrum_sample_rate = float(
+                self.cfg.get("DataFrame", "sample_rate")
+            )
+        except Exception:
+            spectrum_sample_rate = 1.0
         beta = self.cfg.getfloat("Training", "beta")
 
         # Create python list for loss
@@ -2850,6 +2861,10 @@ class LearningAlgorithm:
                                 getattr(dataset_config, "observation_process", None)
                             )
                         ),
+                        spectrum_compare=save_spectrum_comparison,
+                        sample_rate=spectrum_sample_rate,
+                        epoch=epoch,
+                        spectrum_mode_name="training_mode",
                     )
 
                     # START: Compute autonomous mode selector for Even Bursts visualization #################
@@ -2901,6 +2916,10 @@ class LearningAlgorithm:
                                 getattr(dataset_config, "observation_process", None)
                             )
                         ),
+                        spectrum_compare=save_spectrum_comparison,
+                        sample_rate=spectrum_sample_rate,
+                        epoch=epoch,
+                        spectrum_mode_name="even_bursts",
                     )
 
                     # START: Compute autonomous mode selector for Half-Half visualization #################
@@ -2951,6 +2970,10 @@ class LearningAlgorithm:
                                 getattr(dataset_config, "observation_process", None)
                             )
                         ),
+                        spectrum_compare=save_spectrum_comparison,
+                        sample_rate=spectrum_sample_rate,
+                        epoch=epoch,
+                        spectrum_mode_name="half_half",
                     )
 
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":

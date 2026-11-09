@@ -26,3 +26,8 @@ from .visualize_training_metrics import (
     visualize_alpha_history,
     save_drift_timestep_figures,
 )
+
+from .spectrum_comparison import (
+    compute_original_vs_output_spectra,
+    save_original_vs_output_spectrum,
+)

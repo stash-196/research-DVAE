@@ -651,6 +651,12 @@ def visualize_teacherforcing_2_autonomous(
     noise_selector=None,
     missing_mask=None,
     hide_mask_output=False,
+    spectrum_compare=False,
+    spectrum_save_path=None,
+    sample_rate=1.0,
+    epoch=None,
+    spectrum_mode_name="",
+    spectrum_region=None,
 ):
     # Get sequence length and dimensions
     seq_len_total, batch_size, x_dim = batch_data.shape
@@ -787,6 +793,35 @@ def visualize_teacherforcing_2_autonomous(
         explain,
         missing_mask=expanded_missing_mask,
     )
+
+    if spectrum_compare:
+        from dvae.visualizers.spectrum_comparison import (
+            save_original_vs_output_spectrum,
+        )
+
+        mode_name = spectrum_mode_name or os.path.basename(
+            os.path.normpath(save_path)
+        )
+        if spectrum_region is None:
+            region = "autonomous" if mode_name == "half_half" else "full"
+        else:
+            region = spectrum_region
+        out_dir = spectrum_save_path or os.path.join(
+            os.path.dirname(os.path.dirname(save_path)),
+            "spectrum_comparison",
+            mode_name,
+        )
+        save_original_vs_output_spectrum(
+            true_series,
+            recon_series,
+            out_dir,
+            explain=explain,
+            mode_selector=expanded_mode_selector,
+            region=region,
+            sample_rate=float(sample_rate),
+            epoch=epoch,
+            mode_name=mode_name,
+        )
 
 
 def reduce_dimensions(embeddings, technique="pca", n_components=3):
