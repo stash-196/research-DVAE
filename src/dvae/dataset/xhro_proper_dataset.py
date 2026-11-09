@@ -165,7 +165,11 @@ set ``requires_k = True`` if the rule needs ``coarse_eeg_artifact_k``).
 Transforms and normalization are per subject, then applied to every split.
 ``acc_motion_rms`` is ``log1p``. ``abs_*`` and ``eeg_rms_mad`` are ``log10``
 (non-positive becomes NaN) and upper-clipped at the non-test 99.5th
-percentile. ``tod_sin`` / ``tod_cos`` are not normalized. Other selected
+percentile. ``tod_sin`` / ``tod_cos`` are not normalized. By default
+(``coarse_tod_from_clock``, blank = true) they are rebuilt from the 30 s
+``t_start`` grid: a per-subject phase offset is fit where the exported
+phase advances normally, and that clock is written through recording
+gaps. ``false`` keeps the raw export. Other selected
 columns are z-scored with ``nanmean`` / ``nanstd`` (ddof 0) from that
 subject's final non-test rows. Those statistics ignore NaNs, so plain,
 interpolate, and indicate share one scale. If ``std < 1e-8``, the column
@@ -1151,6 +1155,9 @@ def coarse_dataframe_kwargs(cfg) -> dict:
         ),
         "coarse_include_hr": optional_config_bool(
             cfg, "DataFrame", "coarse_include_hr", False
+        ),
+        "coarse_tod_from_clock": optional_config_bool(
+            cfg, "DataFrame", "coarse_tod_from_clock", True
         ),
         "val_split_per_subject": optional_config_bool(
             cfg, "DataFrame", "val_split_per_subject", False
@@ -2239,6 +2246,114 @@ def _apply_waveform_piece_suffix(values, suffix, *, parity: bool) -> np.ndarray:
     raise ValueError(f"Unknown waveform suffix: {suffix!r}")
 
 
+def _wrap_to_pi(values) -> np.ndarray:
+    """Wrap radians to (-pi, pi]."""
+    return np.angle(np.exp(1j * np.asarray(values, dtype=np.float64)))
+
+
+def _tod_t0_offset_rad(t0) -> float:
+    """Phase of a local clock time: 2*pi * (hours since midnight) / 24."""
+    ts = pd.Timestamp(t0)
+    hours = (
+        float(ts.hour)
+        + float(ts.minute) / 60.0
+        + float(ts.second) / 3600.0
+        + float(ts.microsecond) / 3.6e9
+    )
+    return float(2.0 * np.pi * (hours / 24.0))
+
+
+def rebuild_tod_from_clock(
+    t_start,
+    tod_sin,
+    tod_cos,
+    *,
+    t0=None,
+    tol: float = 1e-6,
+):
+    """Rebuild ``tod_sin`` / ``tod_cos`` from the 30 s ``t_start`` clock.
+
+    ``omega = 2*pi/86400``. Rows whose exported phase steps by ``omega*dt``
+    (within ``tol``) fix a single offset: the circular mean of
+    ``wrap(phase - omega*t)``. The returned phase is ``omega*t + offset``
+    on every finite ``t``, including recording gaps. With fewer than two
+    such rows, ``t0`` (local clock) supplies the offset. With neither, the
+    exported values are returned unchanged (``source="export"``).
+    """
+    t = np.asarray(t_start, dtype=np.float64).reshape(-1)
+    sin_exp = np.asarray(tod_sin, dtype=np.float64).reshape(-1).copy()
+    cos_exp = np.asarray(tod_cos, dtype=np.float64).reshape(-1).copy()
+    if not (len(t) == len(sin_exp) == len(cos_exp)):
+        raise ValueError(
+            "t_start, tod_sin, and tod_cos must have the same length, "
+            f"got {len(t)}, {len(sin_exp)}, {len(cos_exp)}."
+        )
+    n = int(len(t))
+    omega = 2.0 * np.pi / 86400.0
+    finite = np.isfinite(sin_exp) & np.isfinite(cos_exp)
+    phase = np.full(n, np.nan, dtype=np.float64)
+    if finite.any():
+        phase[finite] = np.arctan2(sin_exp[finite], cos_exp[finite])
+    normal = np.zeros(n, dtype=bool)
+    if n >= 2:
+        both = finite[:-1] & finite[1:]
+        pair_ok = np.zeros(n - 1, dtype=bool)
+        if both.any():
+            step = np.abs(
+                _wrap_to_pi(phase[1:][both] - phase[:-1][both])
+                - omega * (t[1:][both] - t[:-1][both])
+            )
+            pair_ok[both] = step < tol
+        normal[:-1] |= pair_ok
+        normal[1:] |= pair_ok
+    n_fit = int(normal.sum())
+    t0_offset = None if t0 is None else _tod_t0_offset_rad(t0)
+    if n_fit >= 2:
+        residual = _wrap_to_pi(phase[normal] - omega * t[normal])
+        offset = float(np.angle(np.mean(np.exp(1j * residual))))
+        source = "fit"
+    elif t0_offset is not None:
+        offset = float(t0_offset)
+        source = "t0"
+    else:
+        offset = float("nan")
+        source = "export"
+
+    if source == "export":
+        sin_out = sin_exp
+        cos_out = cos_exp
+        phase_new = phase
+    else:
+        phase_new = omega * t + offset
+        sin_out = np.sin(phase_new)
+        cos_out = np.cos(phase_new)
+
+    dev = np.full(n, np.nan, dtype=np.float64)
+    changed = ~finite
+    if finite.any():
+        dev[finite] = np.abs(_wrap_to_pi(phase_new[finite] - phase[finite]))
+        changed[finite] = dev[finite] > tol
+    if n_fit:
+        max_dev = float(np.max(dev[normal]))
+    else:
+        max_dev = float("nan")
+    info = {
+        "source": source,
+        "offset_rad": float(offset),
+        "n_rows": n,
+        "n_fit_rows": n_fit,
+        "max_dev_outside_gaps_rad": max_dev,
+        "n_rows_changed": int(changed.sum()),
+    }
+    if t0_offset is not None:
+        info["t0_offset_rad"] = float(t0_offset)
+        if source == "fit":
+            info["fit_minus_t0_rad"] = float(_wrap_to_pi(offset - t0_offset))
+        else:
+            info["fit_minus_t0_rad"] = float("nan")
+    return sin_out, cos_out, info
+
+
 def build_coarse_subject(
     session_dir: Path,
     columns: list[str],
@@ -2248,6 +2363,7 @@ def build_coarse_subject(
     artifact_k: float | None,
     max_rel_delta: float | None,
     subject_label: str,
+    tod_from_clock: bool = True,
 ) -> dict:
     """Load, mask, transform, and z-score one subject. Rows are not sliced."""
     epochs, hrv = load_coarse_parquets(session_dir)
@@ -2270,6 +2386,22 @@ def build_coarse_subject(
         raise ValueError(f"{subject_label}: coarse t_start has non-finite values")
     joined = join_hr_mean_onto_epochs(epochs, hrv)
     joined = joined.sort_values("t_start", kind="mergesort").reset_index(drop=True)
+    tod_info = None
+    use_tod_clock = _optional_bool(tod_from_clock, "tod_from_clock", default=True)
+    if use_tod_clock and "tod_sin" in columns and "tod_cos" in columns:
+        t0 = None
+        try:
+            t0 = _infer_t0(session_dir)
+        except Exception:
+            t0 = None
+        sin_new, cos_new, tod_info = rebuild_tod_from_clock(
+            joined["t_start"].to_numpy(dtype=np.float64),
+            joined["tod_sin"].to_numpy(dtype=np.float64),
+            joined["tod_cos"].to_numpy(dtype=np.float64),
+            t0=t0,
+        )
+        joined["tod_sin"] = sin_new
+        joined["tod_cos"] = cos_new
     if uses_eeg:
         joined = apply_rel_alpha_eeg_mask(joined)
         art_rows, art_report = eeg_artifact_row_mask(
@@ -2328,6 +2460,8 @@ def build_coarse_subject(
         "clip_hi": clip_hi,
         "std_guarded": list(guarded),
     }
+    if tod_info is not None:
+        report["tod_clock"] = tod_info
     return {
         "features": features,
         "t_start": joined["t_start"].to_numpy(dtype=np.float64),
@@ -2342,10 +2476,24 @@ def _fmt_frac(numer: int, denom: int) -> str:
     return f"{numer / denom:.3f}"
 
 
+def _tod_clock_log_fragment(report: dict) -> str:
+    tod = report.get("tod_clock")
+    if not tod:
+        return ""
+    max_dev = tod["max_dev_outside_gaps_rad"]
+    return (
+        f" tod_clock source={tod['source']} "
+        f"offset_rad={tod['offset_rad']:.3g} "
+        f"max_dev_outside_gaps_rad={max_dev:.3g} "
+        f"n_rows_changed={tod['n_rows_changed']}/{tod['n_rows']}"
+    )
+
+
 def _log_coarse_subject(report: dict) -> None:
     label = report["subject"]
     hr_frac = report["hr_window_ok_frac"]
     hr_frac_s = "nan" if not np.isfinite(hr_frac) else f"{hr_frac:.3f}"
+    tod_bit = _tod_clock_log_fragment(report)
     print(
         f"[XhroProper][coarse][{label}] epochs={report['n_epochs']} "
         "usable_frac non_test(train/valid)="
@@ -2355,7 +2503,16 @@ def _log_coarse_subject(report: dict) -> None:
         f"hr_window_ok={report['hr_n_window_ok']}/{report['hr_n_windows']} "
         f"({hr_frac_s}) test_cut={report['test_cut']} "
         f"mode={report['test_split_mode']} n_test_usable={report['n_test_usable']}"
+        f"{tod_bit}"
     )
+    tod = report.get("tod_clock")
+    if tod:
+        max_dev = tod["max_dev_outside_gaps_rad"]
+        bad_dev = np.isfinite(max_dev) and float(max_dev) > 1e-5
+        if tod["source"] == "export" or bad_dev:
+            msg = f"[XhroProper][coarse][{label}]{tod_bit}"
+            print("WARNING " + msg)
+            warnings.warn(msg, UserWarning, stacklevel=2)
     if not report.get("eeg_columns", True):
         print(
             f"[XhroProper][coarse][{label}] artifact rules not applied "
@@ -2426,6 +2583,9 @@ class XhroProper(Xhro):
         ``log_total_power_robust``.
       - coarse_eeg_artifact_k: required when the power rule is on.
       - coarse_eeg_max_rel_delta: optional rel_delta cap; unset means off.
+      - coarse_tod_from_clock: blank or true (default) rebuilds
+        ``tod_sin`` / ``tod_cos`` from the 30 s ``t_start`` grid.
+        false keeps the raw export.
       - crop_start_sec / crop_end_sec: inclusive seconds from the first
         timestamp. Unset means no crop. Waveform path only, after load and
         before the 20% test split. Used only when ``segments`` is unset;
@@ -2517,6 +2677,7 @@ class XhroProper(Xhro):
         coarse_eeg_artifact_k=None,
         coarse_eeg_max_rel_delta=None,
         coarse_include_hr=False,
+        coarse_tod_from_clock=True,
         crop_start_sec=None,
         crop_end_sec=None,
         segments=None,
@@ -2637,6 +2798,7 @@ class XhroProper(Xhro):
                 coarse_eeg_artifact_k=coarse_eeg_artifact_k,
                 coarse_eeg_max_rel_delta=coarse_eeg_max_rel_delta,
                 coarse_include_hr=coarse_include_hr,
+                coarse_tod_from_clock=coarse_tod_from_clock,
             )
             return
 
@@ -3035,6 +3197,7 @@ class XhroProper(Xhro):
         coarse_eeg_artifact_k,
         coarse_eeg_max_rel_delta,
         coarse_include_hr=False,
+        coarse_tod_from_clock=True,
     ) -> None:
         self.coarse_test_split = _normalize_coarse_test_split(coarse_test_split)
         self.coarse_eeg_artifact_mask = _normalize_artifact_mask_name(
@@ -3051,6 +3214,9 @@ class XhroProper(Xhro):
         )
         self.sampling_freq = COARSE_SAMPLING_FREQ
         self.coarse_include_hr = bool(coarse_include_hr)
+        self.coarse_tod_from_clock = _optional_bool(
+            coarse_tod_from_clock, "coarse_tod_from_clock", default=True
+        )
         self.feature_columns = coarse_feature_columns(base, self.coarse_include_hr)
         self.dataset_labels = _parse_coarse_labels(self.dataset_label)
         self.is_segmented_1d = False
@@ -3078,6 +3244,7 @@ class XhroProper(Xhro):
                 artifact_k=self.coarse_eeg_artifact_k,
                 max_rel_delta=self.coarse_eeg_max_rel_delta,
                 subject_label=label,
+                tod_from_clock=self.coarse_tod_from_clock,
             )
             _log_coarse_subject(item["report"])
             prepared.append(item)

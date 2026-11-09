@@ -33,9 +33,11 @@ from dvae.dataset.xhro_proper_dataset import (  # noqa: E402
     _apply_coarse_suffix,
     _provisional_nontest_mask,
     apply_rel_alpha_eeg_mask,
+    build_coarse_subject,
     coarse_dataframe_kwargs,
     coarse_test_cut,
     join_hr_mean_onto_epochs,
+    rebuild_tod_from_clock,
     _parse_coarse_labels,
 )
 from dvae.eval.window_length import apply_eval_seq_len, cap_eval_seq_len  # noqa: E402
@@ -997,6 +999,7 @@ def test_coarse_config_keys_reach_dataloader(tmp_path, _torch_required):
         "coarse_eeg_artifact_k",
         "coarse_eeg_max_rel_delta",
         "coarse_include_hr",
+        "coarse_tod_from_clock",
     ):
         assert key in text
 
@@ -1303,3 +1306,271 @@ def test_multi_subject_request_longer_than_tail_still_windows(tmp_path, _torch_r
 
         batch = next(iter(DataLoader(ds, batch_size=1)))
         assert tuple(batch.shape)[1] == 8
+
+
+_TOD_OMEGA = 2.0 * np.pi / 86400.0
+
+
+def _phase_steps(sin, cos):
+    phase = np.arctan2(np.asarray(sin, dtype=np.float64), np.asarray(cos, dtype=np.float64))
+    return np.angle(np.exp(1j * np.diff(phase)))
+
+
+def _clock_export_with_gap(n=48, gap=(12, 28), offset=np.pi - 1e-3):
+    """True 30 s clock, with a freeze-then-jump gap in the export.
+
+    The first half of the gap holds the pre-gap phase. The second half
+    holds the post-gap phase. ``offset`` sits just below pi so the true
+    phase crosses the branch cut inside the series.
+    """
+    t = np.arange(n, dtype=np.float64) * 30.0
+    phase = _TOD_OMEGA * t + float(offset)
+    gap_lo, gap_hi = gap
+    mid = (gap_lo + gap_hi) // 2
+    exported = phase.copy()
+    exported[gap_lo:mid] = phase[gap_lo - 1]
+    exported[mid:gap_hi] = phase[gap_hi]
+    return {
+        "t": t,
+        "phase": phase,
+        "sin": np.sin(exported),
+        "cos": np.cos(exported),
+        "gap": np.arange(gap_lo, gap_hi),
+        "outside": np.r_[np.arange(0, gap_lo), np.arange(gap_hi, n)],
+    }
+
+
+def test_rebuild_tod_smooths_freeze_jump_gap():
+    clock = _clock_export_with_gap()
+    t0 = pd.Timestamp("2026-06-22 18:00:00")
+    sin_n, cos_n, info = rebuild_tod_from_clock(
+        clock["t"], clock["sin"], clock["cos"], t0=t0
+    )
+    steps = _phase_steps(sin_n, cos_n)
+    assert np.allclose(steps, _TOD_OMEGA * 30.0, atol=1e-9)
+    outside = clock["outside"]
+    assert np.max(np.abs(sin_n[outside] - clock["sin"][outside])) < 1e-9
+    assert np.max(np.abs(cos_n[outside] - clock["cos"][outside])) < 1e-9
+    gap = clock["gap"]
+    assert np.max(np.abs(sin_n[gap] - clock["sin"][gap])) > 1e-3
+    assert np.allclose(sin_n**2 + cos_n**2, 1.0, atol=1e-12)
+    assert info["source"] == "fit"
+    assert info["n_rows"] == len(clock["t"])
+    assert info["n_fit_rows"] == len(clock["outside"])
+    assert info["n_rows_changed"] == len(gap)
+    assert info["max_dev_outside_gaps_rad"] < 1e-9
+    assert "t0_offset_rad" in info
+    assert info["fit_minus_t0_rad"] == pytest.approx(
+        float(np.angle(np.exp(1j * (info["offset_rad"] - info["t0_offset_rad"]))))
+    )
+
+
+def test_rebuild_tod_t0_fallback_when_fewer_than_two_normal_rows():
+    t = np.arange(6, dtype=np.float64) * 30.0
+    # Constant phase: no pair steps by omega*30.
+    sin = np.zeros(len(t))
+    cos = np.ones(len(t))
+    sin[-1] = np.nan
+    t0 = pd.Timestamp("2026-06-22 14:24:10.500000")
+    hours = 14.0 + 24.0 / 60.0 + 10.0 / 3600.0 + 500000.0 / 3.6e9
+    offset = 2.0 * np.pi * (hours / 24.0)
+    sin_n, cos_n, info = rebuild_tod_from_clock(t, sin, cos, t0=t0)
+    assert info["source"] == "t0"
+    assert info["n_fit_rows"] < 2
+    assert info["offset_rad"] == pytest.approx(offset)
+    assert info["t0_offset_rad"] == pytest.approx(offset)
+    assert np.isnan(info["fit_minus_t0_rad"])
+    assert np.isnan(info["max_dev_outside_gaps_rad"])
+    phase = np.arctan2(sin_n, cos_n)
+    expected = np.angle(np.exp(1j * (_TOD_OMEGA * t + offset)))
+    assert np.allclose(phase, expected, atol=1e-9)
+    assert np.allclose(sin_n**2 + cos_n**2, 1.0, atol=1e-12)
+    # 06:00 is a quarter turn, including through the previously missing row.
+    noon = rebuild_tod_from_clock(t[:1], [0.0], [1.0], t0=pd.Timestamp("2026-01-01 06:00:00"))
+    assert noon[2]["source"] == "t0"
+    assert noon[2]["offset_rad"] == pytest.approx(np.pi / 2.0)
+    assert noon[0][0] == pytest.approx(1.0)
+    assert noon[1][0] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_rebuild_tod_export_fallback_without_t0():
+    t = np.arange(4, dtype=np.float64) * 30.0
+    sin = np.array([0.1, 0.2, np.nan, -0.3])
+    cos = np.array([0.9, 0.8, 0.1, 0.4])
+    sin_n, cos_n, info = rebuild_tod_from_clock(t, sin, cos, t0=None)
+    assert info["source"] == "export"
+    assert np.isnan(info["offset_rad"])
+    assert info["n_fit_rows"] < 2
+    assert np.allclose(sin_n, sin, equal_nan=True)
+    assert np.allclose(cos_n, cos, equal_nan=True)
+    assert info["n_rows_changed"] == 1
+    assert "t0_offset_rad" not in info
+    assert "fit_minus_t0_rad" not in info
+
+
+def test_coarse_tod_from_clock_config_blank_is_true():
+    assert coarse_dataframe_kwargs(configparser.ConfigParser())["coarse_tod_from_clock"] is True
+    blank = configparser.ConfigParser()
+    blank.read_string("[DataFrame]\ncoarse_tod_from_clock =\n")
+    assert coarse_dataframe_kwargs(blank)["coarse_tod_from_clock"] is True
+    explicit = configparser.ConfigParser()
+    explicit.read_string("[DataFrame]\ncoarse_tod_from_clock = true\n")
+    assert coarse_dataframe_kwargs(explicit)["coarse_tod_from_clock"] is True
+    off = configparser.ConfigParser()
+    off.read_string("[DataFrame]\ncoarse_tod_from_clock = false\n")
+    assert coarse_dataframe_kwargs(off)["coarse_tod_from_clock"] is False
+    template = (
+        Path(__file__).resolve().parents[1] / "config/general_signal/cfg_base_template.ini"
+    ).read_text()
+    assert "coarse_tod_from_clock = {coarse_tod_from_clock}" in template
+
+
+def _subject_with_tod_gap(tmp_path, label="subj_a"):
+    clock = _clock_export_with_gap()
+    epochs, hrv = make_frames(len(clock["t"]), label, seed=3)
+    epochs["t_start"] = clock["t"]
+    epochs["t_end"] = clock["t"] + 30.0
+    epochs["tod_sin"] = clock["sin"]
+    epochs["tod_cos"] = clock["cos"]
+    session = write_session(tmp_path, label, epochs, hrv)
+    return session, clock
+
+
+def test_build_coarse_subject_tod_flag_off_keeps_export(tmp_path):
+    session, clock = _subject_with_tod_gap(tmp_path)
+    columns = list(COARSE_OBS_COLUMNS["coarse_eeg_acc_tod"])
+    common = dict(
+        test_split_mode="last20_rows",
+        artifact_mask="none",
+        artifact_k=None,
+        max_rel_delta=None,
+        subject_label="subj_a",
+    )
+    on = build_coarse_subject(session, columns, tod_from_clock=True, **common)
+    off = build_coarse_subject(session, columns, tod_from_clock=False, **common)
+    sin_i = columns.index("tod_sin")
+    cos_i = columns.index("tod_cos")
+    on_sin = on["features"][:, sin_i]
+    on_cos = on["features"][:, cos_i]
+    off_sin = off["features"][:, sin_i]
+    off_cos = off["features"][:, cos_i]
+    assert on["report"]["tod_clock"]["source"] == "fit"
+    assert "tod_clock" not in off["report"]
+    steps = _phase_steps(on_sin, on_cos)
+    assert np.allclose(steps, _TOD_OMEGA * 30.0, atol=1e-9)
+    outside = clock["outside"]
+    assert np.max(np.abs(on_sin[outside] - clock["sin"][outside])) < 1e-9
+    assert np.max(np.abs(on_cos[outside] - clock["cos"][outside])) < 1e-9
+    assert np.allclose(on_sin**2 + on_cos**2, 1.0, atol=1e-12)
+    assert np.allclose(off_sin, clock["sin"])
+    assert np.allclose(off_cos, clock["cos"])
+    assert np.max(np.abs(on_sin[clock["gap"]] - off_sin[clock["gap"]])) > 1e-3
+
+
+def test_coarse_tod_flag_reaches_loader_and_logs(tmp_path, _torch_required, capsys):
+    session, clock = _subject_with_tod_gap(tmp_path)
+    del session
+    import warnings
+
+    capsys.readouterr()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        on = _load(
+            tmp_path,
+            "subj_a",
+            "coarse_eeg_acc_tod",
+            seq_len=8,
+            val_indices=0.0,
+            coarse_test_split="last20_rows",
+        )
+    assert on.coarse_tod_from_clock is True
+    assert on.coarse_reports[0]["tod_clock"]["source"] == "fit"
+    logged = capsys.readouterr().out
+    report = on.coarse_reports[0]["tod_clock"]
+    assert "tod_clock source=fit" in logged
+    assert f"offset_rad={report['offset_rad']:.3g}" in logged
+    assert f"max_dev_outside_gaps_rad={report['max_dev_outside_gaps_rad']:.3g}" in logged
+    assert f"n_rows_changed={report['n_rows_changed']}/{report['n_rows']}" in logged
+    assert not any("tod_clock" in str(item.message) for item in caught)
+
+    capsys.readouterr()
+    off = _load(
+        tmp_path,
+        "subj_a",
+        "coarse_eeg_acc_tod",
+        seq_len=8,
+        val_indices=0.0,
+        coarse_test_split="last20_rows",
+        coarse_tod_from_clock=False,
+    )
+    assert off.coarse_tod_from_clock is False
+    assert "tod_clock" not in off.coarse_reports[0]
+    assert "tod_clock" not in capsys.readouterr().out
+    sin_i = _col("coarse_eeg_acc_tod", "tod_sin")
+    # Train head still contains the gap. Off keeps the frozen export.
+    gap_in_head = clock["gap"][clock["gap"] < on.coarse_reports[0]["test_cut"]]
+    assert np.max(np.abs(_seq(on)[gap_in_head, sin_i] - _seq(off)[gap_in_head, sin_i])) > 1e-3
+
+
+def test_nonclock_tod_export_warns(tmp_path, _torch_required, capsys):
+    epochs, hrv = make_frames(40, "subj_a", seed=1)
+    write_session(tmp_path, "subj_a", epochs, hrv)
+    capsys.readouterr()
+    with pytest.warns(UserWarning, match="tod_clock source=export"):
+        ds = _load(
+            tmp_path,
+            "subj_a",
+            "coarse_eeg_acc_tod",
+            seq_len=8,
+            val_indices=0.0,
+            coarse_test_split="last20_rows",
+        )
+    info = ds.coarse_reports[0]["tod_clock"]
+    assert info["source"] == "export"
+    assert info["n_rows_changed"] == 0
+    logged = capsys.readouterr().out
+    assert "WARNING" in logged
+    assert "tod_clock source=export" in logged
+    # Raw export is not a clock, and the fallback leaves it unscaled.
+    sin_i = _col("coarse_eeg_acc_tod", "tod_sin")
+    raw = np.sin(2.0 * np.pi * np.arange(40) / 40.0)
+    cut = ds.coarse_reports[0]["test_cut"]
+    assert np.allclose(_seq(ds)[:5, sin_i], raw[:5])
+    assert cut > 5
+
+
+def test_t0_snapshot_fallback_fills_a_frozen_clock(tmp_path):
+    epochs, hrv = make_frames(12, "subj_a", seed=4)
+    epochs["tod_sin"] = 0.0
+    epochs["tod_cos"] = 1.0
+    epochs.loc[3, "tod_sin"] = np.nan
+    epochs.loc[3, "tod_cos"] = np.nan
+    session = write_session(tmp_path, "subj_a", epochs, hrv)
+    (session / "config_snapshot.json").write_text('{"t0": "2026-06-22T06:00:00"}')
+    columns = list(COARSE_OBS_COLUMNS["coarse_eeg_acc_tod"])
+    built = build_coarse_subject(
+        session,
+        columns,
+        test_split_mode="last20_rows",
+        artifact_mask="none",
+        artifact_k=None,
+        max_rel_delta=None,
+        subject_label="subj_a",
+        tod_from_clock=True,
+    )
+    info = built["report"]["tod_clock"]
+    assert info["source"] == "t0"
+    assert info["n_fit_rows"] < 2
+    assert info["offset_rad"] == pytest.approx(np.pi / 2.0)
+    sin_i = columns.index("tod_sin")
+    cos_i = columns.index("tod_cos")
+    t = built["t_start"]
+    phase = np.arctan2(built["features"][:, sin_i], built["features"][:, cos_i])
+    expected = np.angle(np.exp(1j * (_TOD_OMEGA * t + np.pi / 2.0)))
+    assert np.allclose(phase, expected, atol=1e-9)
+    assert np.isfinite(built["features"][:, sin_i]).all()
+    assert np.allclose(
+        built["features"][:, sin_i] ** 2 + built["features"][:, cos_i] ** 2,
+        1.0,
+        atol=1e-12,
+    )
