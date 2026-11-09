@@ -77,6 +77,11 @@ setup(
             "mypy",
             "pre-commit",
         ],
+        # Optional. The SINDy baseline defaults to a NumPy STLSQ and imports
+        # without this. ``backend="pysindy"`` needs it.
+        "sindy": [
+            "pysindy>=1.7",
+        ],
     },
     python_requires=">=3.8",
     author="Your Name",

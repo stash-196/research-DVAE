@@ -65,6 +65,62 @@ Eval / aggregate after a pull: `scripts/slurm/evaluation/run_eval_multiple.sh`, 
 
 Paths for this machine vs Deigo live in `config/device_paths.yaml`. Studio `~/mounts/bucket/...` is a local cache, not a live cluster mount.
 
+## Baselines: GRU-D and SINDy
+
+These sit beside the OTF trainer. They do not change `bin/train_model.py`, `learning_algo.py`, or `bin/generate_config_file_for_multiple.py`. Generated ini files stay under `config/general_signal/generated/` and are gitignored.
+
+### GRU-D
+
+Che et al. 2018. Input decay and hidden-state decay use the missingness mask and the time since the last observation. NaNs are the mask; do not pre-impute, and do not use an `_indicate` or `_interpolate` observation (the cell builds the mask itself).
+
+`Network.name = GRU_D` is not registered in `LearningAlgorithm` (that trainer is in use). Train with the separate entry point. On Deigo, after `git pull`:
+
+```sh
+ml singularity
+singularity exec /bucket/DoyaU/stash/containers/generic_ml_container.sif python3 bin/generate_gru_d_configs.py
+bash scripts/slurm/train/run_gru_d_multiple.sh gru_d_lorenz_baselines
+```
+
+Edit the sweep lists in `bin/generate_gru_d_configs.py` (observation, mask label, epochs) before generating. `mask_label` must match a mask pickle already on disk; `None` is fully observed. Set `epochs` beside the OTF runs you want to compare against. A single hand-written example is `config/lorenz63/cfg_gru_d.ini`:
+
+```sh
+python bin/train_gru_d.py --cfg config/lorenz63/cfg_gru_d.ini
+```
+
+On a host listed in `config/device_paths.yaml` (Deigo), `data_dir` and `saved_root` come from that file. Otherwise the ini paths are used. Checkpoints go under `{saved_root}/gru_d/`, not into an OTF experiment folder. The job writes `evaluation_summary.yaml` with `mse_tf`, `imputation_mse` (Lorenz only, where the unmasked series exists), and the half-series closed-loop scores `mse_auto`, `kld_auto`, `spectrum_error_auto`.
+
+GRU-D is trained teacher-forced on observed samples. The closed-loop numbers use the same `half_half` schedule and metric names as the OTF eval, but the model was not trained with scheduled autonomous steps.
+
+PhysioNet 2012, once that benchmark's parquet is prepared: set `dataset_name = PhysioNet2012`, `observation_process = raw_vitals` (width 5) or `raw_hr` (width 1), `sequence_len = 48`, `delta_step = 1` (one hour per row). `bin/train_gru_d.py` already calls `build_dataloader`, so no loader change is required. Truly missing ICU hours have no imputation label; `imputation_mse` stays empty and `mse_tf` is the error on observed hours.
+
+To run GRU-D inside the live trainer later, add a `GRU_D` branch in `LearningAlgorithm.build_model` and treat its KL term as zero. The exact lines are in the docstring of `src/dvae/model/gru_d.py`. `forward` already accepts `mode_selector`.
+
+### SINDy
+
+Brunton et al. 2016. Sparse polynomial dynamics, fit on the training trajectory and scored on test windows with a half-series free run. The default fitter is NumPy sequential thresholded least squares, so the container does not need a new package. `pip install 'research_dvae[sindy]'` (or `pysindy`) enables `--backend pysindy`.
+
+```sh
+python bin/eval_sindy_lorenz.py \
+  --observation-process all_xyz \
+  --missing-strategy observed_segments \
+  --output-dir ./outputs/sindy_all_xyz
+```
+
+On Deigo:
+
+```sh
+bash scripts/slurm/evaluation/run_sindy_lorenz.sh
+MASK_LABEL=Bernoulli_0.5 bash scripts/slurm/evaluation/run_sindy_lorenz.sh
+```
+
+`MASK_LABEL` has to be a mask that exists under the Lorenz data directory. The job writes one folder per condition with `evaluation_summary.yaml`, `equations.txt`, `limits.txt`, and plots styled by `aggregate_plot_style`.
+
+Missing values: `observed_segments` (default) drops any row with a NaN and pools the contiguous runs, so the derivative is not taken across a gap. `interpolate` linearly fills each coordinate first; that is optimistic when gaps are long.
+
+Partial observation is a separate limit. `only_x` / `only_xy` / `only_xz` are fit in the coordinates that remain. Lorenz63 needs the `xy` and `xz` terms, so a 1-D or 2-D polynomial ODE cannot represent the attractor. Expect a faithful sparse model on fully observed `all_xyz` and a clear drop when a coordinate is absent. Delay embedding is not applied.
+
+`mse_auto`, `kld_auto`, and `spectrum_error_auto` are the same scores the OTF aggregate plots read (masked MSE, delay-embedding GMM KL with Lorenz tau=10, m=3, Hellinger spectrum error). Full-horizon MSE on Lorenz grows even for a correct field because of chaos. `mse_auto_short` (first 20 forecast steps), the spectrum error, and the KL are the comparisons that stay informative. SINDy is fit on the whole training trajectory, which is a stronger sample than the windowed RNN objective.
+
 ## XhroProper session paths
 
 `XhroProper` reads `grok_output/<session>/intermediates/*.npz`. With neither `corpus` nor `data_root` set, the path stays the packet-loss tree:
