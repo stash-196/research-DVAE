@@ -653,7 +653,7 @@ def visualize_teacherforcing_2_autonomous(
     hide_mask_output=False,
     spectrum_compare=False,
     spectrum_save_path=None,
-    sample_rate=1.0,
+    sample_rate=None,
     epoch=None,
     spectrum_mode_name="",
     spectrum_region=None,
@@ -662,6 +662,9 @@ def visualize_teacherforcing_2_autonomous(
     seq_len_total, batch_size, x_dim = batch_data.shape
     n_seq = seq_len_total if seq_len is None else min(seq_len, seq_len_total)
 
+    # Waveform plots use batch item 0. The spectrum forward below needs
+    # the full batch, so keep that selector before this slice.
+    noise_selector_full = None if noise_selector is None else noise_selector[:n_seq]
     if noise_selector is None:
         noise_selector = None
     else:
@@ -795,32 +798,80 @@ def visualize_teacherforcing_2_autonomous(
     )
 
     if spectrum_compare:
+        # Waveform above stays on batch item 0. The spectrum averages
+        # every sequence in the batch, with mask channels removed when
+        # the caller asked to hide them.
         from dvae.visualizers.spectrum_comparison import (
+            alpha_line_frequencies,
             save_original_vs_output_spectrum,
+            timescale_alphas_from_model,
         )
 
         mode_name = spectrum_mode_name or os.path.basename(
             os.path.normpath(save_path)
         )
-        if spectrum_region is None:
-            region = "autonomous" if mode_name == "half_half" else "full"
-        else:
-            region = spectrum_region
+        spec_noise = noise_selector_full
+        recon_spec = (
+            dvae(
+                batch_data[:n_seq],
+                mode_selector=auto_mode_selector[:n_seq],
+                noise_selector=spec_noise,
+                inference_mode=inference_mode,
+            )
+            .detach()
+            .clone()
+        )
+        true_b = batch_data[:n_seq].detach().permute(1, 0, 2).cpu().numpy()
+        recon_b = recon_spec.permute(1, 0, 2).cpu().numpy()
+        sel_b = auto_mode_selector[:n_seq].detach().permute(1, 0, 2).cpu().numpy()
+        mask_b = None
+        if missing_mask is not None:
+            mask_b = missing_mask[:n_seq]
+            if torch.is_tensor(mask_b):
+                mask_b = mask_b.detach().permute(1, 0, 2).cpu().numpy()
+            else:
+                mask_b = np.asarray(mask_b)
+                if mask_b.ndim == 3 and mask_b.shape[0] == n_seq:
+                    mask_b = np.transpose(mask_b, (1, 0, 2))
+        if hide_mask_output and true_b.shape[-1] > 1:
+            true_b = true_b[:, :, 0::2]
+            recon_b = recon_b[:, :, 0::2]
+            sel_b = sel_b[:, :, 0::2]
+            if mask_b is not None:
+                if mask_b.shape[-1] == true_b.shape[-1]:
+                    pass
+                elif mask_b.shape[-1] >= 2 * true_b.shape[-1]:
+                    mask_b = mask_b[:, :, 0::2]
+                else:
+                    mask_b = mask_b[:, :, :1]
+        if mask_b is not None:
+            miss = np.asarray(mask_b) > 0.5
+            if miss.ndim == 3 and miss.shape[-1] == 1 and true_b.shape[-1] != 1:
+                miss = np.broadcast_to(miss, true_b.shape)
+            if miss.shape == true_b.shape:
+                true_b = np.where(miss, np.nan, true_b)
+        rate = None if sample_rate is None else float(sample_rate)
+        if rate is not None and (not np.isfinite(rate) or rate <= 0):
+            rate = None
         out_dir = spectrum_save_path or os.path.join(
             os.path.dirname(os.path.dirname(save_path)),
             "spectrum_comparison",
             mode_name,
         )
+        # spectrum_region is unused: both segments are always drawn.
+        del spectrum_region
         save_original_vs_output_spectrum(
-            true_series,
-            recon_series,
+            true_b,
+            recon_b,
             out_dir,
             explain=explain,
-            mode_selector=expanded_mode_selector,
-            region=region,
-            sample_rate=float(sample_rate),
+            mode_selector=sel_b,
+            sample_rate=rate,
             epoch=epoch,
             mode_name=mode_name,
+            alpha_frequencies=alpha_line_frequencies(
+                timescale_alphas_from_model(dvae), rate
+            ),
         )
 
 

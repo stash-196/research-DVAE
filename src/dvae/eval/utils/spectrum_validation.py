@@ -464,11 +464,31 @@ def capture_contiguous_val_windows(
     return windows, info
 
 
+def apply_gt_missing_mask(ground_truth, prediction):
+    """Copy the ground-truth gaps onto the prediction.
+
+    Both arrays keep their length. Prediction samples that sit on a
+    ground-truth gap become NaN so a later periodogram zero-fills the
+    same positions. The arrays themselves are not modified.
+    """
+    gt = np.asarray(ground_truth, dtype=np.float64).reshape(-1)
+    pred = np.asarray(prediction, dtype=np.float64).reshape(-1)
+    if gt.shape != pred.shape:
+        raise ValueError(
+            "Ground truth and prediction must share length so frequency "
+            f"bins align; got {gt.shape[0]} and {pred.shape[0]}."
+        )
+    observed = np.isfinite(gt)
+    return np.where(observed, gt, np.nan), np.where(observed, pred, np.nan)
+
+
 def _hann_periodogram(segment: np.ndarray) -> np.ndarray:
     x = np.asarray(segment, dtype=np.float64).reshape(-1)
     finite = np.isfinite(x)
     if not finite.any():
         raise ValueError("Spectrum segment has no finite samples.")
+    # Center on this series' own finite samples, then zero-fill the gaps
+    # so the FFT length stays the segment length.
     center = float(np.mean(x[finite]))
     tapered = np.where(finite, x - center, 0.0)
     tapered = tapered * np.hanning(tapered.size)
@@ -476,6 +496,18 @@ def _hann_periodogram(segment: np.ndarray) -> np.ndarray:
     if power.size < 2:
         raise ValueError("Spectrum segment is too short for a periodogram.")
     return power[1:]
+
+
+def shared_mask_hann_pair(ground_truth, prediction):
+    """Hann PSDs of ground truth and prediction on one shared gap mask.
+
+    The ground-truth missing mask is applied to both. Each series is
+    centered on its own remaining finite samples and zero-filled at the
+    ground-truth gaps, so both spectra use the same length and the same
+    frequency grid.
+    """
+    gt, pred = apply_gt_missing_mask(ground_truth, prediction)
+    return _hann_periodogram(gt), _hann_periodogram(pred)
 
 
 def averaged_hann_spectrum(segments: list[np.ndarray]) -> np.ndarray:
@@ -543,6 +575,10 @@ def free_run_spectrum_error(
                 pred_arr = pred_arr.reshape(-1, 1)
             gt_seg = gt_arr[tf_steps:, channel]
             pred_seg = pred_arr[tf_steps:, channel]
+            # Same gap positions on both series. The skip rule still looks
+            # at each series after that mask, so a prediction that is only
+            # finite inside a ground-truth gap does not count.
+            gt_seg, pred_seg = apply_gt_missing_mask(gt_seg, pred_seg)
             if not (
                 segment_has_enough_finite(gt_seg, min_finite, min_frac)
                 and segment_has_enough_finite(pred_seg, min_finite, min_frac)

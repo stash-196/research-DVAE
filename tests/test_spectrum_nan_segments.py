@@ -88,6 +88,29 @@ def test_nan_prediction_also_skips_pair():
     assert skipped == 1
 
 
+def test_identical_gapped_signals_have_zero_error():
+    gts, _preds = _windows(n=2, channels=1)
+    gts = [g.copy() for g in gts]
+    for g in gts:
+        g[TF : TF + 12, 0] = np.nan
+    err, skipped = free_run_spectrum_error(gts, gts, TF, return_skipped=True)
+    assert skipped == 0
+    assert err == pytest.approx(0.0, abs=1e-6)
+
+
+def test_prediction_inside_gt_gaps_does_not_change_error():
+    gts, _preds = _windows(n=2, channels=1)
+    gts = [g.copy() for g in gts]
+    for g in gts:
+        g[TF : TF + 12, 0] = np.nan
+    filled = [g.copy() for g in gts]
+    for g in filled:
+        g[np.isnan(g)] = 999.0
+    err, skipped = free_run_spectrum_error(filled, gts, TF, return_skipped=True)
+    assert skipped == 0
+    assert err == pytest.approx(0.0, abs=1e-6)
+
+
 def test_all_skipped_gives_nan():
     gts, preds = _windows()
     gts = [g.copy() for g in gts]

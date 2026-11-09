@@ -6,13 +6,30 @@ from dvae.visualizers.visualizers import (
 )
 
 
-def _compute_power_spectrum(data, sampling_rate):
-    data = np.asarray(data, dtype=np.float64)
-    data = data[np.isfinite(data)]
-    if len(data) < 4:
+def _center_zero_fill(data, observed):
+    """Center on the observed samples and zero-fill everywhere else.
+
+    ``observed`` is the shared mask (ground-truth finite positions).
+    Samples that are also non-finite in ``data`` are not part of the
+    center and are zero-filled, which keeps the FFT length equal to the
+    original series instead of dropping NaNs.
+    """
+    values = np.asarray(data, dtype=np.float64).reshape(-1)
+    mask = np.asarray(observed, dtype=bool).reshape(-1) & np.isfinite(values)
+    if int(mask.sum()) < 4:
         raise ValueError("Sequence too short for spectrum analysis.")
-    fft = np.fft.fft(data)
-    freqs = np.fft.fftfreq(len(data), 1 / sampling_rate)
+    center = float(np.mean(values[mask]))
+    filled = np.zeros(values.shape[0], dtype=np.float64)
+    filled[mask] = values[mask] - center
+    return filled
+
+
+def _positive_power(filled, sampling_rate):
+    filled = np.asarray(filled, dtype=np.float64).reshape(-1)
+    if filled.size < 4:
+        raise ValueError("Sequence too short for spectrum analysis.")
+    fft = np.fft.fft(filled)
+    freqs = np.fft.fftfreq(len(filled), 1 / sampling_rate)
     nonzero = freqs > 0
     ps = np.abs(fft[nonzero]) ** 2
     if not np.any(ps > 0):
@@ -20,13 +37,48 @@ def _compute_power_spectrum(data, sampling_rate):
     return ps
 
 
+def aligned_power_spectra(gt, pred, sampling_rate):
+    """Positive-frequency power of GT and prediction on one shared mask.
+
+    Ground-truth gaps are applied to both series. Each is centered on its
+    own observed samples, then zero-filled at those gaps. Lengths stay
+    equal, so the frequency bins line up. Smoothing and the Hellinger
+    normalization are unchanged.
+    """
+    gt = np.asarray(gt, dtype=np.float64).reshape(-1)
+    pred = np.asarray(pred, dtype=np.float64).reshape(-1)
+    if gt.shape != pred.shape:
+        raise ValueError(
+            "Ground truth and prediction must share length so frequency "
+            f"bins align; got {gt.shape[0]} and {pred.shape[0]}."
+        )
+    observed = np.isfinite(gt)
+    gt_ps = _positive_power(_center_zero_fill(gt, observed), sampling_rate)
+    pred_ps = _positive_power(_center_zero_fill(pred, observed), sampling_rate)
+    if gt_ps.shape != pred_ps.shape:
+        raise RuntimeError(
+            "Shared-mask spectra have different bin counts: "
+            f"{gt_ps.shape} vs {pred_ps.shape}."
+        )
+    return gt_ps, pred_ps
+
+
+def _compute_power_spectrum(data, sampling_rate):
+    """Spectrum of one series, centered and zero-filled at its own NaNs.
+
+    Pairwise eval should call ``aligned_power_spectra`` so the prediction
+    uses the ground-truth mask. This entry point is the same transform
+    for a single series that has no separate mask.
+    """
+    data = np.asarray(data, dtype=np.float64).reshape(-1)
+    return _positive_power(_center_zero_fill(data, np.isfinite(data)), sampling_rate)
+
+
 def _spectrum_pair_errors(gt, pred, sampling_rate):
-    gt_ps = _compute_power_spectrum(gt, sampling_rate)
-    pred_ps = _compute_power_spectrum(pred, sampling_rate)
-    min_len = min(len(gt_ps), len(pred_ps))
+    gt_ps, pred_ps = aligned_power_spectra(gt, pred, sampling_rate)
     # hellinger_distance in power_spectrum_error expects 2D (n_series, n_freq)
-    gt_2d = gt_ps[:min_len].reshape(1, -1)
-    pred_2d = pred_ps[:min_len].reshape(1, -1)
+    gt_2d = gt_ps.reshape(1, -1)
+    pred_2d = pred_ps.reshape(1, -1)
     err = power_spectrum_error(pred_2d, gt_2d, filter_std=3)
     return float(err)
 
