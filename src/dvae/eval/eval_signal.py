@@ -430,11 +430,139 @@ def aligned_short_sequence_viz_inputs(batch_data, mode_selector, missing_mask):
     return batch_data, mode_selector, missing_mask
 
 
+def plot_eval_short_sequence(
+    batch_data,
+    dvae,
+    mode_selector,
+    missing_mask,
+    save_path,
+    *,
+    explain,
+    is_segmented_1d,
+    hide_mask_output,
+):
+    """Short eval figure. Data, selector, and mask keep the same axes.
+
+    The time and batch axes are not sliced. ``aligned_short_sequence_viz_inputs``
+    is what this call passes through, so a later edit that drops a time
+    step from one array and a batch item from another fails the caller.
+    """
+    viz_batch, viz_selector, viz_mask = aligned_short_sequence_viz_inputs(
+        batch_data, mode_selector, missing_mask
+    )
+    visualize_teacherforcing_2_autonomous(
+        viz_batch,
+        dvae,
+        auto_mode_selector=viz_selector,
+        save_path=save_path,
+        explain=explain,
+        inference_mode=True,
+        missing_mask=viz_mask,
+        is_segmented_1d=is_segmented_1d,
+        hide_mask_output=hide_mask_output,
+    )
+
+
 def _quiet_window_counts(dataset, length):
-    """Per-subject window counts after a sequence-length update, without logs."""
-    with contextlib.redirect_stdout(io.StringIO()):
-        dataset.update_sequence_length(int(length))
-    return subject_window_counts(dataset)
+    """``(stored seq_len, per-subject counts)`` after a length update.
+
+    The cutter may store a shorter ``seq_len`` than ``length`` and still
+    return windows. ``ValueError`` and the same kind of failure (no
+    intra-stay window) count as zero windows. The stored length reported
+    on that failure stays the request, so the scan still tries a shorter
+    length instead of treating the error as a cutter cap.
+    """
+    length = int(length)
+    before = getattr(dataset, "seq_len", None)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            dataset.update_sequence_length(length)
+    except (ValueError, IndexError, RuntimeError):
+        # Zero windows. If the cutter stored a shorter seq_len and then
+        # raised, report that length so the same cap is not probed again.
+        # An exception that leaves seq_len alone reports the request.
+        after = getattr(dataset, "seq_len", before)
+        if after is not None and after != before:
+            try:
+                return int(after), {}
+            except (TypeError, ValueError):
+                return length, {}
+        return length, {}
+    stored = getattr(dataset, "seq_len", length)
+    try:
+        stored = int(stored)
+    except (TypeError, ValueError):
+        stored = length
+    return stored, subject_window_counts(dataset)
+
+
+def metrics_shrink_allowed(params) -> bool:
+    """An explicit block or metrics length does not shrink the block.
+
+    ``auto_eval_block_len`` set and positive, or ``metrics_seq_len`` set
+    at all, keeps the requested block. The cutter's stored seq_len is
+    still recorded.
+    """
+    if not params:
+        return True
+    raw_block = params.get("auto_eval_block_len")
+    block_explicit = raw_block is not None and int(raw_block) > 0
+    metrics_explicit = params.get("metrics_seq_len") is not None
+    return not (block_explicit or metrics_explicit)
+
+
+def fit_metrics_window(dataset, requested, params, *, floor: int = METRICS_WINDOW_FLOOR):
+    """Probe ``dataset`` and choose the metrics window.
+
+    The probe is ``_quiet_window_counts``: stored seq_len plus per-subject
+    counts. The downward scan starts at the longest group span. Explicit
+    CLI lengths disable shrinking.
+    """
+    allow = metrics_shrink_allowed(params)
+    if int(requested) < int(floor):
+        allow = False
+    return choose_metrics_window_length(
+        requested,
+        lambda length: _quiet_window_counts(dataset, length),
+        floor=floor,
+        allow_shrink=allow,
+        max_length=dataset_max_window_length(dataset),
+    )
+
+
+def load_eval_weights(model, path):
+    """Load a final state dict or a checkpoint by content, not by name.
+
+    A dict that contains ``model_state_dict`` loads that entry. Any other
+    dict is a raw state dict. Anything that cannot be loaded exits.
+    ``*_final_epoch*.pt`` is a raw state dict. ``*_checkpoint.pt`` and
+    ``*_latest.pt`` carry ``model_state_dict``.
+    """
+    try:
+        try:
+            loaded = torch.load(path, weights_only=False, map_location="cpu")
+        except TypeError:
+            loaded = torch.load(path, map_location="cpu")
+    except Exception as exc:
+        print(f"[Eval] ERROR: could not read model weights from {path}: {exc}")
+        raise SystemExit(1) from exc
+    state = None
+    if isinstance(loaded, dict) and isinstance(loaded.get("model_state_dict"), dict):
+        state = loaded["model_state_dict"]
+    elif isinstance(loaded, dict):
+        state = loaded
+    if state is None:
+        print(
+            "[Eval] ERROR: could not read model weights from "
+            f"{path}. Expected a state dict or a checkpoint with "
+            "'model_state_dict'."
+        )
+        raise SystemExit(1)
+    try:
+        model.load_state_dict(state)
+    except (RuntimeError, ValueError) as exc:
+        print(f"[Eval] ERROR: could not load model weights from {path}: {exc}")
+        raise SystemExit(1) from exc
 
 
 def _missing_mask_from_indicate(batch_data):
@@ -664,18 +792,7 @@ if __name__ == "__main__":
     learning_algo.build_model(device=device)
     dvae = learning_algo.model.to(device)
     dvae.device = device
-    if "final" in params["saved_dict"]:
-        loaded_model = torch.load(params["saved_dict"], map_location="cpu")
-        dvae.load_state_dict(loaded_model)
-    elif "checkpoint" in params["saved_dict"]:
-        loaded_model = torch.load(
-            params["saved_dict"], weights_only=False, map_location="cpu"
-        )
-        dvae.load_state_dict(loaded_model["model_state_dict"])
-    else:
-        print(
-            "[Eval] Warning: Unrecognized model file name format. (final or checkpoint expected)"
-        )
+    load_eval_weights(dvae, params["saved_dict"])
 
     dvae.eval()
     cfg = learning_algo.cfg
@@ -935,24 +1052,14 @@ if __name__ == "__main__":
                     x_data_long = batch_data_long[:, 0, 0]
                     recon_x_data_long = recon_data_long[:, 0, 0]
 
-                # Plot the reconstruction vs true sequence
-                (
-                    viz_batch,
-                    viz_selector,
-                    viz_mask,
-                ) = aligned_short_sequence_viz_inputs(
+                # Plot the reconstruction vs true sequence. Unsliced axes.
+                plot_eval_short_sequence(
                     batch_data_long,
+                    dvae,
                     autonomous_mode_selector_long,
                     missing_mask_long,
-                )
-                visualize_teacherforcing_2_autonomous(
-                    viz_batch,
-                    dvae,
-                    auto_mode_selector=viz_selector,
-                    save_path=save_fig_dir,
-                    explain=f"final_short_inference_mode_half_half_short",
-                    inference_mode=True,
-                    missing_mask=viz_mask,
+                    save_fig_dir,
+                    explain="final_short_inference_mode_half_half_short",
                     is_segmented_1d=test_dataloader.dataset.is_segmented_1d,
                     hide_mask_output=_is_indicate_observation(
                         getattr(dataset_config, "observation_process", None)
@@ -1254,8 +1361,7 @@ if __name__ == "__main__":
         raw_block = params.get("auto_eval_block_len")
         block_explicit = raw_block is not None and int(raw_block) > 0
         auto_eval_block_len = int(raw_block) if block_explicit else 1000
-        metrics_explicit = params.get("metrics_seq_len") is not None
-        allow_metrics_shrink = not (block_explicit or metrics_explicit)
+        allow_metrics_shrink = metrics_shrink_allowed(params)
         auto_eval_ratio = params.get("auto_eval_ratio", 0.1)
         max_eval_batches = params.get("max_eval_batches", 20)
         skip_metrics_viz_after_batch_0 = params.get(
@@ -1316,25 +1422,14 @@ if __name__ == "__main__":
             metrics["metrics_skip_reason"] = "no_windows"
             n_test_windows = 0
         else:
-            # Probes call the real window cutter. Coverage is not monotone,
-            # so the choice scans downward from the request to the floor.
-            def _counts_at(length, _dataset=metrics_dataloader.dataset):
-                return list(_quiet_window_counts(_dataset, length).values())
-
-            # A request already shorter than the floor is tried once.
-            # Nothing below the floor is searched.
-            if metrics_seq_len < METRICS_WINDOW_FLOOR:
-                choice = choose_metrics_window_length(
-                    metrics_seq_len,
-                    _counts_at,
-                    allow_shrink=False,
-                )
-            else:
-                choice = choose_metrics_window_length(
-                    metrics_seq_len,
-                    _counts_at,
-                    allow_shrink=allow_metrics_shrink,
-                )
+            # Probes call the real window cutter. A capped cutter reports
+            # the stored seq_len. The scan starts at the group span, and
+            # a length the cutter rejects counts as zero windows.
+            choice = fit_metrics_window(
+                metrics_dataloader.dataset,
+                metrics_seq_len,
+                params,
+            )
             if choice["length"] is None:
                 print(
                     "[Eval] Skipping quantitative metrics: "
@@ -1356,8 +1451,10 @@ if __name__ == "__main__":
                 windows_per_subject = subject_window_counts(
                     metrics_dataloader.dataset
                 )
-                # A span cap inside the dataset cutter is not auto-fit.
-                # Only the explicit shrink changes the block length.
+                # A cutter that stored a shorter seq_len is a shrink when
+                # auto-fit is on. The block is half of that stored length.
+                # An explicit length records the stored seq_len and keeps
+                # the requested block.
                 window_fit_shrunk = bool(choice["shrunk"])
                 if window_fit_shrunk:
                     auto_eval_block_len = block_len_after_autofit(
@@ -1365,11 +1462,17 @@ if __name__ == "__main__":
                     )
                     print(
                         "[Eval] Auto-fit metrics window: requested "
-                        f"{metrics_seq_len_before} yielded no usable window; "
-                        f"using seq_len={metrics_seq_len} "
+                        f"{metrics_seq_len_before}, using stored "
+                        f"seq_len={metrics_seq_len} "
                         f"(block_len={auto_eval_block_len}, "
                         f"{choice['subjects_covered']}/{choice['n_subjects']} "
                         "subjects with at least one window)."
+                    )
+                elif int(metrics_seq_len) != int(metrics_seq_len_before):
+                    print(
+                        "[Eval] Metrics seq_len stored as "
+                        f"{metrics_seq_len} (requested {metrics_seq_len_before}). "
+                        "Block length unchanged."
                     )
                 if len(metrics_dataloader.dataset.data_idx) == 0:
                     print(

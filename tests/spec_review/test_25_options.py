@@ -10,9 +10,9 @@ exactly zero.
 from __future__ import annotations
 
 import configparser
+import io
 import os
 import pickle
-import subprocess
 import warnings
 from pathlib import Path
 
@@ -542,10 +542,18 @@ def test_subband_and_decorr_are_logged_stored_and_ramped_on_auto_bumps(
 ):
     from dvae.learning_algo import LearningAlgorithm
 
-    def _record(argv, *args, **kwargs):
-        return subprocess.CompletedProcess(argv, 0)
+    class _ImmediateProcess:
+        def __init__(self):
+            self.stdout = io.StringIO("")
+            self.stderr = io.StringIO("")
 
-    monkeypatch.setattr("dvae.learning_algo.subprocess.run", _record)
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(
+        "dvae.learning_algo.subprocess.Popen",
+        lambda argv, *args, **kwargs: _ImmediateProcess(),
+    )
 
     data_root = tmp_path / "data"
     folder = data_root / "lorenz63" / "data" / "synthetic"

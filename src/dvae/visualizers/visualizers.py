@@ -1,3 +1,4 @@
+import random
 import textwrap
 from matplotlib.animation import PillowWriter, FuncAnimation
 from umap import UMAP
@@ -798,81 +799,129 @@ def visualize_teacherforcing_2_autonomous(
     )
 
     if spectrum_compare:
-        # Waveform above stays on batch item 0. The spectrum averages
-        # every sequence in the batch, with mask channels removed when
-        # the caller asked to hide them.
-        from dvae.visualizers.spectrum_comparison import (
-            alpha_line_frequencies,
-            save_original_vs_output_spectrum,
-            timescale_alphas_from_model,
+        # Waveform above stays on batch item 0 and keeps using the
+        # training RNG. This second forward is the full batch. RNN and
+        # VRNN draws happen before the checkpoint snapshot, so the plot
+        # must not advance torch, NumPy, or Python random.
+        py_rng = random.getstate()
+        np_rng = np.random.get_state()
+        cuda_devices = (
+            list(range(torch.cuda.device_count()))
+            if torch.cuda.is_available()
+            else []
         )
+        try:
+            with torch.random.fork_rng(devices=cuda_devices):
+                _save_spectrum_comparison_plot(
+                    batch_data,
+                    dvae,
+                    auto_mode_selector,
+                    noise_selector_full,
+                    n_seq,
+                    save_path,
+                    explain,
+                    inference_mode,
+                    missing_mask,
+                    hide_mask_output,
+                    spectrum_save_path,
+                    sample_rate,
+                    epoch,
+                    spectrum_mode_name,
+                    spectrum_region,
+                )
+        finally:
+            random.setstate(py_rng)
+            np.random.set_state(np_rng)
 
-        mode_name = spectrum_mode_name or os.path.basename(
-            os.path.normpath(save_path)
+
+def _save_spectrum_comparison_plot(
+    batch_data,
+    dvae,
+    auto_mode_selector,
+    noise_selector_full,
+    n_seq,
+    save_path,
+    explain,
+    inference_mode,
+    missing_mask,
+    hide_mask_output,
+    spectrum_save_path,
+    sample_rate,
+    epoch,
+    spectrum_mode_name,
+    spectrum_region,
+):
+    """Full-batch spectrum figure. Caller isolates the RNG around this."""
+    from dvae.visualizers.spectrum_comparison import (
+        alpha_line_frequencies,
+        save_original_vs_output_spectrum,
+        timescale_alphas_from_model,
+    )
+
+    mode_name = spectrum_mode_name or os.path.basename(os.path.normpath(save_path))
+    spec_noise = noise_selector_full
+    recon_spec = (
+        dvae(
+            batch_data[:n_seq],
+            mode_selector=auto_mode_selector[:n_seq],
+            noise_selector=spec_noise,
+            inference_mode=inference_mode,
         )
-        spec_noise = noise_selector_full
-        recon_spec = (
-            dvae(
-                batch_data[:n_seq],
-                mode_selector=auto_mode_selector[:n_seq],
-                noise_selector=spec_noise,
-                inference_mode=inference_mode,
-            )
-            .detach()
-            .clone()
-        )
-        true_b = batch_data[:n_seq].detach().permute(1, 0, 2).cpu().numpy()
-        recon_b = recon_spec.permute(1, 0, 2).cpu().numpy()
-        sel_b = auto_mode_selector[:n_seq].detach().permute(1, 0, 2).cpu().numpy()
-        mask_b = None
-        if missing_mask is not None:
-            mask_b = missing_mask[:n_seq]
-            if torch.is_tensor(mask_b):
-                mask_b = mask_b.detach().permute(1, 0, 2).cpu().numpy()
-            else:
-                mask_b = np.asarray(mask_b)
-                if mask_b.ndim == 3 and mask_b.shape[0] == n_seq:
-                    mask_b = np.transpose(mask_b, (1, 0, 2))
-        if hide_mask_output and true_b.shape[-1] > 1:
-            true_b = true_b[:, :, 0::2]
-            recon_b = recon_b[:, :, 0::2]
-            sel_b = sel_b[:, :, 0::2]
-            if mask_b is not None:
-                if mask_b.shape[-1] == true_b.shape[-1]:
-                    pass
-                elif mask_b.shape[-1] >= 2 * true_b.shape[-1]:
-                    mask_b = mask_b[:, :, 0::2]
-                else:
-                    mask_b = mask_b[:, :, :1]
+        .detach()
+        .clone()
+    )
+    true_b = batch_data[:n_seq].detach().permute(1, 0, 2).cpu().numpy()
+    recon_b = recon_spec.permute(1, 0, 2).cpu().numpy()
+    sel_b = auto_mode_selector[:n_seq].detach().permute(1, 0, 2).cpu().numpy()
+    mask_b = None
+    if missing_mask is not None:
+        mask_b = missing_mask[:n_seq]
+        if torch.is_tensor(mask_b):
+            mask_b = mask_b.detach().permute(1, 0, 2).cpu().numpy()
+        else:
+            mask_b = np.asarray(mask_b)
+            if mask_b.ndim == 3 and mask_b.shape[0] == n_seq:
+                mask_b = np.transpose(mask_b, (1, 0, 2))
+    if hide_mask_output and true_b.shape[-1] > 1:
+        true_b = true_b[:, :, 0::2]
+        recon_b = recon_b[:, :, 0::2]
+        sel_b = sel_b[:, :, 0::2]
         if mask_b is not None:
-            miss = np.asarray(mask_b) > 0.5
-            if miss.ndim == 3 and miss.shape[-1] == 1 and true_b.shape[-1] != 1:
-                miss = np.broadcast_to(miss, true_b.shape)
-            if miss.shape == true_b.shape:
-                true_b = np.where(miss, np.nan, true_b)
-        rate = None if sample_rate is None else float(sample_rate)
-        if rate is not None and (not np.isfinite(rate) or rate <= 0):
-            rate = None
-        out_dir = spectrum_save_path or os.path.join(
-            os.path.dirname(os.path.dirname(save_path)),
-            "spectrum_comparison",
-            mode_name,
-        )
-        # spectrum_region is unused: both segments are always drawn.
-        del spectrum_region
-        save_original_vs_output_spectrum(
-            true_b,
-            recon_b,
-            out_dir,
-            explain=explain,
-            mode_selector=sel_b,
-            sample_rate=rate,
-            epoch=epoch,
-            mode_name=mode_name,
-            alpha_frequencies=alpha_line_frequencies(
-                timescale_alphas_from_model(dvae), rate
-            ),
-        )
+            if mask_b.shape[-1] == true_b.shape[-1]:
+                pass
+            elif mask_b.shape[-1] >= 2 * true_b.shape[-1]:
+                mask_b = mask_b[:, :, 0::2]
+            else:
+                mask_b = mask_b[:, :, :1]
+    if mask_b is not None:
+        miss = np.asarray(mask_b) > 0.5
+        if miss.ndim == 3 and miss.shape[-1] == 1 and true_b.shape[-1] != 1:
+            miss = np.broadcast_to(miss, true_b.shape)
+        if miss.shape == true_b.shape:
+            true_b = np.where(miss, np.nan, true_b)
+    rate = None if sample_rate is None else float(sample_rate)
+    if rate is not None and (not np.isfinite(rate) or rate <= 0):
+        rate = None
+    out_dir = spectrum_save_path or os.path.join(
+        os.path.dirname(os.path.dirname(save_path)),
+        "spectrum_comparison",
+        mode_name,
+    )
+    # spectrum_region is unused: both segments are always drawn.
+    del spectrum_region
+    save_original_vs_output_spectrum(
+        true_b,
+        recon_b,
+        out_dir,
+        explain=explain,
+        mode_selector=sel_b,
+        sample_rate=rate,
+        epoch=epoch,
+        mode_name=mode_name,
+        alpha_frequencies=alpha_line_frequencies(
+            timescale_alphas_from_model(dvae), rate
+        ),
+    )
 
 
 def reduce_dimensions(embeddings, technique="pca", n_components=3):

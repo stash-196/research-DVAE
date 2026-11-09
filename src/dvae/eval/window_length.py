@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dvae.dataset.xhro_proper_dataset import (
     dataset_max_window_length,
+    dataset_row_group,
     max_group_span,
 )
 
@@ -54,97 +55,141 @@ def apply_eval_seq_len(dataset, requested: int) -> int:
     return int(getattr(dataset, "seq_len", length))
 
 
+def _probe_counts(length, result):
+    """``(stored seq_len, count list)`` from a probe result.
+
+    A bare list or dict means the cutter kept ``length``. A pair is
+    ``(stored seq_len, counts)``. Counts may be a dict of per-subject
+    totals; only the values are scored.
+    """
+    stored = int(length)
+    counts = result
+    if (
+        isinstance(result, tuple)
+        and len(result) == 2
+        and not isinstance(result[0], (list, tuple, dict))
+    ):
+        stored = int(result[0])
+        counts = result[1]
+    if isinstance(counts, dict):
+        count_list = [int(value) for value in counts.values()]
+    else:
+        count_list = [int(value) for value in list(counts)]
+    return stored, count_list
+
+
 def choose_metrics_window_length(
     requested,
     counts_at,
     *,
     floor: int = METRICS_WINDOW_FLOOR,
     allow_shrink: bool = True,
+    max_length=None,
 ) -> dict:
     """Pick a metrics window length from per-subject window counts.
 
-    ``counts_at(length)`` returns one non-negative count per subject (or
-    a single count when the series is one piece). The requested length
-    is kept when it already yields at least one window.
+    ``counts_at(length)`` returns one non-negative count per subject, or
+    ``(stored_seq_len, counts)`` when the cutter may shorten the request.
+    A request that yields a window at the length it asked for is kept.
+    A request that yields windows only because the cutter stored a
+    shorter ``seq_len`` is a shrink: ``length`` is that stored value and
+    ``shrunk`` is true when shrinking is allowed. An explicit length
+    (``allow_shrink=False``) still reports the stored length and does
+    not set ``shrunk``, so the block length stays at the request.
 
-    When it yields none and ``allow_shrink`` is true, the result is the
-    longest length ``>= floor`` that maximizes how many subjects have at
-    least one window. Lengths below ``floor`` are not considered. If
-    every candidate is empty, ``length`` is ``None`` and ``reason`` is
-    ``no_windows``. Explicit CLI lengths pass ``allow_shrink=False`` and
-    then keep the old skip instead of shrinking.
+    When the request yields none and ``allow_shrink`` is true, the
+    result is the longest length ``>= floor`` that maximizes how many
+    subjects have at least one window. The downward scan starts at
+    ``max_length`` (the longest group span) when that is shorter than
+    the request, and a probe that stored a shorter ``seq_len`` is not
+    repeated for the lengths in between. Lengths below ``floor`` are
+    not considered. If every candidate is empty, ``length`` is ``None``
+    and ``reason`` is ``no_windows``.
     """
     requested = int(requested)
     floor = int(floor)
-    empty = {
-        "length": None,
-        "shrunk": False,
-        "reason": "no_windows",
-        "counts": [],
-        "from_length": requested,
-        "subjects_covered": 0,
-        "n_subjects": 0,
-    }
+    cache = {}
+    cap_ranges = []
+
+    def probe(length):
+        length = int(length)
+        cached = cache.get(length)
+        if cached is None:
+            for low, high in cap_ranges:
+                if low <= length <= high:
+                    cached = cache[low]
+                    break
+        if cached is not None:
+            return cached
+        stored, counts = _probe_counts(length, counts_at(length))
+        cached = (stored, counts)
+        cache[length] = cached
+        cache[stored] = cached
+        if stored < length:
+            cap_ranges.append((stored, length))
+        return cached
+
+    def decision(length, shrunk, reason, counts, stored):
+        covered = sum(1 for count in counts if count >= 1)
+        return {
+            "length": length,
+            "shrunk": bool(shrunk),
+            "reason": reason,
+            "counts": list(counts),
+            "from_length": requested,
+            "subjects_covered": 0 if length is None else covered,
+            "n_subjects": len(counts),
+            "stored_length": int(stored),
+        }
+
     if requested < 1:
-        return empty
-    requested_counts = [int(count) for count in list(counts_at(requested))]
-    covered = sum(1 for count in requested_counts if count >= 1)
+        return decision(None, False, "no_windows", [], 0)
+    stored, requested_counts = probe(requested)
     if sum(requested_counts) > 0:
-        return {
-            "length": requested,
-            "shrunk": False,
-            "reason": None,
-            "counts": requested_counts,
-            "from_length": requested,
-            "subjects_covered": covered,
-            "n_subjects": len(requested_counts),
-        }
+        use = stored if stored > 0 else requested
+        shrunk = bool(allow_shrink and stored < requested)
+        return decision(int(use), shrunk, None, requested_counts, stored)
     if not allow_shrink or requested <= floor:
-        return {
-            "length": None,
-            "shrunk": False,
-            "reason": "no_windows",
-            "counts": requested_counts,
-            "from_length": requested,
-            "subjects_covered": 0,
-            "n_subjects": len(requested_counts),
-        }
+        return decision(None, False, "no_windows", requested_counts, stored)
+
+    # The request itself produced nothing. Do not walk every integer
+    # above the group span, and do not repeat a capped recut.
+    scan_hi = requested - 1
+    if max_length is not None:
+        scan_hi = min(scan_hi, int(max_length))
+    if stored < requested:
+        scan_hi = min(scan_hi, stored - 1)
     best_len = None
     best_score = 0
     best_counts = None
+    best_stored = stored
     n_subjects = len(requested_counts)
-    for length in range(requested - 1, floor - 1, -1):
-        counts = [int(count) for count in list(counts_at(length))]
+    length = int(scan_hi)
+    while length >= floor:
+        got_stored, counts = probe(length)
+        if len(counts) > n_subjects:
+            n_subjects = len(counts)
         score = sum(1 for count in counts if count >= 1)
         # Scanning long to short: the first time a score is seen it is
         # the longest length that achieves it. Ties keep that length.
+        # A cutter cap is scored at the stored length, not the request.
+        candidate = got_stored if got_stored > 0 else length
         if score > best_score:
             best_score = score
-            best_len = int(length)
+            best_len = int(candidate)
             best_counts = counts
-            # Every subject this probe knows about already has a window.
-            # Shorter lengths cannot raise the score, so stop.
+            best_stored = got_stored
             if n_subjects and score >= n_subjects and len(counts) <= n_subjects:
                 break
+        if got_stored < length:
+            if got_stored < floor:
+                break
+            length = got_stored - 1
+        else:
+            length -= 1
     if best_len is None or best_score < 1:
-        return {
-            "length": None,
-            "shrunk": False,
-            "reason": "no_windows",
-            "counts": requested_counts,
-            "from_length": requested,
-            "subjects_covered": 0,
-            "n_subjects": len(requested_counts),
-        }
-    return {
-        "length": best_len,
-        "shrunk": True,
-        "reason": None,
-        "counts": best_counts,
-        "from_length": requested,
-        "subjects_covered": best_score,
-        "n_subjects": len(best_counts),
-    }
+        return decision(None, False, "no_windows", requested_counts, stored)
+    return decision(best_len, True, None, best_counts, best_stored)
 
 
 def subject_window_counts(dataset) -> dict:

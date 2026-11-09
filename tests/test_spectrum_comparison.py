@@ -209,3 +209,27 @@ def test_save_writes_split_npz(tmp_path):
     assert loaded["n_sequences_averaged_tf"].tolist() == [3, 3]
     # The in-band line is stored; drawing must not require the out-of-band one.
     assert np.allclose(loaded["alpha_frequencies"], [2.0 * fs, 80.0 * fs])
+
+
+def test_timescale_lines_at_or_above_nyquist_are_noted_not_drawn(tmp_path):
+    original, output, fs = _batch()
+    # fs/2 is Nyquist. 2 Hz is in band; 80 Hz is above it. The axis stays
+    # on the rFFT grid. The NPZ keeps every alpha frequency.
+    alpha_hz = np.array([2.0, 80.0])
+    result = save_original_vs_output_spectrum(
+        original,
+        output,
+        str(tmp_path),
+        explain="half_half_epoch:0",
+        mode_selector=_half_selector(*original.shape),
+        sample_rate=fs,
+        epoch=0,
+        mode_name="half_half",
+        alpha_frequencies=alpha_hz,
+    )
+    assert result["n_timescale_lines_above_nyquist"] >= 1
+    assert "timescale lines above Nyquist not shown" in result["annotation"]
+    assert result["axis_xmax"] is not None
+    assert result["axis_xmax"] < 80.0
+    loaded = np.load(result["npz_path"], allow_pickle=True)
+    assert np.allclose(loaded["alpha_frequencies"], alpha_hz)

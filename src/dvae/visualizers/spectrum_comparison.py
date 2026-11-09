@@ -396,8 +396,14 @@ def _pct(frac) -> str:
 
 
 def _draw_segment(ax, freqs, original_psd, output_psd, included, alpha_freqs):
-    """One panel. Returns whether a timescale line was drawn inside the axes."""
+    """One panel. Returns whether a timescale line was drawn, and which.
+
+    Lines at or above Nyquist, or otherwise outside the axis, are not
+    drawn and do not widen the axis. The caller counts those.
+    """
     drew_alpha = False
+    drawn = []
+    xmax_drawn = None
     if not included:
         ax.text(
             0.5,
@@ -411,7 +417,7 @@ def _draw_segment(ax, freqs, original_psd, output_psd, included, alpha_freqs):
         )
         ax.set_xticks([])
         ax.set_yticks([])
-        return drew_alpha
+        return drew_alpha, drawn, xmax_drawn
     freq, orig = _finite_prefix(freqs, original_psd)
     _, out = _finite_prefix(freqs, output_psd)
     orig = _display_psd(orig)
@@ -424,16 +430,19 @@ def _draw_segment(ax, freqs, original_psd, output_psd, included, alpha_freqs):
         for freq_line in np.asarray(alpha_freqs, dtype=np.float64).reshape(-1):
             if not np.isfinite(freq_line) or freq_line <= 0:
                 continue
-            if xmin < float(freq_line) < xmax:
+            freq_line = float(freq_line)
+            if xmin < freq_line < xmax:
                 ax.axvline(
-                    float(freq_line),
+                    freq_line,
                     color="0.45",
                     lw=0.7,
                     alpha=0.45,
                     zorder=0,
                 )
                 drew_alpha = True
+                drawn.append(freq_line)
         ax.set_xlim(xmin, xmax)
+        xmax_drawn = float(xmax)
     else:
         ax.text(
             0.5,
@@ -445,7 +454,7 @@ def _draw_segment(ax, freqs, original_psd, output_psd, included, alpha_freqs):
             fontsize=9,
             color="0.35",
         )
-    return drew_alpha
+    return drew_alpha, drawn, xmax_drawn
 
 
 def save_original_vs_output_spectrum(
@@ -466,7 +475,8 @@ def save_original_vs_output_spectrum(
     original and the model output on the same steps. Faint vertical
     lines mark model timescale frequencies when ``alpha_frequencies``
     is provided. Lines outside the data range are not drawn and do not
-    widen the axes.
+    widen the axes. The figure notes how many of those lines sit at or
+    above Nyquist. The NPZ still stores every alpha frequency.
     """
     result = compute_original_vs_output_spectra(
         original,
@@ -491,20 +501,26 @@ def save_original_vs_output_spectrum(
         squeeze=False,
     )
     drew_alpha = False
+    drawn_alphas = set()
+    axis_xmax = None
     for channel in range(n_plot):
         for column, kind in enumerate(("tf", "autonomous")):
             ax = axes[channel, column]
             if channel >= n_channels:
                 ax.set_visible(False)
                 continue
-            drew_alpha = _draw_segment(
+            drew, drawn, xmax = _draw_segment(
                 ax,
                 result[f"frequencies_{kind}"][channel],
                 result[f"original_psd_{kind}"][channel],
                 result[f"output_psd_{kind}"][channel],
                 bool(result[f"channel_included_{kind}"][channel]),
                 alpha_frequencies,
-            ) or drew_alpha
+            )
+            drew_alpha = drew or drew_alpha
+            drawn_alphas.update(drawn)
+            if xmax is not None:
+                axis_xmax = xmax if axis_xmax is None else max(axis_xmax, xmax)
             if column == 0:
                 ax.set_ylabel(f"Channel {channel}\nPSD")
             if channel == n_channels - 1:
@@ -557,6 +573,14 @@ def save_original_vs_output_spectrum(
         frameon=False,
         fontsize=9,
     )
+    candidates = [
+        float(freq)
+        for freq in np.asarray(alpha_frequencies, dtype=np.float64).reshape(-1)
+        if np.isfinite(freq) and float(freq) > 0
+    ]
+    # A line drawn on any panel is shown. The rest sit at or above
+    # Nyquist, or otherwise outside the axis. The axis range stays put.
+    n_hidden = sum(1 for freq in candidates if freq not in drawn_alphas)
     annotation = (
         f"Batch sequences: {result['n_sequences']}. "
         f"Excluded channels: teacher-forced "
@@ -568,6 +592,10 @@ def save_original_vs_output_spectrum(
         f"{_pct(result['missing_sample_fraction_tf'])}, "
         f"autonomous {_pct(result['missing_sample_fraction_autonomous'])}."
     )
+    if n_hidden:
+        annotation += (
+            f" {n_hidden} timescale lines above Nyquist not shown."
+        )
     fig.text(0.5, 0.005, annotation, ha="center", va="bottom", fontsize=8)
     fig.tight_layout(rect=(0.0, 0.06, 1.0, 0.88))
     fig.savefig(png_path, dpi=160, bbox_inches="tight")
@@ -618,4 +646,7 @@ def save_original_vs_output_spectrum(
     result["epoch"] = epoch
     result["mode_name"] = mode_name
     result["alpha_frequencies"] = alpha_frequencies
+    result["n_timescale_lines_above_nyquist"] = int(n_hidden)
+    result["annotation"] = annotation
+    result["axis_xmax"] = axis_xmax
     return result

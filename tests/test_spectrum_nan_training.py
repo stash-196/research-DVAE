@@ -16,6 +16,7 @@ import warnings
 
 import numpy as np
 import pytest
+import torch
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 
@@ -107,3 +108,41 @@ def test_all_nan_spectrum_falls_back_to_last_epoch(tmp_path, monkeypatch):
         and "NO EPOCH HAD A FINITE SPECTRUM" in str(w.message)
         for w in caught
     )
+    final_path = next(run_dir.glob("*_final_epoch*.pt"))
+    checkpoint = _load_pt(next(run_dir.glob("*_checkpoint.pt")))
+    latest = _load_pt(next(run_dir.glob("*_latest.pt")))
+    final_state = _load_pt(final_path)
+    # The budget is 4. The fallback best is the last trained epoch, 3,
+    # not that budget and not the initial snapshot.
+    assert int(checkpoint["epoch"]) == 3
+    assert int(latest["epoch"]) == 3
+    assert int(latest["cur_best_epoch"]) == 3
+    _equal_tree(checkpoint["model_state_dict"], final_state)
+    _equal_tree(latest["model_state_dict"], final_state)
+    _equal_tree(latest["best_state_dict"], final_state)
+    _equal_tree(checkpoint["optim_state_dict"], latest["optim_state_dict"])
+    _equal_tree(checkpoint["optim_state_dict"], latest["best_optim_dict"])
+
+
+def _load_pt(path):
+    try:
+        return torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location="cpu")
+
+
+def _equal_tree(left, right):
+    if torch.is_tensor(left):
+        assert torch.equal(left.cpu(), right.cpu())
+        return
+    if isinstance(left, dict):
+        assert left.keys() == right.keys()
+        for key in left:
+            _equal_tree(left[key], right[key])
+        return
+    if isinstance(left, (list, tuple)):
+        assert len(left) == len(right)
+        for item, other in zip(left, right):
+            _equal_tree(item, other)
+        return
+    assert left == right

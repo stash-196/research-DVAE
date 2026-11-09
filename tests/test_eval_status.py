@@ -56,3 +56,23 @@ def test_successful_eval_marks_not_failed(tmp_path):
     marker = json.loads((tmp_path / "eval_status.json").read_text())
     assert marker["eval_failed"] is False
     assert "ERROR" not in log_path.read_text()
+
+
+def test_both_pipes_stream_without_deadlock(tmp_path):
+    # Larger than a typical pipe buffer on each side. A parent that
+    # reads only one stream blocks here.
+    script = tmp_path / "both.py"
+    script.write_text(
+        "import sys\n"
+        "chunk = 'x' * 200 + '\\n'\n"
+        "for _ in range(4000):\n"
+        "    sys.stdout.write(chunk)\n"
+        "    sys.stderr.write('e' * 200 + '\\n')\n"
+        "raise SystemExit(0)\n"
+    )
+    log_path = tmp_path / "log.txt"
+    status = run_post_training_eval(
+        str(script), "weights.pt", str(tmp_path), _logger(log_path)
+    )
+    assert status["eval_failed"] is False
+    assert status["return_code"] == 0
