@@ -401,3 +401,36 @@ def test_filter_min_run_sec_null_is_default():
     cfg.read_string("[DataFrame]\nfilter_min_run_sec = null\nfilter_bank = null\n")
     assert optional_config_float(cfg, "DataFrame", "filter_min_run_sec") is None
     assert resolve_filter_min_run_sec("null") == 2.0
+
+
+def test_contiguous_finite_runs_matches_reference_loop():
+    from dvae.dataset.xhro_proper_dataset import contiguous_finite_runs
+
+    def ref(values, present, segment_id):
+        series = np.asarray(values, dtype=float)
+        keep = np.isfinite(series)
+        if present is not None:
+            keep &= np.asarray(present, bool)
+        ids = None if segment_id is None else np.asarray(segment_id)
+        runs, i, n = [], 0, series.size
+        while i < n:
+            if not keep[i]:
+                i += 1
+                continue
+            j = i + 1
+            while j < n and keep[j]:
+                if ids is not None and ids[j] != ids[i]:
+                    break
+                j += 1
+            runs.append((i, j))
+            i = j
+        return runs
+
+    rng = np.random.default_rng(0)
+    for _ in range(300):
+        n = int(rng.integers(0, 60))
+        x = rng.normal(size=n)
+        x[rng.random(n) < 0.2] = np.nan
+        pr = (rng.random(n) > 0.1) if rng.random() < 0.5 else None
+        sid = np.cumsum(rng.random(n) < 0.1) if rng.random() < 0.5 else None
+        assert contiguous_finite_runs(x, pr, sid) == ref(x, pr, sid)

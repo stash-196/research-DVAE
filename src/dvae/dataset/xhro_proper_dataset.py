@@ -835,20 +835,21 @@ def contiguous_finite_runs(values, present, segment_id) -> list[tuple[int, int]]
             raise ValueError(
                 f"segment_id length {ids.size} != series length {n}"
             )
-    runs = []
-    index = 0
-    while index < n:
-        if not keep[index]:
-            index += 1
-            continue
-        stop = index + 1
-        while stop < n and keep[stop]:
-            if ids is not None and ids[stop] != ids[index]:
-                break
-            stop += 1
-        runs.append((index, stop))
-        index = stop
-    return runs
+    if n == 0:
+        return []
+    # Vectorized: a run starts where keep turns on, or where segment_id
+    # changes between two kept samples; it ends where keep turns off or
+    # just before the next start.
+    k = keep.astype(np.int8)
+    edges = np.diff(np.concatenate(([0], k, [0])))
+    starts = np.flatnonzero(edges == 1)
+    stops = np.flatnonzero(edges == -1)
+    if ids is not None and n > 1:
+        cut = np.flatnonzero((ids[1:] != ids[:-1]) & keep[1:] & keep[:-1]) + 1
+        if cut.size:
+            starts = np.union1d(starts, cut)
+            stops = np.union1d(stops, cut)
+    return [(int(a), int(b)) for a, b in zip(starts, stops)]
 
 
 def _min_kept_run(fs: float, min_run_sec: float, sos_list) -> int:
