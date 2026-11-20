@@ -42,12 +42,61 @@ import math
 from dataclasses import dataclass
 
 WARMUP_BUMP = 0.1
+# Absolute improvement that resets patience when patience_rel_delta is 0.
+ABS_IMPROVEMENT_FLOOR = 1e-4
 ORDER_AUTO_FIRST = "auto_first"
 ORDER_WINDOW_FIRST = "window_first"
 DEFAULT_WARMUP_ORDER = ORDER_WINDOW_FIRST
 DEFAULT_WARMUP_PATIENCE_START_FRAC = 0.2
 _ORDERS = (ORDER_AUTO_FIRST, ORDER_WINDOW_FIRST)
 _UNSET = {"", "none", "null"}
+
+
+def improvement_threshold(best, rel_delta, abs_floor=ABS_IMPROVEMENT_FLOOR) -> float:
+    """Patience improvement threshold.
+
+    ``max(abs_floor, rel_delta * abs(best))``. A non-finite best (the
+    +inf start) uses ``abs_floor``. ``rel_delta`` of 0 is exactly
+    ``abs_floor``, the historical absolute 1e-4.
+    """
+    floor = float(abs_floor)
+    rel = float(rel_delta)
+    try:
+        best_value = float(best)
+    except (TypeError, ValueError):
+        return floor
+    if rel == 0.0 or not math.isfinite(best_value):
+        return floor
+    return float(max(floor, rel * abs(best_value)))
+
+
+def parse_patience_rel_delta(raw) -> float:
+    """Blank, None, and null are 0. Non-finite or negative raises."""
+    if raw is None:
+        return 0.0
+    text = str(raw).strip()
+    if text == "" or text.lower() in ("none", "null"):
+        return 0.0
+    try:
+        value = float(text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"patience_rel_delta must be a float, got {raw!r}."
+        ) from exc
+    if not math.isfinite(value) or value < 0.0:
+        raise ValueError(
+            f"patience_rel_delta must be finite and >= 0, got {raw!r}."
+        )
+    return float(value)
+
+
+def patience_rel_delta_from_config(cfg) -> float:
+    """``[Training] patience_rel_delta``. Missing or blank is 0."""
+    if not cfg.has_option("Training", "patience_rel_delta"):
+        return 0.0
+    return parse_patience_rel_delta(cfg.get("Training", "patience_rel_delta"))
+
+
 _PATIENCE_OFF = {"off", "false", "no"}
 
 
@@ -549,6 +598,8 @@ class Simulation:
     events: list
     active_patience: list
     stopped: bool
+    # Per-epoch improvement flags. None on a hand-built stub.
+    improved: list | None = None
 
 
 def simulate_recon_warmup(
@@ -560,14 +611,18 @@ def simulate_recon_warmup(
     kl: float,
     sequence_len: int,
     delta_threshold: float = 1e-4,
+    patience_rel_delta: float = 0.0,
 ) -> Simulation:
     """Replay bump decisions on a list of validation losses.
 
     Matches the recon early-stop path: best starts at +inf, an improvement
-    is `loss - best < -delta_threshold`, and any other epoch increments
-    patience. The epoch after a bump treats that epoch's loss as the new
-    best before the delta is computed (`warm_up_happened`), so patience
-    becomes 1 on a flat loss. No model, dataloader, or dataset is used.
+    is `loss - best < -threshold`, and any other epoch increments patience.
+    The threshold is ``improvement_threshold(best, patience_rel_delta)``
+    with ``delta_threshold`` as the absolute floor. ``patience_rel_delta``
+    of 0 keeps that floor, including a caller-supplied ``delta_threshold``.
+    The epoch after a bump treats that epoch's loss as the new best before
+    the delta is computed (`warm_up_happened`), so patience becomes 1 on a
+    flat loss. No model, dataloader, or dataset is used.
     """
     best = float("inf")
     patience = 0
@@ -575,13 +630,20 @@ def simulate_recon_warmup(
     auto_kl_done = 0
     events = []
     active_each = []
+    improved_flags = []
     for epoch, loss in enumerate(val_losses):
         loss = float(loss)
         if warm_up_happened:
             best = loss
             warm_up_happened = False
         delta = loss - best
-        if delta < -delta_threshold:
+        # Same rule as the training loop, from the best at comparison time.
+        epoch_threshold = improvement_threshold(
+            best, patience_rel_delta, abs_floor=delta_threshold
+        )
+        improved = delta < -epoch_threshold
+        improved_flags.append(improved)
+        if improved:
             patience = 0
             best = loss
         else:
@@ -612,7 +674,7 @@ def simulate_recon_warmup(
                     "reset_warmups": False,
                 }
             )
-            return Simulation(events, active_each, True)
+            return Simulation(events, active_each, True, improved_flags)
         if action == "bump":
             before = (auto, noise, kl, sequence_len)
             bumped = curriculum.apply_bump(auto, noise, kl, sequence_len)
@@ -643,4 +705,4 @@ def simulate_recon_warmup(
             warm_up_happened = True
             if bumped.kind in ("auto", "kl"):
                 auto_kl_done += 1
-    return Simulation(events, active_each, False)
+    return Simulation(events, active_each, False, improved_flags)

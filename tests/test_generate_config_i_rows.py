@@ -77,6 +77,9 @@ def _assert_shared(cfg: configparser.ConfigParser, prefix: str) -> None:
     assert train["epochs"] == "20000"
     assert float(train["gradient_clip"]) == 10.0
     assert train["early_stop_patience"] == "500"
+    assert train["patience_rel_delta"] == "0.0"
+    assert frame.get("filter_bank", "") == ""
+    assert frame.get("filter_min_run_sec", "") == ""
     assert train["warmup_order"] == "window_first"
     assert train["auto_warm_start"] == "0.0"
     assert frame["dataset_name"] == "XhroProper"

@@ -88,8 +88,11 @@ from dvae.regularizers import (
     warmup_progress,
 )
 from dvae.warmup_curriculum import (
+    ABS_IMPROVEMENT_FLOOR,
     WarmupCurriculum,
     format_patience,
+    improvement_threshold,
+    patience_rel_delta_from_config,
     warmup_action,
     warmup_settings_from_config,
 )
@@ -260,6 +263,63 @@ def _dataloader_replacing(loader, *, batch_size, shuffle):
         num_workers=int(loader.num_workers),
         pin_memory=bool(loader.pin_memory),
         drop_last=bool(loader.drop_last),
+    )
+
+
+def training_dataset_config(
+    cfg,
+    *,
+    data_dir,
+    device,
+    batch_size,
+    shuffle,
+    num_workers,
+    dataset_label,
+    mask_label,
+    seq_len,
+) -> DatasetConfig:
+    """DatasetConfig ``train`` builds. ``seq_len`` is the initial length.
+
+    Eval keeps its own call (``seq_len`` unset, ``segment_min_len`` set).
+    """
+    return DatasetConfig(
+        data_dir=data_dir,
+        x_dim=cfg.getint("Network", "x_dim"),
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        sample_rate=cfg.getint("DataFrame", "sample_rate"),
+        skip_rate=cfg.getint("DataFrame", "skip_rate"),
+        val_indices=cfg.getfloat("DataFrame", "val_indices"),
+        observation_process=cfg.get("DataFrame", "observation_process"),
+        overlap=cfg.getboolean("DataFrame", "overlap"),
+        with_nan=cfg.getboolean("DataFrame", "with_nan", fallback=False),
+        seq_len=seq_len,
+        device=device,
+        dataset_label=dataset_label,
+        mask_label=mask_label,
+        data_root=optional_config_str(cfg, "DataFrame", "data_root"),
+        corpus=optional_config_str(cfg, "DataFrame", "corpus"),
+        crop_start_sec=optional_config_float(cfg, "DataFrame", "crop_start_sec"),
+        crop_end_sec=optional_config_float(cfg, "DataFrame", "crop_end_sec"),
+        segments=optional_config_str(cfg, "DataFrame", "segments"),
+        max_fill_gap_sec=optional_config_float(
+            cfg, "DataFrame", "max_fill_gap_sec"
+        ),
+        filled_nan_log_sec=optional_config_float(
+            cfg, "DataFrame", "filled_nan_log_sec"
+        ),
+        **windowing_from_config(cfg),
+        block_mask_file=optional_config_str(cfg, "DataFrame", "block_mask_file"),
+        block_mask_mode=optional_config_str(cfg, "DataFrame", "block_mask_mode"),
+        contiguous_val_split=optional_config_bool(
+            cfg, "DataFrame", "contiguous_val_split", default=False
+        ),
+        filter_bank=optional_config_str(cfg, "DataFrame", "filter_bank"),
+        filter_min_run_sec=optional_config_float(
+            cfg, "DataFrame", "filter_min_run_sec"
+        ),
+        **coarse_dataframe_kwargs(cfg),
     )
 
 
@@ -777,49 +837,17 @@ class LearningAlgorithm:
         # Create initial data loader with the starting sequence length
         initial_sequence_len = training_initial_sequence_len(self.cfg)
 
-        # Define DatasetConfig with all parameters
-        dataset_config = DatasetConfig(
+        # Same builder eval does not use: seq_len is the initial length.
+        dataset_config = training_dataset_config(
+            self.cfg,
             data_dir=self.data_dir,
-            x_dim=self.cfg.getint(
-                "Network", "x_dim"
-            ),  # Assume x_dim is set elsewhere in build_model or config
+            device=self.device,
             batch_size=self.batch_size,
             shuffle=self.shuffle,
             num_workers=self.num_workers,
-            sample_rate=self.cfg.getint(
-                "DataFrame", "sample_rate"
-            ),  # Assume these are set from cfg
-            skip_rate=self.cfg.getint("DataFrame", "skip_rate"),
-            val_indices=self.cfg.getfloat("DataFrame", "val_indices"),
-            observation_process=self.cfg.get("DataFrame", "observation_process"),
-            overlap=self.cfg.getboolean("DataFrame", "overlap"),
-            with_nan=self.cfg.getboolean("DataFrame", "with_nan", fallback=False),
-            seq_len=initial_sequence_len,  # Use initial_sequence_len here
-            device=self.device,
             dataset_label=self.dataset_label,
             mask_label=self.mask_label,
-            data_root=optional_config_str(self.cfg, "DataFrame", "data_root"),
-            corpus=optional_config_str(self.cfg, "DataFrame", "corpus"),
-            crop_start_sec=optional_config_float(self.cfg, "DataFrame", "crop_start_sec"),
-            crop_end_sec=optional_config_float(self.cfg, "DataFrame", "crop_end_sec"),
-            segments=optional_config_str(self.cfg, "DataFrame", "segments"),
-            max_fill_gap_sec=optional_config_float(
-                self.cfg, "DataFrame", "max_fill_gap_sec"
-            ),
-            filled_nan_log_sec=optional_config_float(
-                self.cfg, "DataFrame", "filled_nan_log_sec"
-            ),
-            **windowing_from_config(self.cfg),
-            block_mask_file=optional_config_str(
-                self.cfg, "DataFrame", "block_mask_file"
-            ),
-            block_mask_mode=optional_config_str(
-                self.cfg, "DataFrame", "block_mask_mode"
-            ),
-            contiguous_val_split=optional_config_bool(
-                self.cfg, "DataFrame", "contiguous_val_split", default=False
-            ),
-            **coarse_dataframe_kwargs(self.cfg),
+            seq_len=initial_sequence_len,
         )
 
         # Build data loaders (no need to pass sequence_len and device separately)
@@ -1092,6 +1120,8 @@ class LearningAlgorithm:
         # Load training parameters
         epochs = self.cfg.getint("Training", "epochs")
         early_stop_patience = self.cfg.getint("Training", "early_stop_patience")
+        # 0 keeps the absolute floor. Missing or blank is 0.
+        patience_rel_delta = patience_rel_delta_from_config(self.cfg)
         save_frequency = self.cfg.getint("Training", "save_frequency")
         # Spectrum comparison plots alongside waveform figures. Default ON
         # for new runs; existing INIs without the key keep the new behavior.
@@ -1351,7 +1381,16 @@ class LearningAlgorithm:
         delta_rolling_window_size = 6
         kl_delta_threshold = -1e-4
         auto_delta_threshold = 1e-4
-        delta_threshold = 1e-4
+        # Floor passed to history. The epoch loop rebinds delta_threshold
+        # to the per-epoch value; history_at must keep this constant.
+        abs_improvement_floor = ABS_IMPROVEMENT_FLOOR
+        delta_threshold = abs_improvement_floor
+        if isinstance(loss_log, dict) and "improvement_threshold_epochs" in loss_log:
+            improvement_threshold_epochs = series_or_new(
+                loss_log, "improvement_threshold_epochs", epochs, fill="hold"
+            )
+        else:
+            improvement_threshold_epochs = np.full(epochs, abs_improvement_floor)
         warm_up_happened = False
         val_spectrum = series_or_new(loss_log, "val_spectrum", epochs)
         val_criteria_score = series_or_new(loss_log, "val_criteria_score", epochs)
@@ -1674,7 +1713,8 @@ class LearningAlgorithm:
                 tag=tag,
                 auto_sampling_method=self.autonomous_sampling_method,
                 noise_sampling_method=self.noise_sampling_method,
-                delta_threshold=delta_threshold,
+                delta_threshold=abs_improvement_floor,
+                patience_rel_delta=patience_rel_delta,
                 val_criteria=self._val_criteria,
                 val_reference=self._val_reference,
                 metric_reference=self._metric_reference,
@@ -1700,6 +1740,7 @@ class LearningAlgorithm:
                     "cpt_patience_epochs": cpt_patience_epochs,
                     "patience_threshold_epochs": patience_threshold_epochs,
                     "delta_per_epoch": delta_per_epoch,
+                    "improvement_threshold_epochs": improvement_threshold_epochs,
                     "best_state_epochs": best_state_epochs,
                     "windows_kept": windows_kept,
                     "windows_dropped_nan": windows_dropped_nan,
@@ -2517,6 +2558,13 @@ class LearningAlgorithm:
 
             # Save the best model, update patience and best_val_loss
             # A skipped epoch is never an improvement: patience still counts it.
+            # Threshold uses the best after the warm-up reset above.
+            delta_threshold = improvement_threshold(
+                best_val_loss,
+                patience_rel_delta,
+                abs_floor=abs_improvement_floor,
+            )
+            improvement_threshold_epochs[epoch] = delta_threshold
             improved = (not selection_skipped) and delta < -delta_threshold
             if improved:
                 cpt_patience = 0
@@ -2534,7 +2582,9 @@ class LearningAlgorithm:
                     f"[Learning Algo][epoch{epoch}] Updated cpt_patience: {cpt_patience}"
                 )
                 logger.info(
-                    "Updated cpt_patience: {}, delta: {}".format(cpt_patience, delta)
+                    "Updated cpt_patience: {}, delta: {}, threshold: {}".format(
+                        cpt_patience, delta, delta_threshold
+                    )
                 )
             logger.info(
                 format_selection_line(
@@ -3001,6 +3051,9 @@ class LearningAlgorithm:
                     ),
                     subband_warm_epochs=subband_line_epochs,
                     decorr_warm_epochs=decorr_line_epochs,
+                    improvement_threshold_epochs=improvement_threshold_epochs[
+                        : epoch + 1
+                    ],
                 )
 
                 if self.model_name == "MT_RNN" or self.model_name == "MT_VRNN":

@@ -64,6 +64,16 @@ legacy switch.
 before the time crop. ``block_mask_mode`` defaults to ``not_good``.
 ``filled_nan_log_sec`` is the re-cut log cutoff when ``max_fill_gap_sec``
 is unset. Crop stays time-based.
+``[DataFrame] filter_bank`` (unset, blank, ``None``, or ``stored``) keeps
+the stored stage05/06 arrays. ``band_matched_v1`` re-filters ``*_raw``
+on the full session, before the block mask and the time crop: ECG
+high-pass 1 Hz / low-pass 40 Hz, EEG high-pass 1 Hz / low-pass 80 Hz,
+notches at 50 and 60 Hz and harmonics below Nyquist. ``band_matched_hp05_v1``
+uses a 0.5 Hz high-pass. Finite runs are split on NaN, ``segment_id``,
+and ``present=False``. A run shorter than ``filter_min_run_sec`` (blank
+is 2.0 s) or not longer than the filter padding becomes NaN. Nothing is
+interpolated or resampled. PPG, acceleration, coarse, and ECG-removed
+EEG reject a named bank.
 
 Waveform segments
 -----------------
@@ -216,6 +226,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import re
 import warnings
 from pathlib import Path
@@ -242,6 +253,8 @@ from .gap_grid import (
     gap_load_stats,
     log_gap_split_recut,
     missing_row_mask,
+    _read_present,
+    _read_segment_id,
     groups_from_boundaries,
     log_current_nan_window_rule,
     log_window_recut,
@@ -627,19 +640,344 @@ def _maybe_resample(df: pd.DataFrame, resample_hz: float | None) -> pd.DataFrame
     return aligned.reset_index()
 
 
+# Named re-filters of the stored *_raw series. "stored" (and blank) is
+# not an entry: that path returns the arrays already in the NPZ.
+FILTER_BANKS = {
+    "band_matched_v1": {
+        "ecg": {"hp": 1.0, "lp": 40.0},
+        "eeg": {"hp": 1.0, "lp": 80.0},
+        "notch_hz": (50.0, 60.0),
+        "notch_q": 30.0,
+        "order": 4,
+    },
+    "band_matched_hp05_v1": {
+        "ecg": {"hp": 0.5, "lp": 40.0},
+        "eeg": {"hp": 0.5, "lp": 80.0},
+        "notch_hz": (50.0, 60.0),
+        "notch_q": 30.0,
+        "order": 4,
+    },
+}
+_STORED_FILTER_BANK = {"", "none", "null", "stored"}
+_ECG_FILTER_COLUMNS = ("ch1", "ch2", "ecg")
+_EEG_FILTER_COLUMNS = ("ch3", "ch4", "eeg")
+_STAGE05_BASES = {
+    "raw_ch1",
+    "raw_ch2",
+    "raw_ecg",
+    "bipolar_ecg",
+    "raw_all",
+    "bipolar_both",
+}
+_STAGE06_BASES = {
+    "raw_ch3",
+    "raw_ch4",
+    "raw_eeg",
+    "bipolar_eeg",
+    "raw_all",
+    "bipolar_both",
+}
+_FILTER_BANK_BASES = _STAGE05_BASES | _STAGE06_BASES
+_FILTER_BANK_REJECTED = (
+    "filter_bank only applies to waveform observations that read "
+    "stage05/stage06 (raw_ch1, raw_ch2, raw_ch3, raw_ch4, raw_ecg, "
+    "raw_eeg, raw_all, bipolar_ecg, bipolar_eeg, bipolar_both); "
+    "{base} has no *_raw series to re-filter."
+)
+
+
+def resolve_filter_bank(name) -> str | None:
+    """Named bank, or None for the stored filtered arrays.
+
+    Missing, blank, ``None``, ``null``, and ``stored`` (any case) keep
+    the arrays already in the stage file. An unknown name raises.
+    """
+    if name is None:
+        return None
+    text = str(name).strip()
+    if text.lower() in _STORED_FILTER_BANK:
+        return None
+    if text not in FILTER_BANKS:
+        known = ", ".join(sorted(FILTER_BANKS))
+        raise ValueError(
+            f"Unknown filter_bank {name!r}. Known banks: {known}. "
+            "Blank, None, or stored keeps the stored filtered arrays."
+        )
+    return text
+
+
+def resolve_filter_min_run_sec(value) -> float:
+    """Blank is 2.0 s. A bad value raises even when the bank is stored."""
+    if _is_unset(value):
+        return 2.0
+    try:
+        out = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"filter_min_run_sec must be a float, got {value!r}."
+        ) from exc
+    if not np.isfinite(out) or out < 0.0:
+        raise ValueError(
+            f"filter_min_run_sec must be finite and >= 0, got {value!r}."
+        )
+    return float(out)
+
+
+def sosfiltfilt_padlen(sos) -> int:
+    """Default ``sosfiltfilt`` pad length for this second-order cascade."""
+    sos = np.atleast_2d(np.asarray(sos, dtype=np.float64))
+    n_sections = int(sos.shape[0])
+    n_zero_b = int(np.count_nonzero(sos[:, 2] == 0))
+    n_zero_a = int(np.count_nonzero(sos[:, 5] == 0))
+    return 3 * (2 * n_sections + 1 - min(n_zero_b, n_zero_a))
+
+
+def _filter_kind(column: str) -> str:
+    if column in _ECG_FILTER_COLUMNS:
+        return "ecg"
+    if column in _EEG_FILTER_COLUMNS:
+        return "eeg"
+    raise ValueError(
+        f"Column {column!r} is not an ECG or EEG waveform "
+        f"({_ECG_FILTER_COLUMNS} / {_EEG_FILTER_COLUMNS})."
+    )
+
+
+def notch_frequencies(bases, fs: float) -> list[float]:
+    """Base tones and harmonics strictly below Nyquist."""
+    nyquist = float(fs) / 2.0
+    freqs = []
+    for base in bases:
+        harmonic = 1
+        while harmonic * float(base) < nyquist:
+            freqs.append(harmonic * float(base))
+            harmonic += 1
+    return freqs
+
+
+def filter_bank_sos(bank: str, kind: str, fs: float) -> list[np.ndarray]:
+    """Notch sections, then one Butterworth band-pass, each applied alone."""
+    from scipy.signal import butter, iirnotch, tf2sos
+
+    spec = FILTER_BANKS[bank]
+    band = spec[kind]
+    hp = float(band["hp"])
+    lp = float(band["lp"])
+    nyquist = float(fs) / 2.0
+    if not (hp > 0.0 and hp < lp and lp < nyquist):
+        raise ValueError(
+            f"filter_bank {bank!r} {kind} band {hp:g}-{lp:g} Hz "
+            f"is not inside (0, Nyquist) at fs={float(fs):g} Hz."
+        )
+    sections = []
+    for tone in notch_frequencies(spec["notch_hz"], fs):
+        numerator, denominator = iirnotch(tone, float(spec["notch_q"]), fs=float(fs))
+        sections.append(np.asarray(tf2sos(numerator, denominator), dtype=np.float64))
+    sections.append(
+        np.asarray(
+            butter(
+                int(spec["order"]),
+                [hp, lp],
+                btype="bandpass",
+                fs=float(fs),
+                output="sos",
+            ),
+            dtype=np.float64,
+        )
+    )
+    return sections
+
+
+def sampling_rate_hz(npz, n: int) -> float:
+    """``fs`` when present, otherwise one over the median ``t`` step."""
+    if "fs" in getattr(npz, "files", ()):
+        fs = np.asarray(npz["fs"], dtype=np.float64).reshape(-1)
+        if fs.size:
+            value = float(fs[0])
+            if np.isfinite(value) and value > 0.0:
+                return value
+    if "t" in getattr(npz, "files", ()):
+        t = np.asarray(npz["t"], dtype=np.float64).reshape(-1)
+        if t.size >= 2:
+            step = float(np.median(np.diff(t)))
+            if np.isfinite(step) and step > 0.0:
+                return 1.0 / step
+    raise ValueError(
+        "filter_bank needs a positive fs key or a t axis with a positive step "
+        f"(series length {n})."
+    )
+
+
+def contiguous_finite_runs(values, present, segment_id) -> list[tuple[int, int]]:
+    """Half-open runs of finite samples that do not cross a gap.
+
+    A run stops at a NaN, at ``present=False``, and where ``segment_id``
+    changes. Absent ``present`` or ``segment_id`` does not split.
+    """
+    series = np.asarray(values, dtype=np.float64).reshape(-1)
+    n = int(series.size)
+    keep = np.isfinite(series)
+    if present is not None:
+        flags = np.asarray(present, dtype=bool).reshape(-1)
+        if flags.shape != (n,):
+            raise ValueError(
+                f"present length {flags.size} != series length {n}"
+            )
+        keep = keep & flags
+    ids = None
+    if segment_id is not None:
+        ids = np.asarray(segment_id).reshape(-1)
+        if ids.shape != (n,):
+            raise ValueError(
+                f"segment_id length {ids.size} != series length {n}"
+            )
+    runs = []
+    index = 0
+    while index < n:
+        if not keep[index]:
+            index += 1
+            continue
+        stop = index + 1
+        while stop < n and keep[stop]:
+            if ids is not None and ids[stop] != ids[index]:
+                break
+            stop += 1
+        runs.append((index, stop))
+        index = stop
+    return runs
+
+
+def _min_kept_run(fs: float, min_run_sec: float, sos_list) -> int:
+    padlen = max(sosfiltfilt_padlen(sos) for sos in sos_list)
+    by_time = int(math.ceil(float(min_run_sec) * float(fs)))
+    return max(by_time, padlen + 1)
+
+
+def _filter_runs_with_sos(
+    values,
+    sos_list,
+    *,
+    fs: float,
+    min_run_sec: float,
+    present=None,
+    segment_id=None,
+) -> np.ndarray:
+    """Apply each SOS in order, only inside runs long enough to pad."""
+    from scipy.signal import sosfiltfilt
+
+    need = _min_kept_run(float(fs), float(min_run_sec), sos_list)
+    series = np.asarray(values, dtype=np.float64).reshape(-1)
+    out = np.full(series.shape, np.nan, dtype=np.float64)
+    for start, stop in contiguous_finite_runs(series, present, segment_id):
+        if stop - start < need:
+            continue
+        filtered = series[start:stop]
+        for sos in sos_list:
+            filtered = sosfiltfilt(sos, filtered)
+        out[start:stop] = filtered
+    return out
+
+
+def filter_column_runs(
+    values,
+    *,
+    fs: float,
+    kind: str,
+    bank: str,
+    min_run_sec,
+    present=None,
+    segment_id=None,
+) -> np.ndarray:
+    """Zero-phase filter each finite run. Short runs and gaps stay NaN."""
+    bank_name = resolve_filter_bank(bank)
+    if bank_name is None:
+        raise ValueError("filter_column_runs requires a named filter_bank.")
+    min_run = resolve_filter_min_run_sec(min_run_sec)
+    sos_list = filter_bank_sos(bank_name, kind, float(fs))
+    return _filter_runs_with_sos(
+        values,
+        sos_list,
+        fs=float(fs),
+        min_run_sec=min_run,
+        present=present,
+        segment_id=segment_id,
+    )
+
+
+def apply_filter_bank_columns(
+    columns: dict[str, np.ndarray],
+    npz,
+    bank: str,
+    min_run_sec,
+    *,
+    stage_name: str,
+) -> dict[str, np.ndarray]:
+    """Replace each waveform column with its filtered ``*_raw`` series."""
+    bank_name = resolve_filter_bank(bank)
+    if bank_name is None:
+        return columns
+    min_run = resolve_filter_min_run_sec(min_run_sec)
+    names = list(columns)
+    if not names:
+        return columns
+    n = int(np.asarray(columns[names[0]]).reshape(-1).size)
+    fs = sampling_rate_hz(npz, n)
+    present = _read_present(npz, n)
+    segment_id = _read_segment_id(npz, n)
+    built: dict[str, list[np.ndarray]] = {}
+    out = {}
+    for name in names:
+        kind = _filter_kind(name)
+        raw_key = f"{name}_raw"
+        if raw_key not in npz.files:
+            raise ValueError(
+                f"filter_bank {bank_name!r} needs {raw_key!r} in {stage_name} "
+                f"(found {sorted(npz.files)})."
+            )
+        raw = np.asarray(npz[raw_key], dtype=np.float64).reshape(-1)
+        stored = np.asarray(columns[name], dtype=np.float64).reshape(-1)
+        if raw.shape != stored.shape:
+            raise ValueError(
+                f"{stage_name} {raw_key} length {raw.size} != "
+                f"stored {name!r} length {stored.size}."
+            )
+        if kind not in built:
+            built[kind] = filter_bank_sos(bank_name, kind, fs)
+        out[name] = _filter_runs_with_sos(
+            raw,
+            built[kind],
+            fs=fs,
+            min_run_sec=min_run,
+            present=present,
+            segment_id=segment_id,
+        )
+    print(
+        f"[XhroProper] filter_bank={bank_name} stage={stage_name} "
+        f"fs={fs:g} Hz min_run_sec={min_run:g}"
+    )
+    return out
+
+
 def load_proper_frame(
     session_dir: Path,
     base_process: str,
     *,
     resample_hz: float | None = None,
     max_fill_gap_sec=None,
+    filter_bank=None,
+    filter_min_run_sec=None,
 ) -> pd.DataFrame:
     """Build a datetime-indexed table for one observation-process base name.
 
     ``max_fill_gap_sec`` unset leaves filled gaps inside windows. Gap-grid
     keys are read from the stage NPZ when present. ``resample_hz`` is still
     the unchanged exact reindex; segment indices are on the native grid.
+    ``filter_bank`` unset keeps the stored filtered arrays. A named bank
+    re-filters ``*_raw`` on this full series, before any crop.
     """
+    # A bad min-run raises even when the stored arrays are kept.
+    bank = resolve_filter_bank(filter_bank)
+    min_run = resolve_filter_min_run_sec(filter_min_run_sec)
     inter = session_dir / "intermediates"
     t0 = _infer_t0(session_dir)
 
@@ -651,32 +989,38 @@ def load_proper_frame(
             npz, columns, t0=t0, max_fill_gap_sec=max_fill_gap_sec
         )
 
-    need05 = base_process in {
-        "raw_ch1",
-        "raw_ch2",
-        "raw_ecg",
-        "bipolar_ecg",
-        "raw_all",
-        "bipolar_both",
-    }
-    need06 = base_process in {
-        "raw_ch3",
-        "raw_ch4",
-        "raw_eeg",
-        "bipolar_eeg",
-        "raw_all",
-        "bipolar_both",
-    }
+    def stage_columns(npz, columns, stage_name: str) -> dict[str, np.ndarray]:
+        if bank is None:
+            return columns
+        return apply_filter_bank_columns(
+            columns, npz, bank, min_run, stage_name=stage_name
+        )
+
+    need05 = base_process in _STAGE05_BASES
+    need06 = base_process in _STAGE06_BASES
     if need05 or need06:
         frames = []
         if need05:
             z = load_stage("stage05_ecg_filtered.npz")
-            frames.append(frame_from(z, _series_from_stage05(z)))
+            frames.append(
+                frame_from(
+                    z,
+                    stage_columns(z, _series_from_stage05(z), "stage05_ecg_filtered.npz"),
+                )
+            )
         if need06:
             z = load_stage("stage06_eeg_filtered.npz")
-            frames.append(frame_from(z, _series_from_stage06(z)))
+            frames.append(
+                frame_from(
+                    z,
+                    stage_columns(z, _series_from_stage06(z), "stage06_eeg_filtered.npz"),
+                )
+            )
         df = frames[0] if len(frames) == 1 else _align_on_datetime(frames[0], frames[1])
         return _maybe_resample(df, resample_hz)
+
+    if bank is not None:
+        raise ValueError(_FILTER_BANK_REJECTED.format(base=base_process))
 
     if base_process in ("ecg_removed_eeg", "ecg_removed_eeg_scale"):
         column = GROK_EXTRA_COLUMNS[base_process][0]
@@ -2470,6 +2814,13 @@ class XhroProper(Xhro):
         ``find_indices`` starts. True tiles each segment without overlap
         or interior holes; the only unused samples are the final remainder
         of each piece, plus any gap a start had to step over.
+      - filter_bank: waveform stage05/06 only. Unset, blank, ``None``, or
+        ``stored`` keeps the stored filtered arrays. ``band_matched_v1``
+        and ``band_matched_hp05_v1`` re-filter ``*_raw`` on the full
+        session before the block mask and the crop. Runs are split on
+        NaN, ``segment_id``, and ``present=False``.
+      - filter_min_run_sec: blank is 2.0. A shorter finite run, or one
+        that is not longer than the filter padding, becomes NaN.
       - block_mask_file / block_mask_mode: waveform only. Unset file means
         no block mask. The file's flagged blocks are set to NaN and
         ``present=False`` before the time crop, so they act as gaps.
@@ -2535,6 +2886,8 @@ class XhroProper(Xhro):
         block_mask_mode=None,
         contiguous_val_split=False,
         val_split_per_subject=False,
+        filter_bank=None,
+        filter_min_run_sec=None,
         **kwargs,
     ):
         self.path_to_data = data_dir
@@ -2609,6 +2962,10 @@ class XhroProper(Xhro):
         )
         self.block_mask_mode = parse_block_mask_mode(block_mask_mode)
         self.block_mask_fraction = None
+        # Resolved before any stage file is opened. A bad min-run raises
+        # even when the bank is stored (None).
+        self.filter_bank = resolve_filter_bank(filter_bank)
+        self.filter_min_run_sec = resolve_filter_min_run_sec(filter_min_run_sec)
         self.segment_index_per_row = None
         self.split_boundaries = None
         self.filled_run_sec = None
@@ -2618,6 +2975,8 @@ class XhroProper(Xhro):
         base, _suffix = _split_process(self.observation_process)
         if base in COARSE_OBS_COLUMNS:
             self.coarse_mode = True
+            if self.filter_bank is not None:
+                raise ValueError(_FILTER_BANK_REJECTED.format(base=base))
             if self.segments is not None:
                 raise ValueError(
                     "segments is for XhroProper waveform modes. Coarse modes "
@@ -2674,6 +3033,8 @@ class XhroProper(Xhro):
             base,
             resample_hz=self.resample_hz,
             max_fill_gap_sec=self.max_fill_gap_sec,
+            filter_bank=self.filter_bank,
+            filter_min_run_sec=self.filter_min_run_sec,
         )
         the_sequence = apply_block_mask(
             the_sequence, self.block_mask_file, self.block_mask_mode
@@ -3200,6 +3561,8 @@ class XhroProper(Xhro):
                 base,
                 resample_hz=None,
                 max_fill_gap_sec=self.max_fill_gap_sec,
+                filter_bank=self.filter_bank,
+                filter_min_run_sec=self.filter_min_run_sec,
             )
             frame = apply_block_mask(frame, self.block_mask_file, self.block_mask_mode)
             frac = frame.attrs.get("block_mask_fraction")

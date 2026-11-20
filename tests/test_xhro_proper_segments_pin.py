@@ -955,9 +955,11 @@ def test_pin_eval_and_training_read_the_same_segments_string():
     spec = "subj_a:0-1.5,3-4; subj_b:10-12"
     assert _config_segments(spec) == spec
     # Both call sites pass optional_config_str into DatasetConfig.segments.
+    # Training goes through training_dataset_config, which takes the cfg.
     train_src = Path("src/dvae/learning_algo.py").read_text()
     eval_src = Path("src/dvae/eval/eval_signal.py").read_text()
-    assert 'segments=optional_config_str(self.cfg, "DataFrame", "segments")' in train_src
+    assert 'segments=optional_config_str(cfg, "DataFrame", "segments")' in train_src
+    assert "training_dataset_config(" in train_src
     assert 'segments=optional_config_str(cfg, "DataFrame", "segments")' in eval_src
     # Eval keeps seq_len unset and drops short ranges with the training cutoff.
     assert "seq_len=None" in eval_src
