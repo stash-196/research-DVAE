@@ -66,8 +66,6 @@ from dvae.eval.utils.batch_all_visuals import (
 from dvae.eval.utils.forward_modes import mode_selector_to_1d
 
 from torch.nn.functional import mse_loss
-import plotly.graph_objects as go
-import plotly.express as px
 import pickle
 import configparser
 from typing import Any, Optional
@@ -845,6 +843,10 @@ if __name__ == "__main__":
         **windowing_from_config(cfg),
         block_mask_file=optional_config_str(cfg, "DataFrame", "block_mask_file"),
         block_mask_mode=optional_config_str(cfg, "DataFrame", "block_mask_mode"),
+        filter_bank=optional_config_str(cfg, "DataFrame", "filter_bank"),
+        filter_min_run_sec=optional_config_float(
+            cfg, "DataFrame", "filter_min_run_sec"
+        ),
         **coarse_dataframe_kwargs(cfg),
     )
 

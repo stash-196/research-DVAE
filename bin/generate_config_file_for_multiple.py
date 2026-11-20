@@ -316,6 +316,9 @@ if __name__ == "__main__":
         early_stop_patience = [500]
     else:
         early_stop_patience = [200]
+    # 0 keeps the absolute 1e-4 patience floor. A single value does not
+    # multiply the grid.
+    patience_rel_delta = [0.0]
     save_frequency = [200]
     gradient_clip = [10.0]
     optimize_alphas = [True]
@@ -470,6 +473,9 @@ if __name__ == "__main__":
     # (blank = template default) unless row_cells below overrides them.
     crop_start_sec = [""]
     crop_end_sec = [""]
+    # Blank keeps the stored stage05/06 arrays. Blank min-run is 2.0 s.
+    filter_bank = [""]
+    filter_min_run_sec = [""]
     block_mask_file = [""]
     block_mask_mode = [""]
     val_criteria = ["recon"]  # rows (b)-(d) rerun: recon-only selection, patience, and bumps
@@ -999,6 +1005,7 @@ if __name__ == "__main__":
             "lr": lr,
             "epochs": epochs,
             "early_stop_patience": early_stop_patience,
+            "patience_rel_delta": patience_rel_delta,
             "save_frequency": save_frequency,
             "gradient_clip": gradient_clip,
             "sampling_method": sampling_method,
@@ -1027,6 +1034,8 @@ if __name__ == "__main__":
             "data_root": data_root,
             "crop_start_sec": crop_start_sec,
             "crop_end_sec": crop_end_sec,
+            "filter_bank": filter_bank,
+            "filter_min_run_sec": filter_min_run_sec,
             "block_mask_file": block_mask_file,
             "block_mask_mode": block_mask_mode,
             "val_criteria": val_criteria,

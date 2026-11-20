@@ -1,4 +1,6 @@
 # dataset_builder.py
+from __future__ import annotations
+
 from torch.utils.data import DataLoader
 from dataclasses import asdict
 
@@ -92,6 +94,10 @@ class DatasetConfig:
     # Coarse shuffled val: split each subject's windows separately.
     # False keeps the historical one-cut-over-all-windows behavior.
     val_split_per_subject: bool = False
+    # XhroProper stage05/06 re-filter. None/blank/stored keeps the stored
+    # filtered arrays. filter_min_run_sec None is resolved to 2.0 s.
+    filter_bank: str | None = None
+    filter_min_run_sec: float | None = None
 
     def __post_init__(self):
         # ``legacy_defaults`` and ``legacy_windowing`` are one switch.

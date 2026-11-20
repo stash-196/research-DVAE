@@ -7,6 +7,8 @@ port. For the grok named-bank pipeline (``grok_output/…/intermediates/*.npz``)
 use ``XhroProper``.
 """
 
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 import torch

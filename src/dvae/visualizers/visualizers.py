@@ -1,7 +1,6 @@
 import random
 import textwrap
 from matplotlib.animation import PillowWriter, FuncAnimation
-from umap import UMAP
 from sklearn.manifold import (
     TSNE,
     LocallyLinearEmbedding,
@@ -946,6 +945,8 @@ def reduce_dimensions(embeddings, technique="pca", n_components=3):
             n_components=n_components, eigen_solver="dense"
         )
     elif technique == "umap":
+        from umap import UMAP
+
         reducer = UMAP(n_components=n_components)
     elif technique == "ica":
         reducer = FastICA(n_components=n_components)

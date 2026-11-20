@@ -296,6 +296,7 @@ def build_training_history(
     bump_events=None,
     subband_enabled=None,
     decorr_enabled=None,
+    patience_rel_delta=None,
 ) -> dict:
     """One dict for the checkpoint ``loss_log`` and for ``loss_model.pckl``.
 
@@ -324,6 +325,8 @@ def build_training_history(
         "none" if noise_sampling_method is None else str(noise_sampling_method)
     )
     history["delta_threshold"] = float(delta_threshold)
+    if patience_rel_delta is not None:
+        history["patience_rel_delta"] = float(patience_rel_delta)
     history["spectrum_monitored"] = bool(spectrum_monitored)
     history["drift_monitored"] = bool(drift_monitored)
     for key in DRIFT_SERIES_KEYS:
@@ -334,6 +337,10 @@ def build_training_history(
     # passes the scale and the effective weight every epoch, and sets
     # the enabled flags so a redraw can hide a term that was off.
     # Count of free-run spectrum segments skipped for too few finite samples.
+    if "improvement_threshold_epochs" in series:
+        history["improvement_threshold_epochs"] = _slice_1d(
+            series["improvement_threshold_epochs"], end
+        )
     if "val_fixed_recon" in series:
         history["val_fixed_recon"] = _slice_1d(series["val_fixed_recon"], end)
     if "val_spectrum_skipped" in series:
@@ -964,6 +971,11 @@ def regenerate_training_figures(history, save_figures_dir, tag=None, drift_norm=
         decorr_loss_weight_values=dec_weight,
         subband_warm_epochs=sub_epochs,
         decorr_warm_epochs=dec_epochs,
+        improvement_threshold_epochs=(
+            None
+            if "improvement_threshold_epochs" not in history
+            else _series("improvement_threshold_epochs")
+        ),
     )
     sigmas = history.get("sigmas_history")
     a_sigmas = history.get("A_sigmas_history")

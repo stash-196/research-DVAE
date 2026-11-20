@@ -1010,6 +1010,7 @@ def visualize_combined_metrics(
     decorr_loss_weight_values=None,
     subband_warm_epochs=None,
     decorr_warm_epochs=None,
+    improvement_threshold_epochs=None,
 ):
     """Warm-up, patience, windowing, and, when stored, epoch wall time.
 
@@ -1023,17 +1024,44 @@ def visualize_combined_metrics(
     plt.rcParams["font.size"] = 12
     n_epochs = len(np.asarray(delta_per_epoch).reshape(-1))
 
-    # Plot delta
-    delta_above_threshold = np.where(
-        delta_per_epoch >= delta_threshold, delta_per_epoch, np.nan
-    )
-    delta_below_threshold = np.where(
-        delta_per_epoch < delta_threshold, delta_per_epoch, np.nan
-    )
-    axs[0].plot(delta_below_threshold, label=f"delta < {delta_threshold}", color="blue")
-    axs[0].plot(
-        delta_above_threshold, label=f"delta >= {delta_threshold}", color="orange"
-    )
+    # Plot delta. A missing series, or one that is the absolute floor on
+    # every epoch, keeps the scalar split. A varying series splits per epoch.
+    scalar_threshold = delta_threshold
+    per_epoch_threshold = None
+    if improvement_threshold_epochs is not None:
+        per_epoch_threshold = np.asarray(
+            improvement_threshold_epochs, dtype=float
+        ).reshape(-1)
+        delta_flat = np.asarray(delta_per_epoch).reshape(-1)
+        floor = np.full(per_epoch_threshold.shape, float(delta_threshold))
+        if per_epoch_threshold.shape != delta_flat.shape or np.array_equal(
+            per_epoch_threshold, floor
+        ):
+            per_epoch_threshold = None
+        elif np.all(per_epoch_threshold == per_epoch_threshold.flat[0]):
+            scalar_threshold = float(per_epoch_threshold.flat[0])
+            per_epoch_threshold = None
+    if per_epoch_threshold is None:
+        delta_above_threshold = np.where(
+            delta_per_epoch >= scalar_threshold, delta_per_epoch, np.nan
+        )
+        delta_below_threshold = np.where(
+            delta_per_epoch < scalar_threshold, delta_per_epoch, np.nan
+        )
+        below_label = f"delta < {scalar_threshold}"
+        above_label = f"delta >= {scalar_threshold}"
+    else:
+        delta_arr = np.asarray(delta_per_epoch, dtype=float).reshape(-1)
+        delta_above_threshold = np.where(
+            delta_arr >= per_epoch_threshold, delta_arr, np.nan
+        )
+        delta_below_threshold = np.where(
+            delta_arr < per_epoch_threshold, delta_arr, np.nan
+        )
+        below_label = "delta < per-epoch threshold"
+        above_label = "delta >= per-epoch threshold"
+    axs[0].plot(delta_below_threshold, label=below_label, color="blue")
+    axs[0].plot(delta_above_threshold, label=above_label, color="orange")
     axs[0].legend(fontsize=16, title="delta", title_fontsize=20, loc="upper left")
     axs[0].set_xlabel("epochs", fontdict={"size": 16})
     axs[0].set_ylabel("delta", fontdict={"size": 16})

@@ -74,7 +74,7 @@ for experiment in "${experiments[@]}"; do
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
+#SBATCH --mem=${SLURM_MEM:-32G}
 #SBATCH --time=${SLURM_TIME_LIMIT}
 #SBATCH --output=${LOG_DIR}/%j_training_${CONFIG_BASENAME}.log
 #SBATCH --error=${LOG_DIR}/%j_training_${CONFIG_BASENAME}.err
