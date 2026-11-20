@@ -388,3 +388,16 @@ def test_packet_loss_retrans_segments_mask_and_filter(tmp_path):
     assert np.all(train_starts + 40 <= 1280)
     # The shared head is the same series; val_indices 0.5 did not reshuffle it.
     np.testing.assert_array_equal(np.asarray(valid.seq), series)
+
+
+def test_filter_min_run_sec_null_is_default():
+    import configparser
+    from dvae.dataset.xhro_proper_dataset import (
+        optional_config_float,
+        resolve_filter_min_run_sec,
+    )
+
+    cfg = configparser.ConfigParser()
+    cfg.read_string("[DataFrame]\nfilter_min_run_sec = null\nfilter_bank = null\n")
+    assert optional_config_float(cfg, "DataFrame", "filter_min_run_sec") is None
+    assert resolve_filter_min_run_sec("null") == 2.0

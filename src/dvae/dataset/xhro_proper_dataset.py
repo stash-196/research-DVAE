@@ -708,7 +708,9 @@ def resolve_filter_bank(name) -> str | None:
 
 def resolve_filter_min_run_sec(value) -> float:
     """Blank is 2.0 s. A bad value raises even when the bank is stored."""
-    if _is_unset(value):
+    if _is_unset(value) or (
+        isinstance(value, str) and value.strip().lower() in ("none", "null")
+    ):
         return 2.0
     try:
         out = float(value)
@@ -750,7 +752,9 @@ def notch_frequencies(bases, fs: float) -> list[float]:
     for base in bases:
         harmonic = 1
         while harmonic * float(base) < nyquist:
-            freqs.append(harmonic * float(base))
+            tone = harmonic * float(base)
+            if tone not in freqs:
+                freqs.append(tone)
             harmonic += 1
     return freqs
 
@@ -1448,7 +1452,7 @@ def _optional_user_float(value, name: str) -> float | None:
 def optional_config_float(cfg, section: str, option: str) -> float | None:
     """Like ``optional_config_str``, then ``float``. Unset stays None."""
     text = optional_config_str(cfg, section, option)
-    if text is None:
+    if text is None or text.strip().lower() in ("none", "null"):
         return None
     return _optional_user_float(text, f"[{section}] {option}")
 
