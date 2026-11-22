@@ -14,6 +14,42 @@ from dvae.model.plrnn import PLRNN, shPLRNN, shPLRNN_wo_A
 from collections import deque
 
 
+def normalize_feedback_alignment(value):
+    """Blank / missing / ``delayed`` keep the historical one-step delay.
+
+    ``aligned`` feeds the current read-out. Anything else is an error.
+    """
+    if value is None:
+        return "delayed"
+    text = str(value).strip()
+    if text == "" or text == "delayed":
+        return "delayed"
+    if text == "aligned":
+        return "aligned"
+    raise ValueError(
+        "Invalid feedback_alignment {!r}. "
+        "Expected blank, 'delayed', or 'aligned'.".format(value)
+    )
+
+
+def parse_feedback_alignment(cfg):
+    """Read ``[Network] feedback_alignment``. Missing or blank is delayed."""
+    if cfg is None:
+        return "delayed"
+    raw = cfg.get("Network", "feedback_alignment", fallback="")
+    return normalize_feedback_alignment(raw)
+
+
+def reject_aligned_feedback(cfg):
+    """VRNN and MT_VRNN have no aligned path. Delayed is left untouched."""
+    alignment = parse_feedback_alignment(cfg)
+    if alignment == "aligned":
+        raise NotImplementedError(
+            "feedback_alignment='aligned' is not implemented for VRNN and "
+            "MT_VRNN. Leave it blank or set 'delayed'."
+        )
+
+
 class BaseRNN(BaseModel):
     def __init__(
         self,
@@ -27,6 +63,7 @@ class BaseRNN(BaseModel):
         dropout_p,
         device,
         cfg,
+        feedback_alignment=None,
     ):
         super().__init__(x_dim, activation, dropout_p, device, cfg)
         self.dense_x = dense_x
@@ -52,6 +89,14 @@ class BaseRNN(BaseModel):
         self.impute_with_which = cfg.get("Training", "impute_strategy", fallback="auto")
 
         self.var_decay = cfg.getfloat("Training", "var_decay", fallback=0.9)
+
+        # None means "read the config". Builders pass the parsed value.
+        if feedback_alignment is None:
+            self.feedback_alignment = parse_feedback_alignment(cfg)
+        else:
+            self.feedback_alignment = normalize_feedback_alignment(
+                feedback_alignment
+            )
 
         self.build()
 
@@ -198,6 +243,13 @@ class BaseRNN(BaseModel):
             mode_selector_t = mode_selector[t, :, :]  # Shape: (batch_size, x_dim)
             noise_selector_t = noise_selector[t, :, :]
 
+            # aligned: y[t] is the read-out of h before input t is consumed,
+            # and that same tensor is what imputation and the mix use.
+            # delayed (default) leaves this assignment to the line below the
+            # mix, so step t still sees the previous iteration's y (y[t-1]).
+            if self.feedback_alignment == "aligned":
+                y_t = self.generation_x(h_t[-1])
+
             noise_t = base_noise[t] * local_std * self.noise_std_factor
 
             if self.impute_with_which == "auto":
@@ -233,7 +285,8 @@ class BaseRNN(BaseModel):
             feature_xt = self.feature_extractor_x(final_input_t)
             # Proceed with model-specific methods
             h_t_last = h_t[-1]  # Shape: (batch_size, dim_rnn)
-            y_t = self.generation_x(h_t_last)  # Expects h_t_last: (batch_size, dim_rnn)
+            if self.feedback_alignment != "aligned":
+                y_t = self.generation_x(h_t_last)  # Expects h_t_last: (batch_size, dim_rnn)
             y[t, :, :] = y_t
             h[t, :, :] = h_t_last
             feature_x[t, :, :] = feature_xt
@@ -268,6 +321,7 @@ class BaseRNN(BaseModel):
 
     def get_info(self):
         info = []
+        info.append("feedback_alignment: {}".format(self.feedback_alignment))
         info.append("----- Feature extractor -----")
         for layer in self.feature_extractor_x:
             info.append(str(layer))

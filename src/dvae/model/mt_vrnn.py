@@ -17,9 +17,12 @@ import torch
 from collections import OrderedDict
 import math
 from dvae.model.base_vrnn import BaseVRNN
+from dvae.model.base_rnn import reject_aligned_feedback
 
 
 def build_MT_VRNN(cfg, device="cpu"):
+    # aligned is refused before the MT_VRNN loop, which stays delayed.
+    reject_aligned_feedback(cfg)
 
     # Load parameters for VRNN
     # General

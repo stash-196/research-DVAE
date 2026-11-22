@@ -24,7 +24,7 @@ from torch import nn
 import torch
 from collections import OrderedDict
 import math
-from dvae.model.base_rnn import BaseRNN
+from dvae.model.base_rnn import BaseRNN, parse_feedback_alignment
 from dvae.model.hidden_block import initial_per_unit_alphas
 
 
@@ -57,6 +57,7 @@ def build_MT_RNN(cfg, device="cpu"):
 
     # Beta-vae
     beta = cfg.getfloat("Training", "beta")
+    feedback_alignment = parse_feedback_alignment(cfg)
 
     # Build model
     model = MT_RNN(
@@ -72,6 +73,7 @@ def build_MT_RNN(cfg, device="cpu"):
         beta=beta,
         device=device,
         cfg=cfg,
+        feedback_alignment=feedback_alignment,
     ).to(device)
 
     return model
@@ -92,6 +94,7 @@ class MT_RNN(BaseRNN):
         dropout_p=0,
         beta=1,
         device="cpu",
+        feedback_alignment=None,
     ):
         super().__init__(
             x_dim,
@@ -104,6 +107,7 @@ class MT_RNN(BaseRNN):
             dropout_p,
             device,
             cfg=cfg,
+            feedback_alignment=feedback_alignment,
         )
 
         self.alphas = alphas

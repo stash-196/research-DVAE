@@ -17,9 +17,12 @@ from collections import OrderedDict
 from dvae.utils.logger import print_or_log
 from dvae.utils.model_mode_selector import prepare_mode_selector
 from dvae.model.base_vrnn import BaseVRNN
+from dvae.model.base_rnn import reject_aligned_feedback
 
 
 def build_VRNN(cfg, device="cpu"):
+    # aligned is refused before the VRNN loop, which stays delayed.
+    reject_aligned_feedback(cfg)
 
     # Load parameters for VRNN
     # General

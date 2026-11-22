@@ -9,6 +9,7 @@ License agreement in LICENSE.txt
 """
 
 import os
+import random
 import warnings
 import sys
 import json
@@ -145,6 +146,82 @@ from dvae.checkpoint_state import (
 )
 from dvae.visualizers.spectrum_comparison import dataset_sampling_freq_hz
 import subprocess
+
+
+def resolve_training_seed(cfg, reload):
+    """Optional ``[Training] seed``. Blank or missing does not seed.
+
+    Reload returns ``None`` without reading the key, so a resume does
+    not reseed over the RNG state restored from the checkpoint.
+    """
+    if reload:
+        return None
+    raw = cfg.get("Training", "seed", fallback="")
+    text = str(raw).strip()
+    if text == "":
+        return None
+    try:
+        return int(text)
+    except ValueError as exc:
+        raise ValueError(
+            "Training.seed must be an integer, got {!r}.".format(raw)
+        ) from exc
+
+
+def seed_training_rng(seed):
+    """Seed Python, NumPy, and PyTorch. CUDA only when it is available."""
+    seed = int(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def read_optional_positive_int(cfg, section, option, default):
+    """Blank or missing keeps ``default``. Any other token must be > 0."""
+    raw = cfg.get(section, option, fallback="")
+    text = str(raw).strip()
+    if text == "":
+        return int(default)
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise ValueError(
+            "{}.{} must be a positive integer, got {!r}.".format(
+                section, option, raw
+            )
+        ) from exc
+    if value <= 0:
+        raise ValueError(
+            "{}.{} must be a positive integer, got {}.".format(
+                section, option, value
+            )
+        )
+    return value
+
+
+def block_lengths_for_sampling(cfg, sampling_method):
+    """TF/auto block lengths, or ``None`` when the method is not alternating.
+
+    ``tf_block_len`` and ``auto_block_len`` are read only for
+    ``alternating_blocks`` (defaults 100 and 400).
+    """
+    if sampling_method != "alternating_blocks":
+        return None
+    tf_len = read_optional_positive_int(cfg, "Training", "tf_block_len", 100)
+    auto_len = read_optional_positive_int(cfg, "Training", "auto_block_len", 400)
+    return tf_len, auto_len
+
+
+def autonomous_selector_kwargs(autonomous_config):
+    """Extra selector args. Absent keys leave other modes unchanged."""
+    kwargs = {}
+    if "block_len" in autonomous_config:
+        kwargs["block_len"] = autonomous_config["block_len"]
+    if "auto_block_len" in autonomous_config:
+        kwargs["auto_block_len"] = autonomous_config["auto_block_len"]
+    return kwargs
 
 
 def selection_recon_value(algo, epoch, val_loss) -> float:
@@ -381,6 +458,7 @@ class LearningAlgorithm:
         self.tie_noise_to_auto = self.cfg.getboolean(
             "Training", "tie_noise_to_auto", fallback=False
         )  # True: force noise_warm = auto_warm (for tied ablations)
+        # Only scheduled sampling ramps. alternating_blocks is fixed from epoch 0.
         self.enable_autonomous_warmup = self.autonomous_sampling_method == "ss"
         self.enable_noise_warmup = self.enable_autonomous_warmup and self.cfg.get(
             "Training", "noise_sampling_method", fallback="none"
@@ -461,6 +539,9 @@ class LearningAlgorithm:
             basic_info.append("Cuda verion: {}".format(torch.version.cuda))
         basic_info.append("Model name: {}".format(self.model_name))
         basic_info.append("Total params: {:,}".format(self.model.parameter_count()))
+        training_seed = getattr(self, "training_seed", None)
+        if training_seed is not None:
+            basic_info.append("Training seed: {}".format(training_seed))
 
         return basic_info
 
@@ -752,6 +833,17 @@ class LearningAlgorithm:
         return score, raw, norm
 
     def train(self, profiler=None):
+        # Before build_model so initial parameters follow the seed.
+        # Reload skips this: the checkpoint RNG is restored later.
+        self.training_seed = resolve_training_seed(
+            self.cfg, reload=bool(self.params["reload"])
+        )
+        if self.training_seed is not None:
+            seed_training_rng(self.training_seed)
+            print(
+                "[Learning Algo] Training seed: {}".format(self.training_seed)
+            )
+
         # Build model
         self.build_model()
 
@@ -1879,6 +1971,20 @@ class LearningAlgorithm:
             )
 
         # Train with mini-batch SGD
+        # Block lengths are fixed from epoch 0. A later window bump only
+        # changes current_sequence_len; the selector is rebuilt on that
+        # length with the same blocks. Keys are read only for this method.
+        alt_blocks = block_lengths_for_sampling(
+            self.cfg, self.autonomous_sampling_method
+        )
+        if alt_blocks is not None:
+            logger.info(
+                "sampling_method=alternating_blocks tf_block_len={} "
+                "auto_block_len={} (fixed from epoch 0; window length "
+                "still follows the curriculum).".format(
+                    alt_blocks[0], alt_blocks[1]
+                )
+            )
         ran_epoch = False
         stopped_early = False
         for epoch in range(start_epoch + 1, epochs):
@@ -1941,6 +2047,14 @@ class LearningAlgorithm:
                     / 10,
                 },
             }
+            if alt_blocks is not None:
+                # No warm-up ramp: the ratio lambda is unused by this mode.
+                autonomous_configs["alternating_blocks"] = {
+                    "mode": "alternating_blocks",
+                    "autonomous_ratio": lambda: 0.0,
+                    "block_len": alt_blocks[0],
+                    "auto_block_len": alt_blocks[1],
+                }
 
             # New: parallel structure just for noise
             if self.tie_noise_to_auto and self.enable_noise_warmup:
@@ -1995,6 +2109,7 @@ class LearningAlgorithm:
                     batch_size=batch_size,
                     x_dim=dataset_config.x_dim,
                     device=self.device,
+                    **autonomous_selector_kwargs(autonomous_config),
                 )
 
                 # if nan is present in the batch data, overlay the mask to fill with autonomous mode
@@ -2269,6 +2384,7 @@ class LearningAlgorithm:
                     batch_size=batch_size,
                     x_dim=dataset_config.x_dim,
                     device=self.device,
+                    **autonomous_selector_kwargs(autonomous_config),
                 )
 
                 # if nan is present in the batch data, overlay the mask to fill with autonomous mode
@@ -3259,6 +3375,7 @@ class LearningAlgorithm:
                         batch_size=temp_batch_data.size(1),
                         x_dim=dataset_config.x_dim,
                         device=self.device,
+                        **autonomous_selector_kwargs(autonomous_config),
                     )
                     # NaNs on the selector that this figure actually draws.
                     model_mode_selector = overlay_nan_autonomous(

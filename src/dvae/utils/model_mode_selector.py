@@ -10,7 +10,12 @@ import torch
 
 
 def create_autonomous_mode_selector_1d(
-    seq_len, mode="all_1", autonomous_ratio=0.0, flip_point=None, block_len=None
+    seq_len,
+    mode="all_1",
+    autonomous_ratio=0.0,
+    flip_point=None,
+    block_len=None,
+    auto_block_len=None,
 ):
     """
     Creates a 1D mode selector array for RNN training.
@@ -19,7 +24,9 @@ def create_autonomous_mode_selector_1d(
     :param mode: The mode of operation.
     :param autonomous_ratio: Ratio of autonomous steps for applicable modes.
     :param flip_point: For ``flip_at_index``, timestep where TF (0) switches to auto (1).
-    :param block_len: For ``alternating_blocks``, fixed TF/Auto block length (e.g. 1000).
+    :param block_len: For ``alternating_blocks``, TF block length (e.g. 1000).
+    :param auto_block_len: For ``alternating_blocks``, auto block length.
+        ``None`` keeps it equal to ``block_len`` (the historical pattern).
     :return: A NumPy array of shape (seq_len,) where 0 represents teacher-forcing
              mode and 1 represents autonomous mode.
     """
@@ -61,16 +68,32 @@ def create_autonomous_mode_selector_1d(
             mode_selector_list.append(current_mode)
         mode_selector = np.array(mode_selector_list, dtype=np.float32)
     elif mode == "alternating_blocks":
-        # Paper-style fixed blocks: TF, Auto, TF, Auto, ... with constant block_len.
+        # TF block, auto block, repeating, starting with TF at t=0.
+        # auto_block_len None (or equal to block_len) keeps equal blocks.
         if block_len is None:
             block_len = 1000
         block_len = int(block_len)
         if block_len <= 0:
             raise ValueError(f"alternating_blocks requires positive block_len, got {block_len}.")
-        mode_selector = np.array(
-            [1.0 if (i // block_len) % 2 == 1 else 0.0 for i in range(seq_len)],
-            dtype=np.float32,
-        )
+        if auto_block_len is None or int(auto_block_len) == block_len:
+            mode_selector = np.array(
+                [1.0 if (i // block_len) % 2 == 1 else 0.0 for i in range(seq_len)],
+                dtype=np.float32,
+            )
+        else:
+            auto_block_len = int(auto_block_len)
+            if auto_block_len <= 0:
+                raise ValueError(
+                    f"alternating_blocks requires positive auto_block_len, got {auto_block_len}."
+                )
+            period = block_len + auto_block_len
+            mode_selector = np.array(
+                [
+                    1.0 if (i % period) >= block_len else 0.0
+                    for i in range(seq_len)
+                ],
+                dtype=np.float32,
+            )
     elif mode == "mix_sampling":
         mode_selector = np.full(seq_len, autonomous_ratio, dtype=np.float32)
     elif mode == "bernoulli_sampling":
@@ -92,6 +115,7 @@ def create_autonomous_mode_selector(
     device="cpu",
     flip_point=None,
     block_len=None,
+    auto_block_len=None,
 ):
     """
     Creates a mode selector array for RNN training,
@@ -105,7 +129,9 @@ def create_autonomous_mode_selector(
     :param batch_size: Number of sequences in a batch. If None, batch dimension is not added.
     :param x_dim: Dimensionality of the input features. If None, x_dim dimension is not added.
     :param flip_point: Timestep index for ``flip_at_index`` (TF before, auto after).
-    :param block_len: Fixed block length for ``alternating_blocks`` (default 1000).
+    :param block_len: TF block length for ``alternating_blocks`` (default 1000).
+    :param auto_block_len: Auto block length for ``alternating_blocks``.
+        ``None`` uses ``block_len`` and keeps the historical equal-block pattern.
     :return: A NumPy array of shape (seq_len, [batch_size], [x_dim]) where 0 represents teacher-forcing
              mode and 1 represents autonomous mode. Dimensions are added only if batch_size/x_dim are provided.
     """
@@ -116,6 +142,7 @@ def create_autonomous_mode_selector(
         autonomous_ratio,
         flip_point=flip_point,
         block_len=block_len,
+        auto_block_len=auto_block_len,
     )
 
     # Convert to PyTorch tensor immediately for expand/broadcast operations

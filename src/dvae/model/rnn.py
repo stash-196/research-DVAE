@@ -14,7 +14,7 @@ The code in this file is based on:
 from torch import nn
 import torch
 from collections import OrderedDict
-from dvae.model.base_rnn import BaseRNN
+from dvae.model.base_rnn import BaseRNN, parse_feedback_alignment
 
 
 def build_RNN(cfg, device="cpu"):
@@ -43,6 +43,7 @@ def build_RNN(cfg, device="cpu"):
 
     # Beta-vae
     beta = cfg.getfloat("Training", "beta")
+    feedback_alignment = parse_feedback_alignment(cfg)
 
     # Build model
     model = RNN(
@@ -57,6 +58,7 @@ def build_RNN(cfg, device="cpu"):
         beta=beta,
         device=device,
         cfg=cfg,
+        feedback_alignment=feedback_alignment,
     ).to(device)
 
     return model
@@ -76,6 +78,7 @@ class RNN(BaseRNN):
         dropout_p=0,
         beta=1,
         device="cpu",
+        feedback_alignment=None,
     ):
         super().__init__(
             x_dim,
@@ -88,6 +91,7 @@ class RNN(BaseRNN):
             dropout_p,
             device,
             cfg=cfg,
+            feedback_alignment=feedback_alignment,
         )
         self.beta = beta
 

@@ -15,7 +15,7 @@ This document explains how training is implemented in the codebase and how the m
 **High-level flow**
 1. Load config and parameters (dataset name, model name, sampling method, device, batch size, sequence length, etc.).
 2. Create/save an experiment directory (unless resuming).
-3. Build the model via `LearningAlgorithm.build_model()` (calls model builders such as `build_VRNN`, `build_RNN`, `build_MT_RNN`, `build_MT_VRNN`).
+3. If `[Training] seed` is set and this is not a `--reload`, seed Python `random`, NumPy, and PyTorch (CUDA when available). Then build the model via `LearningAlgorithm.build_model()` (calls model builders such as `build_VRNN`, `build_RNN`, `build_MT_RNN`, `build_MT_VRNN`).
 4. Initialize optimizer via `LearningAlgorithm.init_optimizer()` — supports Adam/AdamW; for multi-task models it separates parameter groups (e.g., `sigmas` with a different lr).
 5. Build data loaders with `build_dataloader()` from dataset_builder.py, which returns train and validation DataLoaders for the chosen dataset.
 6. Enter epoch loop and run mini-batch training + validation with warm-up schedules, early stopping, checkpointing and visualizations.
@@ -25,9 +25,12 @@ This document explains how training is implemented in the codebase and how the m
 - **Shapes**: Datasets produce tensors of shape `(batch_size, seq_len, x_dim)`; the training code permutes to `(seq_len, batch_size, x_dim)` before passing to the model.
 
 **Mode selectors: teacher forcing / autonomous / noise**
-- The training supports mixed teaching/autonomous (scheduled sampling, mixed sampling, even bursts, etc.). The per-time-step mode selector is created with `create_autonomous_mode_selector(...)` (from `dvae.utils.model_mode_selector`).
+- The training supports mixed teaching/autonomous (scheduled sampling, mixed sampling, even bursts, alternating blocks, etc.). The per-time-step mode selector is created with `create_autonomous_mode_selector(...)` (from `dvae.utils.model_mode_selector`).
 - A separate `noise_selector` can be generated to inject stochastic noise according to a noise-sampling strategy.
 - If NaNs exist in the input batch (missing data), the code overlays autonomous mode at those positions to prevent teacher forcing on missing inputs.
+- `[Network] feedback_alignment`: blank or `delayed` (default) keeps the one-step delay, so step t mixes in y[t-1]. `aligned` (RNN and MT_RNN) computes y[t] from the hidden state before input t is consumed and uses that value for NaN imputation (t>0) and the autonomous mix. The stored y[t] is that same value. `aligned` on VRNN or MT_VRNN raises `NotImplementedError`.
+- `sampling_method = alternating_blocks`: TF for `[Training] tf_block_len` steps (default 100), then auto for `auto_block_len` steps (default 400), repeating from t=0. Those keys are read only for this method. The pattern is fixed from epoch 0. Autonomous warm-up stays limited to `sampling_method = ss`. Each window, including after a sequence-length bump, rebuilds the selector on the current length with the same block lengths. The half_half validation figure and eval paths are unchanged.
+- `[Training] seed`: optional integer. Blank or missing does not seed. If set, `train()` seeds before `build_model`. `--reload` does not reseed.
 
 **Per-batch forward/backward**
 - Forward:
@@ -72,7 +75,7 @@ This document explains how training is implemented in the codebase and how the m
 - For datasets with `observation_process == "only_x_indicate"`, a special masking baseline is supported: mask channels are forced to teacher forcing while losses are computed only on the signal channel.
 
 **Resuming training**
-- If `--reload` is passed and `--model_dir` is provided or inferred from the config file folder, the code loads a checkpoint (`<model_name>_checkpoint.pt`), restores model & optimizer states, and resumes from `start_epoch` while padding loss arrays to the epoch target.
+- If `--reload` is passed and `--model_dir` is provided or inferred from the config file folder, the code loads a checkpoint (`<model_name>_checkpoint.pt`), restores model & optimizer states, and resumes from `start_epoch` while padding loss arrays to the epoch target. A `[Training] seed` is not reapplied on reload, so the restored RNG state is left as it was.
 
 **Final evaluation**
 - After saving the final best model, the training routine launches an evaluation script (eval_signal.py) with the saved model file to run the final evaluation pipeline.
